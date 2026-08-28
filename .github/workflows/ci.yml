@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [development, main]
+  push:
+    branches: [development, main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build both binaries
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (collector, storage, transport, everything else)
+        run: go test ./... -race -count=1
+
+      - name: os/exec lint (ADR-0012 — only helpers and bitacora-run may exec)
+        run: ./scripts/ci/check-no-exec.sh
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml

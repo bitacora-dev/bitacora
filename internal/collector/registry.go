@@ -6,6 +6,25 @@ import (
 	"time"
 )
 
+// disabledEventType is the event emitted once per disabled collector
+// (ADR-0004: "emitiendo un evento informativo una sola vez").
+const disabledEventType = "agent.collector_disabled"
+
+// EmitDisabledEvents turns the Disabled entries returned by Resolve into
+// agent.collector_disabled events on sink, so a missing capability or a
+// failed Init is visible in the timeline and not just in a log line.
+func EmitDisabledEvents(sink Sink, disabled []Disabled, now time.Time) {
+	for _, d := range disabled {
+		sink.Event(Event{
+			Type:      disabledEventType,
+			Level:     "info",
+			Message:   fmt.Sprintf("collector %q disabled: %s", d.Name, d.Reason),
+			Attrs:     Labels{"collector": d.Name, "reason": d.Reason},
+			Timestamp: now,
+		})
+	}
+}
+
 type registryItem struct {
 	collector Collector
 	interval  time.Duration

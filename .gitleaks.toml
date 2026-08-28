@@ -1,0 +1,18 @@
+title = "bitacora gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fixtures and examples use RFC-reserved, manifestly fake values"
+regexes = [
+  '''192\.0\.2\.\d{1,3}''',       # RFC 5737 TEST-NET-1
+  '''198\.51\.100\.\d{1,3}''',    # RFC 5737 TEST-NET-2
+  '''203\.0\.113\.\d{1,3}''',     # RFC 5737 TEST-NET-3
+  '''[a-zA-Z0-9.-]+\.invalid''',  # RFC 2606 reserved TLD
+  '''[a-zA-Z0-9.-]+\.example''',  # RFC 2606 reserved TLD
+]
+paths = [
+  '''config\.example\.yaml''',
+  '''testdata/.*''',
+]

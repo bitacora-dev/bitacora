@@ -1,0 +1,16 @@
+[Unit]
+Description=Bitácora SMART helper — reads S.M.A.R.T. data, writes to spool, exits
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bitacora/bitacora-smart
+
+# Sandboxing per ADR-0005 — do not relax without a matching ADR. This is a
+# privileged helper: root, no network, dead in well under a minute.
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateNetwork=yes
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_ADMIN
+ReadWritePaths=/var/lib/bitacora/spool
+RuntimeMaxSec=60

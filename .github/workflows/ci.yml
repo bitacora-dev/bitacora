@@ -12,6 +12,24 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # PostgreSQL backend kept green in CI from day one, alongside SQLite,
+    # per ADR-0003 — not deferred to "later".
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bitacora
+          POSTGRES_PASSWORD: bitacora
+          POSTGRES_DB: bitacora_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      BITACORA_TEST_POSTGRES_DSN: postgres://bitacora:bitacora@localhost:5432/bitacora_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +43,7 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test (collector, storage, transport, everything else)
+      - name: Test (collector, storage — SQLite and PostgreSQL, transport, everything else)
         run: go test ./... -race -count=1
 
       - name: os/exec lint (ADR-0012 — only helpers and bitacora-run may exec)

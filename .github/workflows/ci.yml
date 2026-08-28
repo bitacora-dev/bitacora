@@ -31,8 +31,12 @@ jobs:
       - name: os/exec lint (ADR-0012 — only helpers and bitacora-run may exec)
         run: ./scripts/ci/check-no-exec.sh
 
+      - name: Install gitleaks
+        # Not gitleaks/gitleaks-action: as of the org-repo licensing change,
+        # that action requires a paid GITLEAKS_LICENSE for organizations.
+        # The gitleaks CLI itself is free (Apache-2.0); install and run it
+        # directly, same invocation used locally.
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
+
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+        run: gitleaks detect --source . --config .gitleaks.toml --no-git

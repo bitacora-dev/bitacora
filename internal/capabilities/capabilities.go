@@ -37,6 +37,11 @@ const (
 	SecSelinux         collector.Capability = "sec.selinux"
 	SecApparmor        collector.Capability = "sec.apparmor"
 	PublicExposed      collector.Capability = "public.exposed"
+	ShareSMB           collector.Capability = "share.smb"
+	ShareNFS           collector.Capability = "share.nfs"
+	VMLibvirt          collector.Capability = "vm.libvirt"
+	NetWireguard       collector.Capability = "net.wireguard"
+	PowerUPS           collector.Capability = "power.ups"
 )
 
 // All lists every capability the agent knows how to probe, in the order
@@ -62,6 +67,11 @@ var All = []collector.Capability{
 	SecSelinux,
 	SecApparmor,
 	PublicExposed,
+	ShareSMB,
+	ShareNFS,
+	VMLibvirt,
+	NetWireguard,
+	PowerUPS,
 }
 
 // Status is one entry in the manifest's "capabilities" object.

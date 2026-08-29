@@ -199,3 +199,49 @@ func TestManifest_AvailableMapFeedsRegistryResolve(t *testing.T) {
 		t.Fatal("expected pkg.dnf to be absent/false in the reduced map")
 	}
 }
+
+func TestDetect_SurfaceCapabilities(t *testing.T) {
+	cfg := fakeRoot(t,
+		map[string]string{
+			"/etc/samba/smb.conf":     "[global]\nworkgroup = WORKGROUP\n",
+			"/etc/exports":            "/srv/nfs 192.168.1.0/24(rw)\n",
+			"/etc/nut/ups.conf":       "[apc]\n\tdriver = usbhid-ups\n",
+			"/etc/wireguard/wg0.conf": "[Interface]\nPrivateKey = xxx\n",
+		},
+		[]string{"/var/run/libvirt"},
+	)
+	if err := os.WriteFile(filepath.Join(cfg.Root, "/var/run/libvirt/libvirt-sock-ro"), nil, 0o644); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	m := Detect(cfg, "01HOST", "myhost", "0.1.0", time.Unix(0, 0).UTC())
+
+	for _, cap := range []collector.Capability{ShareSMB, ShareNFS, VMLibvirt, NetWireguard, PowerUPS} {
+		if !m.Capabilities[cap].Available {
+			t.Errorf("expected %s to be available, got %+v", cap, m.Capabilities[cap])
+		}
+	}
+}
+
+func TestDetect_SurfaceCapabilitiesAbsent(t *testing.T) {
+	cfg := fakeRoot(t, nil, nil)
+	m := Detect(cfg, "01HOST", "myhost", "0.1.0", time.Unix(0, 0).UTC())
+
+	for _, cap := range []collector.Capability{ShareSMB, ShareNFS, VMLibvirt, NetWireguard, PowerUPS} {
+		if m.Capabilities[cap].Available {
+			t.Errorf("expected %s to be unavailable on a bare host, got %+v", cap, m.Capabilities[cap])
+		}
+	}
+}
+
+func TestDetect_WireguardDetectedViaKernelModuleAlone(t *testing.T) {
+	cfg := fakeRoot(t, nil, nil)
+	if err := os.MkdirAll(filepath.Join(cfg.Root, "/sys/module/wireguard"), 0o755); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	m := Detect(cfg, "01HOST", "myhost", "0.1.0", time.Unix(0, 0).UTC())
+	if !m.Capabilities[NetWireguard].Available {
+		t.Fatal("expected the loaded kernel module alone to be enough, without any /etc/wireguard/*.conf")
+	}
+}

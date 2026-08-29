@@ -42,6 +42,13 @@ type Config struct {
 	ApparmorDir     string
 	OSReleasePath   string
 	KernelPath      string
+	SambaConf       string
+	ExportsFile     string
+	LibvirtSocket   string
+	WireguardDir    string
+	WireguardModule string
+	NUTConf         string
+	ApcupsdConf     string
 
 	// PubliclyExposed is operator-declared, not detected: whether the host's
 	// ingestion surface reaches the public internet can't be inferred from
@@ -75,6 +82,13 @@ var DefaultConfig = Config{
 	ApparmorDir:     "/sys/kernel/security/apparmor",
 	OSReleasePath:   "/etc/os-release",
 	KernelPath:      "/proc/sys/kernel/osrelease",
+	SambaConf:       "/etc/samba/smb.conf",
+	ExportsFile:     "/etc/exports",
+	LibvirtSocket:   "/var/run/libvirt/libvirt-sock-ro",
+	WireguardDir:    "/etc/wireguard",
+	WireguardModule: "/sys/module/wireguard",
+	NUTConf:         "/etc/nut/ups.conf",
+	ApcupsdConf:     "/etc/apcupsd/apcupsd.conf",
 }
 
 // degradedImpact documents, for capabilities whose absence has a known
@@ -286,6 +300,36 @@ func detectOne(cfg Config, cap collector.Capability) Status {
 			return Status{Available: true, Detail: "operator-declared"}
 		}
 		return Status{Available: false, Reason: "not operator-declared"}
+
+	case ShareSMB:
+		if cfg.exists(cfg.SambaConf) {
+			return Status{Available: true}
+		}
+		return Status{Available: false, Reason: "no smb.conf found"}
+
+	case ShareNFS:
+		if cfg.exists(cfg.ExportsFile) {
+			return Status{Available: true}
+		}
+		return Status{Available: false, Reason: "no /etc/exports found"}
+
+	case VMLibvirt:
+		if cfg.exists(cfg.LibvirtSocket) {
+			return Status{Available: true}
+		}
+		return Status{Available: false, Reason: "libvirt read-only socket not found"}
+
+	case NetWireguard:
+		if cfg.exists(cfg.WireguardModule) || cfg.dirNonEmpty(cfg.WireguardDir) {
+			return Status{Available: true}
+		}
+		return Status{Available: false, Reason: "no WireGuard module or configuration found"}
+
+	case PowerUPS:
+		if path, ok := cfg.anyExists([]string{cfg.NUTConf, cfg.ApcupsdConf}); ok {
+			return Status{Available: true, Detail: path}
+		}
+		return Status{Available: false, Reason: "no UPS monitoring daemon configured"}
 
 	default:
 		return Status{Available: false, Reason: "unknown capability"}

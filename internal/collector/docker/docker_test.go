@@ -34,6 +34,7 @@ func (s *recordingSink) Counter(name string, value float64, labels collector.Lab
 }
 func (s *recordingSink) Event(collector.Event)                {}
 func (s *recordingSink) LogLines(string, []collector.LogLine) {}
+func (s *recordingSink) Inventory(collector.Inventory)        {}
 
 func TestCollector_ReadsCPUAndMemoryFromCgroupFixtures(t *testing.T) {
 	c := New()

@@ -14,6 +14,11 @@ implement the model itself.
 - `systemd/bitacora-smart.service` + `systemd/bitacora-smart.timer` — the
   first privileged helper: root, no network, dies within
   `RuntimeMaxSec=60`, runs every 15 minutes.
+- `systemd/bitacora-vpn.service` + `systemd/bitacora-vpn.timer` — the
+  second privileged helper (ADR-0016): root, `CAP_NET_ADMIN` for `wg`'s
+  netlink queries, runs every 5 minutes. Unlike `bitacora-smart`, it does
+  **not** set `PrivateNetwork=yes` — WireGuard interfaces are
+  network-namespace scoped, so an isolated netns would see none of them.
 - `rpm/` — AlmaLinux/RPM notes and the SELinux policy module source.
 - `unraid/` — UnRaid plugin skeleton and rc.d service wrapper for hosts without
   systemd.

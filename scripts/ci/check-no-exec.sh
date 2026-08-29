@@ -2,7 +2,9 @@
 # Fails if "os/exec" is imported outside the helper packages and
 # bitacora-run — the only places ADR-0012 allows it. Test files are exempt:
 # tooling (building/running a binary to test it) is not the production
-# read-only constraint this checks.
+# read-only constraint this checks. bitacora-vpn (ADR-0016) is the second
+# helper after bitacora-smart, calling a closed list of no-argument
+# commands (wg show all dump, tailscale status --json).
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
@@ -12,6 +14,7 @@ ALLOWED_PREFIXES=(
   "internal/smarthelper/"
   "cmd/bitacora-run/"
   "internal/execwrap/"
+  "cmd/bitacora-vpn/"
 )
 
 violations=0

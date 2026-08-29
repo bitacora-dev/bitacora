@@ -46,6 +46,8 @@ func (s *recordingSink) LogLines(source string, lines []collector.LogLine) {
 	s.lines = append(s.lines, lines)
 }
 
+func (s *recordingSink) Inventory(collector.Inventory) {}
+
 func sampleEntry(message, priority, cursor string) Entry {
 	return Entry{
 		Fields: map[string]string{

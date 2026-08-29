@@ -18,10 +18,13 @@ import (
 
 	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
+	"github.com/bitacora-dev/bitacora/internal/collector/diskarray"
 	"github.com/bitacora-dev/bitacora/internal/collector/example"
+	"github.com/bitacora-dev/bitacora/internal/collector/hwidentity"
 	"github.com/bitacora-dev/bitacora/internal/collector/network"
 	"github.com/bitacora-dev/bitacora/internal/collector/publicsurface"
 	"github.com/bitacora-dev/bitacora/internal/collector/shares"
+	"github.com/bitacora-dev/bitacora/internal/collector/shareusage"
 	"github.com/bitacora-dev/bitacora/internal/collector/ups"
 	"github.com/bitacora-dev/bitacora/internal/collector/users"
 	"github.com/bitacora-dev/bitacora/internal/schema"
@@ -57,6 +60,12 @@ func main() {
 	reg.Register(users.New(), 5*time.Minute, 10*time.Second)
 	reg.Register(network.New(), 30*time.Second, 10*time.Second)
 	reg.Register(ups.New(), time.Minute, 10*time.Second)
+	reg.Register(hwidentity.New(), 5*time.Minute, 10*time.Second)
+	reg.Register(diskarray.New(), 5*time.Minute, 10*time.Second)
+	// shareusage walks share directories (like `du -sh`), which can take
+	// minutes on large media shares — ADR-0016 calls for a low-frequency
+	// "once a day" job, not the same cadence as cheap collectors.
+	reg.Register(shareusage.New(), 24*time.Hour, time.Minute)
 
 	sink := stdoutSink{}
 	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())

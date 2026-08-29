@@ -1,0 +1,24 @@
+policy_module(bitacora_agent, 0.1.0)
+
+require {
+	type var_log_t;
+	type var_lib_t;
+	type proc_t;
+	type sysfs_t;
+	class dir { read search getattr open };
+	class file { read open getattr map };
+}
+
+type bitacora_agent_t;
+type bitacora_var_lib_t;
+
+files_type(bitacora_var_lib_t)
+
+allow bitacora_agent_t var_log_t:dir { read search getattr open };
+allow bitacora_agent_t var_log_t:file { read open getattr };
+allow bitacora_agent_t proc_t:dir { read search getattr open };
+allow bitacora_agent_t proc_t:file { read open getattr };
+allow bitacora_agent_t sysfs_t:dir { read search getattr open };
+allow bitacora_agent_t sysfs_t:file { read open getattr };
+allow bitacora_agent_t bitacora_var_lib_t:dir { read search getattr open };
+allow bitacora_agent_t bitacora_var_lib_t:file { read open getattr map };

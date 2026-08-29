@@ -38,6 +38,7 @@ type Config struct {
 	CgroupV2Marker  string
 	TailscaleSocket string
 	SelinuxDir      string
+	SelinuxEnforce  string
 	ApparmorDir     string
 	OSReleasePath   string
 	KernelPath      string
@@ -70,6 +71,7 @@ var DefaultConfig = Config{
 	CgroupV2Marker:  "/sys/fs/cgroup/cgroup.controllers",
 	TailscaleSocket: "/var/run/tailscale/tailscaled.sock",
 	SelinuxDir:      "/sys/fs/selinux",
+	SelinuxEnforce:  "/sys/fs/selinux/enforce",
 	ApparmorDir:     "/sys/kernel/security/apparmor",
 	OSReleasePath:   "/etc/os-release",
 	KernelPath:      "/proc/sys/kernel/osrelease",
@@ -188,7 +190,7 @@ func detectOne(cfg Config, cap collector.Capability) Status {
 
 	case PkgDnf:
 		if cfg.exists(cfg.RPMDBDir) {
-			return Status{Available: true}
+			return Status{Available: true, Detail: cfg.RPMDBDir}
 		}
 		return Status{Available: false, Reason: "rpm database not found"}
 
@@ -266,6 +268,9 @@ func detectOne(cfg Config, cap collector.Capability) Status {
 
 	case SecSelinux:
 		if cfg.exists(cfg.SelinuxDir) {
+			if mode := selinuxMode(cfg); mode != "" {
+				return Status{Available: true, Detail: mode}
+			}
 			return Status{Available: true}
 		}
 		return Status{Available: false, Reason: "no SELinux filesystem mounted"}
@@ -277,7 +282,10 @@ func detectOne(cfg Config, cap collector.Capability) Status {
 		return Status{Available: false, Reason: "no AppArmor securityfs interface"}
 
 	case PublicExposed:
-		return Status{Available: cfg.PubliclyExposed}
+		if cfg.PubliclyExposed {
+			return Status{Available: true, Detail: "operator-declared"}
+		}
+		return Status{Available: false, Reason: "not operator-declared"}
 
 	default:
 		return Status{Available: false, Reason: "unknown capability"}
@@ -379,4 +387,19 @@ func hwmonNames(cfg Config) string {
 		}
 	}
 	return strings.Join(names, ", ")
+}
+
+func selinuxMode(cfg Config) string {
+	data, err := readFile(cfg.path(cfg.SelinuxEnforce))
+	if err != nil {
+		return ""
+	}
+	switch strings.TrimSpace(string(data)) {
+	case "1":
+		return "enforcing"
+	case "0":
+		return "permissive"
+	default:
+		return ""
+	}
 }

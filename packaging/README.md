@@ -14,5 +14,8 @@ implement the model itself.
 - `systemd/bitacora-smart.service` + `systemd/bitacora-smart.timer` — the
   first privileged helper: root, no network, dies within
   `RuntimeMaxSec=60`, runs every 15 minutes.
+- `rpm/` — AlmaLinux/RPM notes and the SELinux policy module source.
+- `unraid/` — UnRaid plugin skeleton and rc.d service wrapper for hosts without
+  systemd.
 
 Check the result with `bita doctor`.

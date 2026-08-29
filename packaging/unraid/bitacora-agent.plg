@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<PLUGIN name="bitacora-agent" author="bitacora-dev" version="0.1.0" pluginURL="https://github.com/bitacora-dev/bitacora">
+  <CHANGES>
+    Initial UnRaid plugin skeleton for the Bitacora read-only agent.
+  </CHANGES>
+
+  <FILE Name="/boot/config/plugins/bitacora-agent/bitacora-agent" Run="/bin/bash">
+    <INLINE>
+      echo "Place the bitacora-agent binary at /boot/config/plugins/bitacora-agent/bitacora-agent"
+    </INLINE>
+  </FILE>
+
+  <FILE Name="/etc/rc.d/rc.bitacora-agent" Mode="0755">
+    <INLINE>
+#!/bin/sh
+exec /boot/config/plugins/bitacora-agent/rc.bitacora-agent "$@"
+    </INLINE>
+  </FILE>
+</PLUGIN>

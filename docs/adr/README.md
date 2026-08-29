@@ -36,6 +36,7 @@ consecuencias, incluidas las malas.
 | [0013](0013-nombre-licencia-y-gobernanza.md) | Nombre, licencia y gobernanza | Aceptado |
 | [0014](0014-clientes-y-notificaciones.md) | Clientes nativos y notificaciones push | Aceptado |
 | [0015](0015-ampliacion-de-superficie.md) | Ampliación de superficie: compartidos, VMs, usuarios, red y alimentación | Aceptado |
+| [0016](0016-identidad-de-hardware-y-desglose-de-almacenamiento.md) | Identidad de hardware y desglose de almacenamiento | Aceptado |
 
 ## Estado del proyecto
 

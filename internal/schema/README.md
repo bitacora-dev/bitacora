@@ -24,3 +24,9 @@ shape — collectors, storage and transport all use these types.
 - `hostid.go` — `LoadOrCreateHostID`, a ULID generated once and persisted at
   `/var/lib/bitacora/host_id`, never derived from hostname, MAC or
   `machine-id`.
+- `inventory.go` — `Inventory`, the fourth canonical data shape (ADR-0015):
+  a declarative list snapshot (shares, VMs, users, VPN tunnels, hardware
+  identity, CPU topology, pending package updates — ADR-0015/0016/0017)
+  for data that's neither a time series (`Metric`) nor a discrete
+  occurrence (`Event`). Resent in full each time, same replace-not-append
+  semantics as the capability manifest (ADR-0004).

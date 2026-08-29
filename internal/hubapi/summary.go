@@ -35,10 +35,20 @@ type EventLister interface {
 	ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error)
 }
 
+// InventoryGetter is the read side of storage.Relational that
+// GET /v1/inventory needs (ADR-0015).
+type InventoryGetter interface {
+	GetInventory(ctx context.Context, hostID string, kind schema.InventoryKind) (schema.Inventory, bool, error)
+}
+
 // Server serves the hub's read API and the embedded web UI.
 type Server struct {
 	Metrics MetricQuerier
 	Events  EventLister
+	// Inventories serves GET /v1/inventory (ADR-0015). Nil means that
+	// route always answers 404 — same "not wired everywhere yet" state
+	// as Metrics/Events had before real storage existed.
+	Inventories InventoryGetter
 	// WebUI is the built frontend (ADR-0001: React+Vite+Tailwind+uPlot,
 	// embedded via go:embed). Nil disables serving it — useful for
 	// testing the API in isolation.
@@ -56,6 +66,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/summary", s.requireDeviceToken(s.handleSummary))
+	mux.HandleFunc("/v1/inventory", s.requireDeviceToken(s.handleInventory))
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/v1/devices/claim", s.handleDeviceClaim)
 	if s.WebUI != nil {
@@ -244,6 +255,46 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		// log server-side in a real deployment. Nothing to log to yet.
 		return
 	}
+}
+
+// handleInventory implements GET /v1/inventory?host_id=...&kind=...
+// (ADR-0015). A host/kind that's never been reported answers 404, not an
+// empty Inventory — the caller needs to tell "nothing reported yet" apart
+// from "reported, and it's an empty list" (a host with zero shares
+// configured is a valid, meaningful snapshot).
+func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Inventories == nil {
+		http.Error(w, "inventory not available", http.StatusNotFound)
+		return
+	}
+
+	hostID := r.URL.Query().Get("host_id")
+	if hostID == "" {
+		http.Error(w, "host_id is required", http.StatusBadRequest)
+		return
+	}
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		http.Error(w, "kind is required", http.StatusBadRequest)
+		return
+	}
+
+	inv, ok, err := s.Inventories.GetInventory(r.Context(), hostID, schema.InventoryKind(kind))
+	if err != nil {
+		http.Error(w, "querying inventory", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "no inventory reported for this host/kind", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(inv)
 }
 
 func toSeries(samples []metricstore.Sample) []SeriesPoint {

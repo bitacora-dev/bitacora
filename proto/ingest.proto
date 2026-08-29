@@ -53,14 +53,38 @@ message LogLine {
   string message = 8;
 }
 
+// InventoryItem is one entry of an Inventory snapshot (ADR-0015), e.g. one
+// share, one VM, one user.
+message InventoryItem {
+  string id = 1;
+  string name = 2;
+  map<string, string> attrs = 3;
+}
+
+// Inventory is a declarative snapshot of list-shaped data — shares, VMs,
+// users, VPN tunnels, hardware identity, CPU topology, pending package
+// updates (ADR-0015, extended by ADR-0016/0017) — that doesn't fit Metric
+// (not a time series) or Event (not a discrete occurrence). Resent in
+// full each time, like the capability manifest (ADR-0004): the hub always
+// replaces its stored copy for (host_id, kind), never appends.
+message Inventory {
+  string host_id = 1;
+  string kind = 2;
+  int64 reported_at_ms = 3;
+  int32 schema = 4;
+  repeated InventoryItem items = 5;
+}
+
 // Batch is what an agent pushes to POST /v1/ingest: a mixed batch of
-// metrics, events and log lines in one message (ADR-0008).
+// metrics, events, log lines and inventories in one message (ADR-0008,
+// extended by ADR-0015).
 message Batch {
   string batch_id = 1; // ULID, for idempotency
   string host_id = 2;
   repeated Metric metrics = 3;
   repeated Event events = 4;
   repeated LogLine log_lines = 5;
+  repeated Inventory inventories = 6;
 }
 
 // IngestResponse is the hub's reply: the last confirmed offset, and

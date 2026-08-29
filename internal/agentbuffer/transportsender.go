@@ -40,6 +40,8 @@ func itemsToBatch(hostID string, items []Item) *bitacorapb.Batch {
 			batch.Events = append(batch.Events, eventToProto(it.Event))
 		case it.LogLine != nil:
 			batch.LogLines = append(batch.LogLines, logLineToProto(it.LogLine))
+		case it.Inventory != nil:
+			batch.Inventories = append(batch.Inventories, inventoryToProto(it.Inventory))
 		}
 	}
 	return batch
@@ -92,6 +94,24 @@ func eventToProto(e *schema.Event) *bitacorapb.Event {
 		pb.TsReceivedMs = e.TSReceived.UnixMilli()
 	}
 	return pb
+}
+
+func inventoryToProto(inv *schema.Inventory) *bitacorapb.Inventory {
+	items := make([]*bitacorapb.InventoryItem, 0, len(inv.Items))
+	for _, it := range inv.Items {
+		attrs := make(map[string]string, len(it.Attrs))
+		for k, v := range it.Attrs {
+			attrs[k] = v
+		}
+		items = append(items, &bitacorapb.InventoryItem{Id: it.ID, Name: it.Name, Attrs: attrs})
+	}
+	return &bitacorapb.Inventory{
+		HostId:       inv.HostID,
+		Kind:         string(inv.Kind),
+		ReportedAtMs: inv.ReportedAt.UnixMilli(),
+		Schema:       int32(inv.Schema),
+		Items:        items,
+	}
 }
 
 func logLineToProto(l *schema.LogLine) *bitacorapb.LogLine {

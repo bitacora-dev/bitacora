@@ -38,10 +38,11 @@ func main() {
 	defer metricsStore.Close()
 
 	srv := &hubapi.Server{
-		Metrics: metricsStore,
-		Events:  relStore,
-		WebUI:   webui.FS(),
-		Devices: hubapi.NewDeviceTokenStore(),
+		Metrics:     metricsStore,
+		Events:      relStore,
+		Inventories: relStore,
+		WebUI:       webui.FS(),
+		Devices:     hubapi.NewDeviceTokenStore(),
 	}
 
 	log.Printf("bitacora-hub listening on %s (data: %s)", *addr, *dataDir)

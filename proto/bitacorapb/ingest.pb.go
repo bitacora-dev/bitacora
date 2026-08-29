@@ -452,8 +452,153 @@ func (x *LogLine) GetMessage() string {
 	return ""
 }
 
+// InventoryItem is one entry of an Inventory snapshot (ADR-0015), e.g. one
+// share, one VM, one user.
+type InventoryItem struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Attrs         map[string]string      `protobuf:"bytes,3,rep,name=attrs,proto3" json:"attrs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InventoryItem) Reset() {
+	*x = InventoryItem{}
+	mi := &file_proto_ingest_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InventoryItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InventoryItem) ProtoMessage() {}
+
+func (x *InventoryItem) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_ingest_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InventoryItem.ProtoReflect.Descriptor instead.
+func (*InventoryItem) Descriptor() ([]byte, []int) {
+	return file_proto_ingest_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *InventoryItem) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *InventoryItem) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *InventoryItem) GetAttrs() map[string]string {
+	if x != nil {
+		return x.Attrs
+	}
+	return nil
+}
+
+// Inventory is a declarative snapshot of list-shaped data — shares, VMs,
+// users, VPN tunnels, hardware identity, CPU topology, pending package
+// updates (ADR-0015, extended by ADR-0016/0017) — that doesn't fit Metric
+// (not a time series) or Event (not a discrete occurrence). Resent in
+// full each time, like the capability manifest (ADR-0004): the hub always
+// replaces its stored copy for (host_id, kind), never appends.
+type Inventory struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	ReportedAtMs  int64                  `protobuf:"varint,3,opt,name=reported_at_ms,json=reportedAtMs,proto3" json:"reported_at_ms,omitempty"`
+	Schema        int32                  `protobuf:"varint,4,opt,name=schema,proto3" json:"schema,omitempty"`
+	Items         []*InventoryItem       `protobuf:"bytes,5,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Inventory) Reset() {
+	*x = Inventory{}
+	mi := &file_proto_ingest_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Inventory) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Inventory) ProtoMessage() {}
+
+func (x *Inventory) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_ingest_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Inventory.ProtoReflect.Descriptor instead.
+func (*Inventory) Descriptor() ([]byte, []int) {
+	return file_proto_ingest_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *Inventory) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *Inventory) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *Inventory) GetReportedAtMs() int64 {
+	if x != nil {
+		return x.ReportedAtMs
+	}
+	return 0
+}
+
+func (x *Inventory) GetSchema() int32 {
+	if x != nil {
+		return x.Schema
+	}
+	return 0
+}
+
+func (x *Inventory) GetItems() []*InventoryItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
 // Batch is what an agent pushes to POST /v1/ingest: a mixed batch of
-// metrics, events and log lines in one message (ADR-0008).
+// metrics, events, log lines and inventories in one message (ADR-0008,
+// extended by ADR-0015).
 type Batch struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	BatchId       string                 `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"` // ULID, for idempotency
@@ -461,13 +606,14 @@ type Batch struct {
 	Metrics       []*Metric              `protobuf:"bytes,3,rep,name=metrics,proto3" json:"metrics,omitempty"`
 	Events        []*Event               `protobuf:"bytes,4,rep,name=events,proto3" json:"events,omitempty"`
 	LogLines      []*LogLine             `protobuf:"bytes,5,rep,name=log_lines,json=logLines,proto3" json:"log_lines,omitempty"`
+	Inventories   []*Inventory           `protobuf:"bytes,6,rep,name=inventories,proto3" json:"inventories,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Batch) Reset() {
 	*x = Batch{}
-	mi := &file_proto_ingest_proto_msgTypes[5]
+	mi := &file_proto_ingest_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +625,7 @@ func (x *Batch) String() string {
 func (*Batch) ProtoMessage() {}
 
 func (x *Batch) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_ingest_proto_msgTypes[5]
+	mi := &file_proto_ingest_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +638,7 @@ func (x *Batch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Batch.ProtoReflect.Descriptor instead.
 func (*Batch) Descriptor() ([]byte, []int) {
-	return file_proto_ingest_proto_rawDescGZIP(), []int{5}
+	return file_proto_ingest_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Batch) GetBatchId() string {
@@ -530,6 +676,13 @@ func (x *Batch) GetLogLines() []*LogLine {
 	return nil
 }
 
+func (x *Batch) GetInventories() []*Inventory {
+	if x != nil {
+		return x.Inventories
+	}
+	return nil
+}
+
 // IngestResponse is the hub's reply: the last confirmed offset, and
 // whether this specific batch was a duplicate the hub already had.
 type IngestResponse struct {
@@ -542,7 +695,7 @@ type IngestResponse struct {
 
 func (x *IngestResponse) Reset() {
 	*x = IngestResponse{}
-	mi := &file_proto_ingest_proto_msgTypes[6]
+	mi := &file_proto_ingest_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -554,7 +707,7 @@ func (x *IngestResponse) String() string {
 func (*IngestResponse) ProtoMessage() {}
 
 func (x *IngestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_ingest_proto_msgTypes[6]
+	mi := &file_proto_ingest_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -567,7 +720,7 @@ func (x *IngestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestResponse.ProtoReflect.Descriptor instead.
 func (*IngestResponse) Descriptor() ([]byte, []int) {
-	return file_proto_ingest_proto_rawDescGZIP(), []int{6}
+	return file_proto_ingest_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *IngestResponse) GetLastOffset() string {
@@ -632,13 +785,28 @@ const file_proto_ingest_proto_rawDesc = "" +
 	"\x11unit_or_container\x18\x05 \x01(\tR\x0funitOrContainer\x12\x14\n" +
 	"\x05level\x18\x06 \x01(\tR\x05level\x12\x10\n" +
 	"\x03pid\x18\a \x01(\x05R\x03pid\x12\x18\n" +
-	"\amessage\x18\b \x01(\tR\amessage\"\xc9\x01\n" +
+	"\amessage\x18\b \x01(\tR\amessage\"\xaa\x01\n" +
+	"\rInventoryItem\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12;\n" +
+	"\x05attrs\x18\x03 \x03(\v2%.bitacora.v1.InventoryItem.AttrsEntryR\x05attrs\x1a8\n" +
+	"\n" +
+	"AttrsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa8\x01\n" +
+	"\tInventory\x12\x17\n" +
+	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12$\n" +
+	"\x0ereported_at_ms\x18\x03 \x01(\x03R\freportedAtMs\x12\x16\n" +
+	"\x06schema\x18\x04 \x01(\x05R\x06schema\x120\n" +
+	"\x05items\x18\x05 \x03(\v2\x1a.bitacora.v1.InventoryItemR\x05items\"\x83\x02\n" +
 	"\x05Batch\x12\x19\n" +
 	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x12\x17\n" +
 	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12-\n" +
 	"\ametrics\x18\x03 \x03(\v2\x13.bitacora.v1.MetricR\ametrics\x12*\n" +
 	"\x06events\x18\x04 \x03(\v2\x12.bitacora.v1.EventR\x06events\x121\n" +
-	"\tlog_lines\x18\x05 \x03(\v2\x14.bitacora.v1.LogLineR\blogLines\"O\n" +
+	"\tlog_lines\x18\x05 \x03(\v2\x14.bitacora.v1.LogLineR\blogLines\x128\n" +
+	"\vinventories\x18\x06 \x03(\v2\x16.bitacora.v1.InventoryR\vinventories\"O\n" +
 	"\x0eIngestResponse\x12\x1f\n" +
 	"\vlast_offset\x18\x01 \x01(\tR\n" +
 	"lastOffset\x12\x1c\n" +
@@ -656,31 +824,37 @@ func file_proto_ingest_proto_rawDescGZIP() []byte {
 	return file_proto_ingest_proto_rawDescData
 }
 
-var file_proto_ingest_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_proto_ingest_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_proto_ingest_proto_goTypes = []any{
 	(*Metric)(nil),         // 0: bitacora.v1.Metric
 	(*EventSubject)(nil),   // 1: bitacora.v1.EventSubject
 	(*LogRef)(nil),         // 2: bitacora.v1.LogRef
 	(*Event)(nil),          // 3: bitacora.v1.Event
 	(*LogLine)(nil),        // 4: bitacora.v1.LogLine
-	(*Batch)(nil),          // 5: bitacora.v1.Batch
-	(*IngestResponse)(nil), // 6: bitacora.v1.IngestResponse
-	nil,                    // 7: bitacora.v1.Metric.LabelsEntry
-	nil,                    // 8: bitacora.v1.Event.AttrsEntry
+	(*InventoryItem)(nil),  // 5: bitacora.v1.InventoryItem
+	(*Inventory)(nil),      // 6: bitacora.v1.Inventory
+	(*Batch)(nil),          // 7: bitacora.v1.Batch
+	(*IngestResponse)(nil), // 8: bitacora.v1.IngestResponse
+	nil,                    // 9: bitacora.v1.Metric.LabelsEntry
+	nil,                    // 10: bitacora.v1.Event.AttrsEntry
+	nil,                    // 11: bitacora.v1.InventoryItem.AttrsEntry
 }
 var file_proto_ingest_proto_depIdxs = []int32{
-	7, // 0: bitacora.v1.Metric.labels:type_name -> bitacora.v1.Metric.LabelsEntry
-	1, // 1: bitacora.v1.Event.subject:type_name -> bitacora.v1.EventSubject
-	8, // 2: bitacora.v1.Event.attrs:type_name -> bitacora.v1.Event.AttrsEntry
-	2, // 3: bitacora.v1.Event.log_refs:type_name -> bitacora.v1.LogRef
-	0, // 4: bitacora.v1.Batch.metrics:type_name -> bitacora.v1.Metric
-	3, // 5: bitacora.v1.Batch.events:type_name -> bitacora.v1.Event
-	4, // 6: bitacora.v1.Batch.log_lines:type_name -> bitacora.v1.LogLine
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	9,  // 0: bitacora.v1.Metric.labels:type_name -> bitacora.v1.Metric.LabelsEntry
+	1,  // 1: bitacora.v1.Event.subject:type_name -> bitacora.v1.EventSubject
+	10, // 2: bitacora.v1.Event.attrs:type_name -> bitacora.v1.Event.AttrsEntry
+	2,  // 3: bitacora.v1.Event.log_refs:type_name -> bitacora.v1.LogRef
+	11, // 4: bitacora.v1.InventoryItem.attrs:type_name -> bitacora.v1.InventoryItem.AttrsEntry
+	5,  // 5: bitacora.v1.Inventory.items:type_name -> bitacora.v1.InventoryItem
+	0,  // 6: bitacora.v1.Batch.metrics:type_name -> bitacora.v1.Metric
+	3,  // 7: bitacora.v1.Batch.events:type_name -> bitacora.v1.Event
+	4,  // 8: bitacora.v1.Batch.log_lines:type_name -> bitacora.v1.LogLine
+	6,  // 9: bitacora.v1.Batch.inventories:type_name -> bitacora.v1.Inventory
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_proto_ingest_proto_init() }
@@ -694,7 +868,7 @@ func file_proto_ingest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_ingest_proto_rawDesc), len(file_proto_ingest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

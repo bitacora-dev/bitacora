@@ -10,6 +10,8 @@ cd "$(git rev-parse --show-toplevel)"
 ALLOWED_PREFIXES=(
   "cmd/bitacora-smart/"
   "internal/smarthelper/"
+  "cmd/bitacora-run/"
+  "internal/execwrap/"
 )
 
 violations=0

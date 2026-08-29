@@ -19,6 +19,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
 	"github.com/bitacora-dev/bitacora/internal/collector/example"
+	"github.com/bitacora-dev/bitacora/internal/collector/publicsurface"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
 
@@ -40,11 +41,14 @@ func main() {
 	}
 	host := &collector.HostInfo{ID: hostID, Hostname: hostname}
 
-	manifest := capabilities.Detect(capabilities.DefaultConfig, hostID, hostname, agentVersion, time.Now())
+	detectCfg := capabilities.DefaultConfig
+	detectCfg.PubliclyExposed = os.Getenv("BITACORA_PUBLIC_EXPOSED") == "1"
+	manifest := capabilities.Detect(detectCfg, hostID, hostname, agentVersion, time.Now())
 	reportManifest(ctx, manifest)
 
 	reg := collector.Registry{}
 	reg.Register(example.New(), 10*time.Second, 5*time.Second)
+	reg.Register(publicsurface.New(), 5*time.Minute, 30*time.Second)
 
 	sink := stdoutSink{}
 	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())

@@ -104,6 +104,69 @@ func TestDetect_DetectsPresentCapabilities(t *testing.T) {
 	}
 }
 
+func TestDetect_DetectsAlmaLinuxDNFAndSELinuxMode(t *testing.T) {
+	cfg := fakeRoot(t,
+		map[string]string{
+			"/etc/os-release":            "ID=almalinux\nVERSION_ID=\"9.4\"\n",
+			"/sys/fs/selinux/enforce":    "1\n",
+			"/proc/sys/kernel/osrelease": "5.14.0-427.el9.x86_64\n",
+		},
+		[]string{
+			"/run/systemd/system",
+			"/run/systemd/journal",
+			"/var/lib/rpm",
+			"/sys/fs/selinux",
+		},
+	)
+
+	m := Detect(cfg, "01HOST", "alma", "0.1.0", time.Unix(0, 0).UTC())
+
+	if !m.Capabilities[PkgDnf].Available {
+		t.Fatalf("expected pkg.dnf to be available, got %+v", m.Capabilities[PkgDnf])
+	}
+	if got := m.Capabilities[SecSelinux].Detail; got != "enforcing" {
+		t.Fatalf("expected SELinux enforcing detail, got %q", got)
+	}
+	if m.OS.Distro != "almalinux" || m.OS.Version != "9.4" {
+		t.Fatalf("expected AlmaLinux OS info, got %+v", m.OS)
+	}
+}
+
+func TestDetect_DetectsUnRaidSyslogAndArray(t *testing.T) {
+	cfg := fakeRoot(t,
+		map[string]string{
+			"/var/log/syslog": "Aug 29 tower emhttpd: array started\n",
+			"/proc/mdcmd":     "mdState=STARTED\n",
+			"/etc/os-release": "ID=unraid\nVERSION_ID=\"6.12\"\n",
+		},
+		nil,
+	)
+
+	m := Detect(cfg, "01HOST", "tower", "0.1.0", time.Unix(0, 0).UTC())
+
+	if !m.Capabilities[LogsSyslogfile].Available {
+		t.Fatalf("expected syslog file capability, got %+v", m.Capabilities[LogsSyslogfile])
+	}
+	if !m.Capabilities[StorageUnraidArray].Available {
+		t.Fatalf("expected UnRaid array capability, got %+v", m.Capabilities[StorageUnraidArray])
+	}
+	if m.Capabilities[InitSystemd].Available {
+		t.Fatalf("expected systemd unavailable on UnRaid fixture")
+	}
+}
+
+func TestDetect_PublicExposureIsOperatorDeclared(t *testing.T) {
+	cfg := fakeRoot(t, nil, nil)
+	cfg.PubliclyExposed = true
+
+	m := Detect(cfg, "01HOST", "ovh-vps", "0.1.0", time.Unix(0, 0).UTC())
+
+	status := m.Capabilities[PublicExposed]
+	if !status.Available || status.Detail != "operator-declared" {
+		t.Fatalf("expected operator-declared public exposure, got %+v", status)
+	}
+}
+
 func TestDetect_DegradedListsOnlyKnownImpactfulGaps(t *testing.T) {
 	cfg := fakeRoot(t, nil, nil)
 

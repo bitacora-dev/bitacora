@@ -6,14 +6,17 @@ package example
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/collector"
+	"github.com/bitacora-dev/bitacora/internal/schema"
 )
 
 // Collector emits a single heartbeat counter and event on every tick.
 type Collector struct {
-	ticks int
+	hostID string
+	ticks  int
 }
 
 // New returns a ready-to-register example collector.
@@ -27,8 +30,12 @@ func (c *Collector) Name() string { return "example" }
 // Requires implements collector.Collector. The example needs nothing.
 func (c *Collector) Requires() []collector.Capability { return nil }
 
-// Init implements collector.Collector. Nothing to prepare.
+// Init implements collector.Collector. Nothing to prepare beyond
+// remembering the host_id every canonical Event needs (ADR-0006).
 func (c *Collector) Init(ctx context.Context, cfg collector.Config, host *collector.HostInfo) error {
+	if host != nil {
+		c.hostID = host.ID
+	}
 	return nil
 }
 
@@ -43,10 +50,14 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 	c.ticks++
 	sink.Counter("bitacora_example_ticks_total", float64(c.ticks), collector.Labels{"collector": c.Name()})
 	sink.Event(collector.Event{
-		Type:      "example.tick",
-		Level:     "info",
-		Message:   "example collector ticked",
-		Timestamp: time.Now(),
+		ID:       fmt.Sprintf("example-%d", c.ticks),
+		TS:       time.Now().UTC(),
+		HostID:   c.hostID,
+		Source:   "example",
+		Type:     "example.tick",
+		Severity: schema.SeverityInfo,
+		Title:    "example collector ticked",
+		Schema:   schema.CurrentSchemaVersion,
 	})
 	return nil
 }

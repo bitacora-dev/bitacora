@@ -3,6 +3,7 @@ module github.com/bitacora-dev/bitacora
 go 1.25.8
 
 require (
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/compress v1.19.2
 	github.com/oklog/ulid/v2 v2.1.2

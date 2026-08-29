@@ -5,7 +5,8 @@ package collector
 
 import (
 	"context"
-	"time"
+
+	"github.com/bitacora-dev/bitacora/internal/schema"
 )
 
 // Capability identifies something the host must support for a collector to
@@ -13,26 +14,21 @@ import (
 // is defined elsewhere; this package only checks membership.
 type Capability string
 
-// Labels are metric and event label pairs.
-type Labels map[string]string
+// Labels are metric and event label pairs — an alias for schema.Labels, so
+// a collector's own construction of an Event/Metric needs no conversion at
+// the Sink boundary.
+type Labels = schema.Labels
 
 // Event is emitted by collectors and by the runtime itself, through Sink.
-//
-// This is a minimal placeholder shape scoped to this package. It will be
-// aligned with the canonical event schema (ADR-0006) once that lands.
-type Event struct {
-	Type      string
-	Level     string
-	Message   string
-	Attrs     Labels
-	Timestamp time.Time
-}
+// Alias for schema.Event (ADR-0006) — collector.go originally defined its
+// own minimal placeholder shape here; aliased once a real collector
+// (journald) needed the canonical fields (host_id, severity, etc.) that
+// the placeholder didn't have. See #646's followup note.
+type Event = schema.Event
 
-// LogLine is one line of log output attributed to a source.
-type LogLine struct {
-	Timestamp time.Time
-	Line      string
-}
+// LogLine is one line of log output. Alias for schema.LogLine (ADR-0006),
+// same reasoning as Event above.
+type LogLine = schema.LogLine
 
 // Sink is where a Collector writes everything it produces. Collectors never
 // touch storage, the network, or the hub directly (ADR-0002) — they only

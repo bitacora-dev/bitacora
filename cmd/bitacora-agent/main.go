@@ -48,7 +48,7 @@ func main() {
 
 	sink := stdoutSink{}
 	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())
-	collector.EmitDisabledEvents(sink, disabled, time.Now())
+	collector.EmitDisabledEvents(sink, hostID, disabled, time.Now())
 
 	rt := collector.Runtime{Sink: sink}
 	rt.Start(ctx, regs)
@@ -93,11 +93,11 @@ func (stdoutSink) Counter(name string, value float64, labels collector.Labels) {
 }
 
 func (stdoutSink) Event(e collector.Event) {
-	fmt.Printf("event %s [%s] %s %v\n", e.Type, e.Level, e.Message, e.Attrs)
+	fmt.Printf("event %s [%s] %s %v\n", e.Type, e.Severity, e.Title, e.Attrs)
 }
 
 func (stdoutSink) LogLines(source string, lines []collector.LogLine) {
 	for _, l := range lines {
-		fmt.Printf("log %s: %s\n", source, l.Line)
+		fmt.Printf("log %s: %s\n", source, l.Message)
 	}
 }

@@ -19,7 +19,7 @@ func TestEmitDisabledEvents_EmitsAgentCollectorDisabled(t *testing.T) {
 	sink := &recordingSink{}
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	EmitDisabledEvents(sink, []Disabled{{Name: "smart", Reason: `missing capability "storage.smart"`}}, now)
+	EmitDisabledEvents(sink, "host-a", []Disabled{{Name: "smart", Reason: `missing capability "storage.smart"`}}, now)
 
 	if len(sink.events) != 1 {
 		t.Fatalf("expected one event, got %d", len(sink.events))
@@ -31,8 +31,11 @@ func TestEmitDisabledEvents_EmitsAgentCollectorDisabled(t *testing.T) {
 	if got.Attrs["collector"] != "smart" {
 		t.Errorf("expected collector attr to name the disabled collector, got %+v", got.Attrs)
 	}
-	if !got.Timestamp.Equal(now) {
-		t.Errorf("expected timestamp %v, got %v", now, got.Timestamp)
+	if !got.TS.Equal(now) {
+		t.Errorf("expected timestamp %v, got %v", now, got.TS)
+	}
+	if got.HostID != "host-a" {
+		t.Errorf("expected host_id host-a, got %q", got.HostID)
 	}
 }
 
@@ -57,7 +60,7 @@ func TestResolveThenEmit_FakeCapabilityDisablesOnlyTheRightCollector(t *testing.
 	}
 
 	sink := &recordingSink{}
-	EmitDisabledEvents(sink, disabled, time.Now())
+	EmitDisabledEvents(sink, "host-a", disabled, time.Now())
 	if len(sink.events) != 1 || sink.events[0].Attrs["collector"] != "needs-fake" {
 		t.Fatalf("expected exactly one disabled event naming needs-fake, got %+v", sink.events)
 	}

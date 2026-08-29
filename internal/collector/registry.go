@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/bitacora-dev/bitacora/internal/schema"
+	"github.com/oklog/ulid/v2"
 )
 
 // disabledEventType is the event emitted once per disabled collector
@@ -13,14 +16,18 @@ const disabledEventType = "agent.collector_disabled"
 // EmitDisabledEvents turns the Disabled entries returned by Resolve into
 // agent.collector_disabled events on sink, so a missing capability or a
 // failed Init is visible in the timeline and not just in a log line.
-func EmitDisabledEvents(sink Sink, disabled []Disabled, now time.Time) {
+func EmitDisabledEvents(sink Sink, hostID string, disabled []Disabled, now time.Time) {
 	for _, d := range disabled {
 		sink.Event(Event{
-			Type:      disabledEventType,
-			Level:     "info",
-			Message:   fmt.Sprintf("collector %q disabled: %s", d.Name, d.Reason),
-			Attrs:     Labels{"collector": d.Name, "reason": d.Reason},
-			Timestamp: now,
+			ID:       ulid.Make().String(),
+			TS:       now,
+			HostID:   hostID,
+			Source:   "agent",
+			Type:     disabledEventType,
+			Severity: schema.SeverityInfo,
+			Title:    fmt.Sprintf("collector %q disabled: %s", d.Name, d.Reason),
+			Attrs:    Labels{"collector": d.Name, "reason": d.Reason},
+			Schema:   schema.CurrentSchemaVersion,
 		})
 	}
 }

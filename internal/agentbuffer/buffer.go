@@ -39,14 +39,16 @@ const (
 	DefaultSegmentBytes = 4 << 20
 )
 
-// Item is one buffered record. Exactly one of Metric/Event/LogLine is set.
+// Item is one buffered record. Exactly one of Metric/Event/LogLine/Inventory
+// is set.
 type Item struct {
-	Seq      uint64          `json:"seq"`
-	Priority Priority        `json:"priority"`
-	TS       time.Time       `json:"ts"`
-	Metric   *schema.Metric  `json:"metric,omitempty"`
-	Event    *schema.Event   `json:"event,omitempty"`
-	LogLine  *schema.LogLine `json:"log_line,omitempty"`
+	Seq       uint64            `json:"seq"`
+	Priority  Priority          `json:"priority"`
+	TS        time.Time         `json:"ts"`
+	Metric    *schema.Metric    `json:"metric,omitempty"`
+	Event     *schema.Event     `json:"event,omitempty"`
+	LogLine   *schema.LogLine   `json:"log_line,omitempty"`
+	Inventory *schema.Inventory `json:"inventory,omitempty"`
 }
 
 // Buffer is the on-disk WAL. Safe for concurrent use.

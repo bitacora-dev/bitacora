@@ -42,6 +42,16 @@ var postgresMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS idx_events_host_ts ON events (host_id, ts)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_attrs_gin ON events USING GIN (attrs_json)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_title_fts ON events USING GIN (to_tsvector('english', title))`,
+	// inventories has no time dimension worth indexing: it's a latest-only
+	// snapshot per (host_id, kind), replaced in place (ADR-0015).
+	`CREATE TABLE IF NOT EXISTS inventories (
+		host_id     TEXT NOT NULL,
+		kind        TEXT NOT NULL,
+		reported_at BIGINT NOT NULL,
+		schema      INTEGER NOT NULL,
+		items_json  JSONB NOT NULL,
+		PRIMARY KEY (host_id, kind)
+	)`,
 }
 
 // PostgresStore is the optional Relational backend (ADR-0003): same
@@ -157,4 +167,39 @@ func (s *PostgresStore) SearchEventTitles(ctx context.Context, query string, lim
 	defer rows.Close()
 
 	return scanEvents(rows)
+}
+
+// UpsertInventory implements Relational.
+func (s *PostgresStore) UpsertInventory(ctx context.Context, inv schema.Inventory) error {
+	if err := inv.Validate(); err != nil {
+		return fmt.Errorf("invalid inventory: %w", err)
+	}
+
+	itemsJSON, err := json.Marshal(inv.Items)
+	if err != nil {
+		return fmt.Errorf("marshaling items: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO inventories (host_id, kind, reported_at, schema, items_json)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (host_id, kind) DO UPDATE SET
+			reported_at = excluded.reported_at,
+			schema = excluded.schema,
+			items_json = excluded.items_json
+	`, inv.HostID, string(inv.Kind), inv.ReportedAt.UnixMilli(), inv.Schema, string(itemsJSON))
+	if err != nil {
+		return fmt.Errorf("upserting inventory %s/%s: %w", inv.HostID, inv.Kind, err)
+	}
+	return nil
+}
+
+// GetInventory implements Relational.
+func (s *PostgresStore) GetInventory(ctx context.Context, hostID string, kind schema.InventoryKind) (schema.Inventory, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT host_id, kind, reported_at, schema, items_json
+		FROM inventories
+		WHERE host_id = $1 AND kind = $2
+	`, hostID, string(kind))
+	return scanInventory(row)
 }

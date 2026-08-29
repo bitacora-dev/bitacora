@@ -29,6 +29,9 @@ type SQLiteStore struct {
 
 	mu  sync.Mutex
 	dbs map[string]*sql.DB
+
+	invMu sync.Mutex
+	invDB *sql.DB
 }
 
 var _ Relational = (*SQLiteStore)(nil)
@@ -93,10 +96,18 @@ func (s *SQLiteStore) Close() error {
 	s.wg.Wait()
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	var firstErr error
 	for _, db := range s.dbs {
 		if err := db.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.mu.Unlock()
+
+	s.invMu.Lock()
+	defer s.invMu.Unlock()
+	if s.invDB != nil {
+		if err := s.invDB.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -207,6 +218,89 @@ func insertEvent(ctx context.Context, db *sql.DB, e schema.Event) error {
 		return fmt.Errorf("indexing event %s title: %w", e.ID, err)
 	}
 	return nil
+}
+
+// inventoryDB returns the (lazily opened, migrated, cached) *sql.DB for
+// inventories — a single unsharded file, unlike the per-month event
+// databases, since Inventory has no time dimension to shard by.
+func (s *SQLiteStore) inventoryDB() (*sql.DB, error) {
+	s.invMu.Lock()
+	defer s.invMu.Unlock()
+
+	if s.invDB != nil {
+		return s.invDB, nil
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(s.dir, "inventory.db"))
+	if err != nil {
+		return nil, fmt.Errorf("opening inventory db: %w", err)
+	}
+
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("applying %q to inventory db: %w", pragma, err)
+		}
+	}
+
+	for _, stmt := range inventoryMigrations {
+		if _, err := db.Exec(stmt); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrating inventory db: %w", err)
+		}
+	}
+
+	s.invDB = db
+	return db, nil
+}
+
+// UpsertInventory implements Relational.
+func (s *SQLiteStore) UpsertInventory(ctx context.Context, inv schema.Inventory) error {
+	if err := inv.Validate(); err != nil {
+		return fmt.Errorf("invalid inventory: %w", err)
+	}
+
+	itemsJSON, err := json.Marshal(inv.Items)
+	if err != nil {
+		return fmt.Errorf("marshaling items: %w", err)
+	}
+
+	return s.enqueueWrite(ctx, func(ctx context.Context) error {
+		db, err := s.inventoryDB()
+		if err != nil {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `
+			INSERT INTO inventories (host_id, kind, reported_at, schema, items_json)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(host_id, kind) DO UPDATE SET
+				reported_at = excluded.reported_at,
+				schema = excluded.schema,
+				items_json = excluded.items_json
+		`, inv.HostID, string(inv.Kind), inv.ReportedAt.UnixMilli(), inv.Schema, string(itemsJSON))
+		if err != nil {
+			return fmt.Errorf("upserting inventory %s/%s: %w", inv.HostID, inv.Kind, err)
+		}
+		return nil
+	})
+}
+
+// GetInventory implements Relational.
+func (s *SQLiteStore) GetInventory(ctx context.Context, hostID string, kind schema.InventoryKind) (schema.Inventory, bool, error) {
+	db, err := s.inventoryDB()
+	if err != nil {
+		return schema.Inventory{}, false, err
+	}
+	row := db.QueryRowContext(ctx, `
+		SELECT host_id, kind, reported_at, schema, items_json
+		FROM inventories
+		WHERE host_id = ? AND kind = ?
+	`, hostID, string(kind))
+	return scanInventory(row)
 }
 
 func monthsBetween(from, to time.Time) []string {

@@ -32,6 +32,16 @@ type Relational interface {
 	// recent first.
 	SearchEventTitles(ctx context.Context, query string, limit int) ([]schema.Event, error)
 
+	// UpsertInventory replaces the stored Inventory for (inv.HostID,
+	// inv.Kind) with inv in full (ADR-0015: a declarative snapshot, never
+	// appended). Unlike events, an Inventory has no history here — only
+	// its latest snapshot.
+	UpsertInventory(ctx context.Context, inv schema.Inventory) error
+
+	// GetInventory returns the latest stored Inventory for hostID/kind, or
+	// ok=false if nothing has been reported yet.
+	GetInventory(ctx context.Context, hostID string, kind schema.InventoryKind) (inv schema.Inventory, ok bool, err error)
+
 	// Close releases every resource the store holds open.
 	Close() error
 }

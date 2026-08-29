@@ -50,6 +50,8 @@ func kindOf(it Item) string {
 		return "log_line"
 	case it.Metric != nil:
 		return "metric"
+	case it.Inventory != nil:
+		return "inventory"
 	default:
 		return "event"
 	}

@@ -17,6 +17,10 @@ shape — collectors, storage and transport all use these types.
   `log_refs`.
 - `logline.go` — raw log line, promoted to an `Event` only by an extraction
   rule.
+- `job.go` — the canonical model for anything periodic: backups, syncs,
+  scrubs, updates (ADR-0010). Produced primarily by `bitacora-run`
+  (`cmd/bitacora-run`), with `stats` populated by `internal/runstats`
+  extractors.
 - `hostid.go` — `LoadOrCreateHostID`, a ULID generated once and persisted at
   `/var/lib/bitacora/host_id`, never derived from hostname, MAC or
   `machine-id`.

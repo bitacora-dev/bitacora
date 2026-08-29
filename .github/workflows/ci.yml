@@ -37,6 +37,14 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install libsystemd-dev
+        # internal/collector/journald's Linux reader uses sdjournal (cgo
+        # binding over libsystemd) — a scoped, documented exception to
+        # ADR-0001's general CGO prohibition. Headers are needed to
+        # actually compile and test that file; ubuntu-latest ships the
+        # runtime lib but not -dev by default.
+        run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
+
       - name: Build both binaries
         run: go build ./...
 

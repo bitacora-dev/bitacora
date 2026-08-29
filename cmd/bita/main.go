@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/bitacora-dev/bitacora/internal/blackbox"
 	"github.com/bitacora-dev/bitacora/internal/doctor"
 	"github.com/bitacora-dev/bitacora/internal/logstore"
 )
@@ -20,6 +21,7 @@ func main() {
 		fmt.Println("bita: scaffold only, most subcommands not yet implemented")
 		fmt.Println("usage: bita doctor")
 		fmt.Println("       bita logs verify [dir]")
+		fmt.Println("       bita blackbox dump <fichero>")
 		return
 	}
 
@@ -28,10 +30,43 @@ func main() {
 		runDoctor()
 	case "logs":
 		runLogs(os.Args[2:])
+	case "blackbox":
+		runBlackbox(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "bita: unknown subcommand %q\n", os.Args[1])
 		os.Exit(1)
 	}
+}
+
+// runBlackbox implements ADR-0011's own mandatory tooling requirement:
+// "el formato del fichero de caja negra debe ser legible sin el agente:
+// bita blackbox dump <fichero> debe funcionar sobre un fichero copiado
+// desde otra máquina." blackbox.Dump only reads the file — no mmap, no
+// agent, no assumption it's even running on the machine that wrote it.
+func runBlackbox(args []string) {
+	if len(args) < 2 || args[0] != "dump" {
+		fmt.Fprintln(os.Stderr, "usage: bita blackbox dump <fichero>")
+		os.Exit(1)
+	}
+
+	samples, err := blackbox.Dump(args[1])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bita blackbox dump: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Print(formatBlackboxSamples(samples))
+}
+
+func formatBlackboxSamples(samples []blackbox.Sample) string {
+	out := fmt.Sprintf("%d sample(s)\n", len(samples))
+	for _, s := range samples {
+		out += fmt.Sprintf(
+			"t=%d cpus=%d load1=%.2f mem_avail_kb=%d procs_blocked_d=%d psi_cpu_some10=%.2f\n",
+			s.TimestampUnixMilli, s.NumCPUs, s.LoadAvg1, s.MemAvailableKB, s.ProcsBlockedD, s.PSICPUSome10,
+		)
+	}
+	return out
 }
 
 func runLogs(args []string) {

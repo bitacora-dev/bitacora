@@ -164,12 +164,26 @@ func (c *Collector) entryToLogLine(e Entry) schema.LogLine {
 	return schema.LogLine{
 		TS:              time.UnixMicro(int64(e.RealtimeUsec)).UTC(),
 		HostID:          c.hostID,
-		Source:          "journald",
+		Source:          logLineSource(e.Fields["_TRANSPORT"]),
 		UnitOrContainer: unit,
 		Level:           priorityToLevel(e.Fields["PRIORITY"]),
 		PID:             pid,
 		Message:         e.Fields["MESSAGE"],
 	}
+}
+
+// logLineSource maps the journal's own _TRANSPORT field ("kernel",
+// "syslog", "stdout", "journal", "audit", "driver", ...) onto LogLine's
+// Source, so an extraction rule can target `source: kernel` and actually
+// match ring-buffer messages (ADR-0006's own kernel-segfault example, and
+// ADR-0011's segfault↔CPU correlation, both depend on this). Falls back to
+// the collector's own name when _TRANSPORT is absent, which real journal
+// entries never do, but a minimal test fixture might.
+func logLineSource(transport string) string {
+	if transport == "" {
+		return "journald"
+	}
+	return transport
 }
 
 var syslogLevels = map[string]string{

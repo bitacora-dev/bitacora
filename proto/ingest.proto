@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package bitacora.v1;
+
+option go_package = "github.com/bitacora-dev/bitacora/proto/bitacorapb";
+
+// Metric is one Prometheus-model sample (ADR-0006).
+message Metric {
+  string name = 1;
+  string host_id = 2;
+  map<string, string> labels = 3;
+  double value = 4;
+  int64 timestamp_ms = 5;
+}
+
+message EventSubject {
+  string kind = 1;
+  string name = 2;
+  int32 pid = 3;
+}
+
+message LogRef {
+  string block_id = 1;
+  int32 line = 2;
+}
+
+// Event is a discrete, significant fact (ADR-0006).
+message Event {
+  string id = 1;
+  int64 ts_ms = 2;
+  int64 ts_received_ms = 3;
+  string host_id = 4;
+  string source = 5;
+  string type = 6;
+  string severity = 7;
+  string title = 8;
+  EventSubject subject = 9;
+  map<string, string> attrs = 10;
+  string fingerprint = 11;
+  repeated LogRef log_refs = 12;
+  int32 schema = 13;
+}
+
+// LogLine is one raw log line (ADR-0006).
+message LogLine {
+  int64 ts_ms = 1;
+  string host_id = 2;
+  string source = 3;
+  string stream = 4;
+  string unit_or_container = 5;
+  string level = 6;
+  int32 pid = 7;
+  string message = 8;
+}
+
+// Batch is what an agent pushes to POST /v1/ingest: a mixed batch of
+// metrics, events and log lines in one message (ADR-0008).
+message Batch {
+  string batch_id = 1; // ULID, for idempotency
+  string host_id = 2;
+  repeated Metric metrics = 3;
+  repeated Event events = 4;
+  repeated LogLine log_lines = 5;
+}
+
+// IngestResponse is the hub's reply: the last confirmed offset, and
+// whether this specific batch was a duplicate the hub already had.
+message IngestResponse {
+  string last_offset = 1;
+  bool duplicate = 2;
+}

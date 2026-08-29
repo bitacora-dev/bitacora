@@ -19,7 +19,11 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
 	"github.com/bitacora-dev/bitacora/internal/collector/example"
+	"github.com/bitacora-dev/bitacora/internal/collector/network"
 	"github.com/bitacora-dev/bitacora/internal/collector/publicsurface"
+	"github.com/bitacora-dev/bitacora/internal/collector/shares"
+	"github.com/bitacora-dev/bitacora/internal/collector/ups"
+	"github.com/bitacora-dev/bitacora/internal/collector/users"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
 
@@ -49,6 +53,10 @@ func main() {
 	reg := collector.Registry{}
 	reg.Register(example.New(), 10*time.Second, 5*time.Second)
 	reg.Register(publicsurface.New(), 5*time.Minute, 30*time.Second)
+	reg.Register(shares.New(), 5*time.Minute, 10*time.Second)
+	reg.Register(users.New(), 5*time.Minute, 10*time.Second)
+	reg.Register(network.New(), 30*time.Second, 10*time.Second)
+	reg.Register(ups.New(), time.Minute, 10*time.Second)
 
 	sink := stdoutSink{}
 	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())
@@ -104,4 +112,8 @@ func (stdoutSink) LogLines(source string, lines []collector.LogLine) {
 	for _, l := range lines {
 		fmt.Printf("log %s: %s\n", source, l.Message)
 	}
+}
+
+func (stdoutSink) Inventory(inv collector.Inventory) {
+	fmt.Printf("inventory %s/%s: %d item(s)\n", inv.HostID, inv.Kind, len(inv.Items))
 }

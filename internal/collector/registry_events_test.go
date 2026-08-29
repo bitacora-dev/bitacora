@@ -14,6 +14,7 @@ func (s *recordingSink) Gauge(string, float64, Labels)   {}
 func (s *recordingSink) Counter(string, float64, Labels) {}
 func (s *recordingSink) Event(e Event)                   { s.events = append(s.events, e) }
 func (s *recordingSink) LogLines(string, []LogLine)      {}
+func (s *recordingSink) Inventory(Inventory)             {}
 
 func TestEmitDisabledEvents_EmitsAgentCollectorDisabled(t *testing.T) {
 	sink := &recordingSink{}

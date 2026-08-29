@@ -25,6 +25,7 @@ func (s *recordingSink) Gauge(name string, value float64, labels collector.Label
 func (s *recordingSink) Counter(string, float64, collector.Labels) {}
 func (s *recordingSink) Event(collector.Event)                     {}
 func (s *recordingSink) LogLines(string, []collector.LogLine)      {}
+func (s *recordingSink) Inventory(collector.Inventory)             {}
 
 func TestCollector_FirstCollectEmitsNothingButDoesNotError(t *testing.T) {
 	c := New()

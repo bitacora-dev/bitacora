@@ -70,6 +70,7 @@ func (noopSink) Gauge(string, float64, Labels)   {}
 func (noopSink) Counter(string, float64, Labels) {}
 func (noopSink) Event(Event)                     {}
 func (noopSink) LogLines(string, []LogLine)      {}
+func (noopSink) Inventory(Inventory)             {}
 
 type recordingEvents struct {
 	mu        sync.Mutex

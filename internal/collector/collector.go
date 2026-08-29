@@ -30,6 +30,12 @@ type Event = schema.Event
 // same reasoning as Event above.
 type LogLine = schema.LogLine
 
+// Inventory is a declarative list snapshot. Alias for schema.Inventory
+// (ADR-0015) — the fourth canonical data shape, for collectors reporting
+// list-shaped data (shares, VMs, users, ...) rather than a time series or
+// a discrete occurrence.
+type Inventory = schema.Inventory
+
 // Sink is where a Collector writes everything it produces. Collectors never
 // touch storage, the network, or the hub directly (ADR-0002) — they only
 // know about Sink.
@@ -38,6 +44,7 @@ type Sink interface {
 	Counter(name string, value float64, labels Labels)
 	Event(e Event)
 	LogLines(source string, lines []LogLine)
+	Inventory(inv Inventory)
 }
 
 // HostInfo describes the machine the agent runs on.

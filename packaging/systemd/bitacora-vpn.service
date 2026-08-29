@@ -1,0 +1,20 @@
+[Unit]
+Description=Bitácora VPN helper — reads WireGuard/Tailscale tunnel status, writes to spool, exits
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bitacora/bitacora-vpn
+
+# Sandboxing per ADR-0005 — do not relax without a matching ADR. Root,
+# dead in well under a minute. Unlike bitacora-smart, this one does NOT
+# set PrivateNetwork=yes: WireGuard interfaces are network-namespace
+# scoped, so `wg show` inside an isolated netns would see nothing — it
+# needs the host's real network namespace to read real interface state.
+# It still makes no outbound connections of its own; wg's netlink query
+# and tailscale's local Unix socket are both local IPC, not network I/O.
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+CapabilityBoundingSet=CAP_NET_ADMIN
+ReadWritePaths=/var/lib/bitacora/spool
+RuntimeMaxSec=60

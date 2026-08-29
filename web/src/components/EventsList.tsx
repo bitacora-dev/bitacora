@@ -20,13 +20,13 @@ export default function EventsList({ events }: { events: BitacoraEvent[] }) {
   return (
     <ul className="divide-y divide-neutral-800">
       {sorted.map((e) => (
-        <li key={e.id} className="py-2 flex flex-col gap-0.5">
-          <div className="flex items-center gap-2 text-xs text-neutral-500">
-            <span>{new Date(e.ts).toLocaleTimeString()}</span>
+        <li key={e.id} className="py-2 flex flex-col gap-0.5 min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-neutral-500">
+            <span className="shrink-0">{new Date(e.ts).toLocaleTimeString()}</span>
             <span className={SEVERITY_COLOR[e.severity]}>{e.severity}</span>
-            <span className="text-neutral-600">{e.type}</span>
+            <span className="text-neutral-600 truncate">{e.type}</span>
           </div>
-          <div className="text-sm">{e.title}</div>
+          <div className="text-sm break-words">{e.title}</div>
         </li>
       ))}
     </ul>

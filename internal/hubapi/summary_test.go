@@ -126,3 +126,107 @@ func TestHandleSummary_RejectsNonGET(t *testing.T) {
 		t.Fatalf("expected 405 for POST, got %d", rec.Code)
 	}
 }
+
+func TestHandleSummary_RequiresDeviceTokenWhenDevicesConfigured(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}, Devices: NewDeviceTokenStore()}
+	req := httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without an Authorization header, got %d", rec.Code)
+	}
+}
+
+func TestHandleSummary_AcceptsValidDeviceToken(t *testing.T) {
+	devices := NewDeviceTokenStore()
+	_, token, _, err := devices.Start(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}, Devices: devices}
+	req := httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with a valid device token, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleDevicePairAndClaim(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}, Devices: NewDeviceTokenStore()}
+
+	pairReq := httptest.NewRequest(http.MethodPost, "/v1/devices/pair", nil)
+	pairRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(pairRec, pairReq)
+
+	if pairRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from pair, got %d: %s", pairRec.Code, pairRec.Body.String())
+	}
+	var pairResp struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(pairRec.Body.Bytes(), &pairResp); err != nil {
+		t.Fatalf("unexpected error decoding pair response: %v", err)
+	}
+	if pairResp.Code == "" {
+		t.Fatal("expected a non-empty pairing code")
+	}
+
+	claimReq := httptest.NewRequest(http.MethodPost, "/v1/devices/claim", strings.NewReader(`{"code":"`+pairResp.Code+`"}`))
+	claimRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(claimRec, claimReq)
+
+	if claimRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from claim, got %d: %s", claimRec.Code, claimRec.Body.String())
+	}
+	var claimResp struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(claimRec.Body.Bytes(), &claimResp); err != nil {
+		t.Fatalf("unexpected error decoding claim response: %v", err)
+	}
+	if claimResp.Token == "" {
+		t.Fatal("expected a non-empty device token")
+	}
+
+	summaryReq := httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil)
+	summaryReq.Header.Set("Authorization", "Bearer "+claimResp.Token)
+	summaryRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(summaryRec, summaryReq)
+
+	if summaryRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 using the claimed device token, got %d: %s", summaryRec.Code, summaryRec.Body.String())
+	}
+}
+
+func TestHandleDeviceClaim_RejectsUnknownCode(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}, Devices: NewDeviceTokenStore()}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/devices/claim", strings.NewReader(`{"code":"no-such-code"}`))
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown pairing code, got %d", rec.Code)
+	}
+}
+
+func TestHandleDevicePair_RespondsServiceUnavailableWithoutDevices(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/devices/pair", nil)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when Devices is nil, got %d", rec.Code)
+	}
+}

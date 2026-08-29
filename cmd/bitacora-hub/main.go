@@ -41,6 +41,7 @@ func main() {
 		Metrics: metricsStore,
 		Events:  relStore,
 		WebUI:   webui.FS(),
+		Devices: hubapi.NewDeviceTokenStore(),
 	}
 
 	log.Printf("bitacora-hub listening on %s (data: %s)", *addr, *dataDir)

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/prometheus/prometheus/model/labels"
@@ -42,17 +43,126 @@ type Server struct {
 	// embedded via go:embed). Nil disables serving it — useful for
 	// testing the API in isolation.
 	WebUI fs.FS
+	// Devices holds device tokens and pairing state (ADR-0014). Nil
+	// disables device-token auth entirely — handleSummary is served
+	// unauthenticated, which keeps existing callers that build a bare
+	// Server{} working, and the pairing endpoints answer 503.
+	Devices *DeviceTokenStore
 }
 
-// Handler returns the http.Handler serving both /v1/summary and, if
-// WebUI is set, the single-page UI at "/".
+// Handler returns the http.Handler serving /v1/summary (device-token
+// authenticated when Devices is set), the pairing bootstrap endpoints, and,
+// if WebUI is set, the single-page UI at "/".
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/summary", s.handleSummary)
+	mux.HandleFunc("/v1/summary", s.requireDeviceToken(s.handleSummary))
+	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
+	mux.HandleFunc("/v1/devices/claim", s.handleDeviceClaim)
 	if s.WebUI != nil {
 		mux.Handle("/", http.FileServer(http.FS(s.WebUI)))
 	}
 	return mux
+}
+
+// requireDeviceToken guards a /v1/* data route with device-token auth.
+// The pairing endpoints below deliberately don't go through this: they're
+// the bootstrap path an unpaired device uses to get a token in the first
+// place, and per ADR-0014 the security boundary for the whole app is the
+// Tailscale network, not a per-request check.
+func (s *Server) requireDeviceToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.Devices == nil {
+			next(w, r)
+			return
+		}
+
+		token, ok := bearerToken(r)
+		if !ok {
+			writeJSONError(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		valid, err := s.Devices.Lookup(r.Context(), token)
+		if err != nil || !valid {
+			writeJSONError(w, http.StatusUnauthorized, "invalid device token")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	const prefix = "Bearer "
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, prefix) {
+		return "", false
+	}
+	token := strings.TrimPrefix(header, prefix)
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// handleDevicePair implements POST /v1/devices/pair: mints a pairing code
+// and device token for the QR flow (ADR-0014).
+func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Devices == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "device pairing is not configured")
+		return
+	}
+
+	code, _, expiresAt, err := s.Devices.Start(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "starting pairing")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"code":       code,
+		"expires_at": expiresAt.Format(time.RFC3339),
+		"pair_path":  "/?pair=" + code,
+	})
+}
+
+// handleDeviceClaim implements POST /v1/devices/claim: exchanges a
+// pairing code, scanned from the QR, for the device token (ADR-0014).
+func (s *Server) handleDeviceClaim(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Devices == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "device pairing is not configured")
+		return
+	}
+
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+
+	token, ok := s.Devices.Claim(r.Context(), body.Code)
+	if !ok {
+		writeJSONError(w, http.StatusNotFound, "pairing code not found, expired, or already claimed")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
 // SeriesPoint is one timestamped value in a Summary series.

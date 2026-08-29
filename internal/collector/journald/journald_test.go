@@ -90,6 +90,49 @@ func TestCollector_EmitsLogLinesFromEntries(t *testing.T) {
 	}
 }
 
+// TestCollector_MapsTransportToSource ensures a kernel-transport journal
+// entry (e.g. a segfault ring-buffer message) gets LogLine.Source ==
+// "kernel", not the collector's own name — extraction.Rule.Source
+// filtering (and ADR-0006's own kernel-segfault rule) depends on this to
+// ever match a real kernel message.
+func TestCollector_MapsTransportToSource(t *testing.T) {
+	c := New()
+	kernelEntry := sampleEntry("node[1234]: segfault at 0 ip 0 sp 0 error 4", "3", "cursor-1")
+	kernelEntry.Fields["_TRANSPORT"] = "kernel"
+	c.open = fakeOpen([]Entry{kernelEntry})
+
+	if err := c.Init(context.Background(), collector.Config{"cursor_path": filepath.Join(t.TempDir(), "cursor")}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := sink.lines[0][0].Source; got != "kernel" {
+		t.Fatalf("expected Source %q, got %q", "kernel", got)
+	}
+}
+
+func TestCollector_MissingTransportFallsBackToJournald(t *testing.T) {
+	c := New()
+	c.open = fakeOpen([]Entry{sampleEntry("line", "6", "cursor-1")}) // no _TRANSPORT set
+
+	if err := c.Init(context.Background(), collector.Config{"cursor_path": filepath.Join(t.TempDir(), "cursor")}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := sink.lines[0][0].Source; got != "journald" {
+		t.Fatalf("expected fallback Source %q, got %q", "journald", got)
+	}
+}
+
 func TestCollector_PersistsCursorAfterCollect(t *testing.T) {
 	cursorPath := filepath.Join(t.TempDir(), "journald.cursor")
 	c := New()

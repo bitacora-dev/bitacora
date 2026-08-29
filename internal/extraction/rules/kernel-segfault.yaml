@@ -1,0 +1,13 @@
+# ADR-0006's own worked example, verbatim match pattern.
+id: kernel-segfault
+source: kernel
+match: '(?P<comm>\S+)\[(?P<pid>\d+)\]: segfault at (?P<addr>\S+) ip (?P<ip>\S+) sp (?P<sp>\S+) error (?P<err>\d+)'
+emit:
+  type: kernel.segfault
+  severity: error
+  title: "segfault in {{.comm}} (cpu {{.cpu}})"
+  enrich: [cpu_from_context, core_from_cpu]
+  # Only comm + cpu identify a *recurrence* of the same problem (ADR-0006:
+  # "34 veces en 6 días, siempre en CPU 8") — pid/addr/ip/sp are unique to
+  # each occurrence and would defeat fingerprint-based deduplication.
+  fingerprint_fields: [comm, cpu]

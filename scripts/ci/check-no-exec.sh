@@ -15,6 +15,7 @@ ALLOWED_PREFIXES=(
   "cmd/bitacora-run/"
   "internal/execwrap/"
   "cmd/bitacora-vpn/"
+  "cmd/bitacora-dnf/"
 )
 
 violations=0

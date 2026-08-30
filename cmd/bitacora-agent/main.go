@@ -22,6 +22,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/collector/example"
 	"github.com/bitacora-dev/bitacora/internal/collector/hwidentity"
 	"github.com/bitacora-dev/bitacora/internal/collector/network"
+	"github.com/bitacora-dev/bitacora/internal/collector/pkgupdates"
 	"github.com/bitacora-dev/bitacora/internal/collector/publicsurface"
 	"github.com/bitacora-dev/bitacora/internal/collector/shares"
 	"github.com/bitacora-dev/bitacora/internal/collector/shareusage"
@@ -66,6 +67,11 @@ func main() {
 	// minutes on large media shares — ADR-0016 calls for a low-frequency
 	// "once a day" job, not the same cadence as cheap collectors.
 	reg.Register(shareusage.New(), 24*time.Hour, time.Minute)
+	// pkgupdates' UnRaid-plugin and Docker-image sources each make a real
+	// network round-trip per item — a long interval avoids hammering
+	// third-party plugin sources and container registries on every cycle,
+	// same reasoning as shareusage's cadence above.
+	reg.Register(pkgupdates.New(), 6*time.Hour, 2*time.Minute)
 
 	sink := stdoutSink{}
 	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())

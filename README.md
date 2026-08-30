@@ -15,7 +15,13 @@ that are currently impossible to investigate become a readable report.
 
 ## Status
 
-Early design. No usable code yet.
+**0.1.0 — first usable release.** The agent/hub pair runs end to end on
+Debian/Ubuntu, AlmaLinux, UnRaid and generic VPS hosts, collecting metrics,
+events, logs and inventory (shares, users, VPN tunnels, UPS, hardware
+identity, per-disk usage, pending package/plugin/image updates) into a
+correlated timeline. See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
+Packaging (`.deb`/`.rpm`, container images) isn't there yet — see
+`packaging/` for the manual install path in the meantime.
 
 Architecture decisions live in [`docs/adr/`](docs/adr/) (written in Spanish).
 

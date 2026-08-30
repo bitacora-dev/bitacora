@@ -1,0 +1,32 @@
+[Unit]
+Description=Bitácora agent — read-only observability collector
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/bitacora-agent
+Restart=on-failure
+RestartSec=5
+
+# Sandboxing per ADR-0005 — do not relax without a matching ADR.
+User=bitacora
+Group=bitacora
+SupplementaryGroups=systemd-journal
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=no
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/bitacora
+
+[Install]
+WantedBy=multi-user.target

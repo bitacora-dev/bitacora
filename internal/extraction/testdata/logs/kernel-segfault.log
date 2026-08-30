@@ -1,0 +1,3 @@
+node[4242]: segfault at 0 ip 00007f2a12345678 sp 00007ffd87654321 error 4 in libnode.so.115[7f2a12000000+abc000]
+CPU governor changed to performance
+node[9999]: segfault at 8 ip 00007f2a99999999 sp 00007ffd11112222 error 6 in libnode.so.115[7f2a12000000+abc000]

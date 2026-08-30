@@ -1,0 +1,17 @@
+[Unit]
+Description=Bitácora DNF helper — checks for package updates, writes to spool, exits
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bitacora/bitacora-dnf
+
+# Sandboxing per ADR-0005 — do not relax without a matching ADR. Root,
+# dead within a couple of minutes. Unlike bitacora-smart/bitacora-vpn,
+# this one legitimately needs network egress: checking for updates means
+# querying the host's configured repository mirrors, not just reading
+# local state — so PrivateNetwork is deliberately NOT set here.
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bitacora/spool
+RuntimeMaxSec=120

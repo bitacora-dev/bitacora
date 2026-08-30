@@ -23,6 +23,19 @@ const (
 	InventoryHardwareIdentity InventoryKind = "hardware_identity"
 	InventoryCPUTopology      InventoryKind = "cpu_topology"
 	InventoryPackageUpdate    InventoryKind = "package_update"
+	// InventoryDisk is one member disk of an array (or any real mounted
+	// filesystem), for the per-disk breakdown ADR-0016 asks for instead
+	// of a single global percentage.
+	InventoryDisk InventoryKind = "disk"
+	// InventoryShareUsage is the periodic, low-frequency "how much does
+	// this share actually occupy" measurement (ADR-0016) — a separate
+	// Inventory kind from InventoryShare rather than an extra attr on it,
+	// since the two are collected on very different cadences (share
+	// *definitions* change rarely and are cheap to reread; share *usage*
+	// needs a full directory walk and is expensive) and Inventory's
+	// replace-the-whole-snapshot semantics means whichever collector
+	// wrote last would otherwise silently erase the other's fields.
+	InventoryShareUsage InventoryKind = "share_usage"
 )
 
 // InventoryItem is one entry of an Inventory snapshot — one share, one VM,

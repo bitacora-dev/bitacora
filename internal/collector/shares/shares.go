@@ -97,6 +97,30 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 // Close implements collector.Collector.
 func (c *Collector) Close() error { return nil }
 
+// Paths returns share ID -> filesystem path for every share
+// `parseSambaConf`/`parseExports` find, reusing the same parsing this
+// package's own Collector runs — for `internal/collector/shareusage`,
+// which needs to know what to `du`, without duplicating smb.conf/exports
+// parsing to get there.
+func Paths(sambaConf, exportsFile string) map[string]string {
+	paths := map[string]string{}
+	if smb, err := parseSambaConf(sambaConf); err == nil {
+		for _, item := range smb {
+			if p, ok := item.Attrs["path"]; ok {
+				paths[item.ID] = p
+			}
+		}
+	}
+	if nfs, err := parseExports(exportsFile); err == nil {
+		for _, item := range nfs {
+			if p, ok := item.Attrs["path"]; ok {
+				paths[item.ID] = p
+			}
+		}
+	}
+	return paths
+}
+
 func configuredPath(cfg collector.Config, key, fallback string) string {
 	if v, ok := cfg[key].(string); ok && v != "" {
 		return v

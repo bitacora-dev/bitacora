@@ -205,6 +205,72 @@ func TestHandleDevicePairAndClaim(t *testing.T) {
 	}
 }
 
+func TestHandleDevicePair_SecondPairingRequiresExistingDeviceToken(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}, Devices: NewDeviceTokenStore()}
+
+	// First pairing: unauthenticated, allowed — this is the bootstrap path.
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/devices/pair", nil)
+	firstRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(firstRec, firstReq)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("expected the first pairing to succeed unauthenticated, got %d: %s", firstRec.Code, firstRec.Body.String())
+	}
+
+	// Second pairing, no token at all: must be rejected — this is the
+	// exact hole this test guards against (anyone minting themselves a
+	// device token for free once the hub is reachable over a network).
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/devices/pair", nil)
+	secondRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected a second unauthenticated pairing to be rejected with 401, got %d: %s", secondRec.Code, secondRec.Body.String())
+	}
+
+	// Second pairing, garbage token: also rejected.
+	garbageReq := httptest.NewRequest(http.MethodPost, "/v1/devices/pair", nil)
+	garbageReq.Header.Set("Authorization", "Bearer not-a-real-token")
+	garbageRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(garbageRec, garbageReq)
+	if garbageRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected a pairing with an invalid device token to be rejected with 401, got %d: %s", garbageRec.Code, garbageRec.Body.String())
+	}
+}
+
+func TestHandleDevicePair_SecondPairingSucceedsWithValidDeviceToken(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}, Devices: NewDeviceTokenStore()}
+
+	// Pair the first device end-to-end to get a real, usable device token.
+	firstPairReq := httptest.NewRequest(http.MethodPost, "/v1/devices/pair", nil)
+	firstPairRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(firstPairRec, firstPairReq)
+	var firstPairResp struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(firstPairRec.Body.Bytes(), &firstPairResp); err != nil {
+		t.Fatalf("unexpected error decoding first pair response: %v", err)
+	}
+
+	claimReq := httptest.NewRequest(http.MethodPost, "/v1/devices/claim", strings.NewReader(`{"code":"`+firstPairResp.Code+`"}`))
+	claimRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(claimRec, claimReq)
+	var claimResp struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(claimRec.Body.Bytes(), &claimResp); err != nil {
+		t.Fatalf("unexpected error decoding claim response: %v", err)
+	}
+
+	// A second, real device token in hand: pairing a second device must
+	// now succeed.
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/devices/pair", nil)
+	secondReq.Header.Set("Authorization", "Bearer "+claimResp.Token)
+	secondRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(secondRec, secondReq)
+	if secondRec.Code != http.StatusOK {
+		t.Fatalf("expected pairing with a valid existing device token to succeed, got %d: %s", secondRec.Code, secondRec.Body.String())
+	}
+}
+
 func TestHandleDeviceClaim_RejectsUnknownCode(t *testing.T) {
 	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}, Devices: NewDeviceTokenStore()}
 

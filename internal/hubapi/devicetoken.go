@@ -65,6 +65,19 @@ func (s *DeviceTokenStore) Lookup(ctx context.Context, token string) (bool, erro
 	return false, nil
 }
 
+// HasAnyToken reports whether at least one device has ever been paired.
+// The pairing handler uses this to decide whether a pairing request needs
+// to already present a valid device token: the very first pairing (an
+// empty store) has no existing device to present one from, so it's let
+// through once — every pairing after that must be authenticated, or
+// anyone reaching the hub over the network could mint themselves a
+// device token for free.
+func (s *DeviceTokenStore) HasAnyToken() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.hashes) > 0
+}
+
 func (s *DeviceTokenStore) addToken(token string) error {
 	hash, err := transport.HashToken(token)
 	if err != nil {

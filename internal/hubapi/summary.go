@@ -78,8 +78,10 @@ func (s *Server) Handler() http.Handler {
 // requireDeviceToken guards a /v1/* data route with device-token auth.
 // The pairing endpoints below deliberately don't go through this: they're
 // the bootstrap path an unpaired device uses to get a token in the first
-// place, and per ADR-0014 the security boundary for the whole app is the
-// Tailscale network, not a per-request check.
+// place. handleDevicePair itself gates every pairing after the very first
+// one — see its own comment for why: relying solely on network-level
+// isolation (ADR-0014's original assumption) isn't safe once the hub is
+// reachable from outside that network, which happens in practice.
 func (s *Server) requireDeviceToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.Devices == nil {
@@ -122,6 +124,16 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 
 // handleDevicePair implements POST /v1/devices/pair: mints a pairing code
 // and device token for the QR flow (ADR-0014).
+//
+// Every pairing after the very first one requires the request to already
+// present a valid device token. Without this, anyone who can reach the
+// hub over the network — not just someone with an existing paired device
+// — could call this endpoint directly (bypassing the QR/UI entirely) and
+// mint themselves a working device token for free. The very first
+// pairing is let through unauthenticated on purpose: with an empty
+// store there's no existing device to present a token from, and the
+// operator needs a way to pair their own first device right after
+// deploying.
 func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -130,6 +142,23 @@ func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 	if s.Devices == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "device pairing is not configured")
 		return
+	}
+
+	if s.Devices.HasAnyToken() {
+		token, ok := bearerToken(r)
+		if !ok {
+			writeJSONError(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		valid, err := s.Devices.Lookup(r.Context(), token)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "checking device token")
+			return
+		}
+		if !valid {
+			writeJSONError(w, http.StatusUnauthorized, "invalid device token")
+			return
+		}
 	}
 
 	code, _, expiresAt, err := s.Devices.Start(r.Context())

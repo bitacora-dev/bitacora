@@ -1,0 +1,32 @@
+import type { Dictionary } from "../types";
+
+export const es: Dictionary = {
+  brand: "Bitácora",
+  pairingDevice: "Emparejando dispositivo…",
+  notPaired: "Este dispositivo aún no está emparejado.",
+  pairButton: "Emparejar este dispositivo",
+  pairButtonPending: "Emparejando…",
+  hostIdLabel: "ID del host",
+  hostIdPlaceholder: "01J8XQ...",
+  viewButton: "Ver",
+  addDeviceButton: "Añadir dispositivo",
+  pairNewDeviceHeading: "Emparejar un nuevo dispositivo",
+  closeAria: "Cerrar",
+  generatingCode: "Generando código…",
+  qrAlt: "Código QR de emparejamiento",
+  expiresAt: (time) => `Expira a las ${time}`,
+  hubUnreachable: (error) => `No se pudo contactar con el hub: ${error}`,
+  cpuUsageTitle: "Uso de CPU",
+  memoryUsedTitle: "Memoria usada",
+  eventsHeading: (minutes) => `Eventos (últimos ${minutes}m)`,
+  loading: "Cargando…",
+  noEvents: "No hay eventos en esta ventana.",
+  severity: {
+    debug: "depuración",
+    info: "info",
+    notice: "aviso",
+    warn: "advertencia",
+    error: "error",
+    critical: "crítico",
+  },
+};

@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { claimPairing, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type Summary } from "./api";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
+import AddServerPanel from "./components/AddServerPanel";
 import { useTranslation } from "./i18n";
 
 const POLL_INTERVAL_MS = 10_000;
@@ -45,6 +46,19 @@ export default function App() {
   const [pairPanel, setPairPanel] = useState<PairPanelData | null>(null);
   const [pairPanelError, setPairPanelError] = useState<string | null>(null);
   const [pairPanelOpen, setPairPanelOpen] = useState(false);
+
+  // Host enrollment (POST /v1/hosts): reachable both from the header and
+  // from the empty "which host?" screen, which is where a fresh install
+  // lands with no server registered yet.
+  const [addServerOpen, setAddServerOpen] = useState(false);
+
+  const goToHost = (value: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("host_id", value);
+    window.history.replaceState(null, "", url);
+    setHostID(value);
+    setAddServerOpen(false);
+  };
 
   useEffect(() => {
     const code = pairCodeFromURL();
@@ -150,32 +164,43 @@ export default function App() {
   if (!hostID) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-        <form
-          className="flex flex-col gap-3 w-full max-w-xs"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const value = (e.currentTarget.elements.namedItem("host_id") as HTMLInputElement).value.trim();
-            if (!value) return;
-            const url = new URL(window.location.href);
-            url.searchParams.set("host_id", value);
-            window.history.replaceState(null, "", url);
-            setHostID(value);
-          }}
-        >
-          <label className="text-sm text-neutral-400" htmlFor="host_id">
-            {t.hostIdLabel}
-          </label>
-          <input
-            id="host_id"
-            name="host_id"
-            className="bg-neutral-900 border border-neutral-700 rounded px-3 py-3"
-            placeholder={t.hostIdPlaceholder}
-            autoFocus
-          />
-          <button type="submit" className="bg-sky-600 hover:bg-sky-500 rounded px-3 py-3">
-            {t.viewButton}
-          </button>
-        </form>
+        <div className="flex flex-col gap-3 w-full max-w-sm">
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const value = (e.currentTarget.elements.namedItem("host_id") as HTMLInputElement).value.trim();
+              if (!value) return;
+              goToHost(value);
+            }}
+          >
+            <label className="text-sm text-neutral-400" htmlFor="host_id">
+              {t.hostIdLabel}
+            </label>
+            <input
+              id="host_id"
+              name="host_id"
+              className="bg-neutral-900 border border-neutral-700 rounded px-3 py-3"
+              placeholder={t.hostIdPlaceholder}
+              autoFocus
+            />
+            <button type="submit" className="bg-sky-600 hover:bg-sky-500 rounded px-3 py-3">
+              {t.viewButton}
+            </button>
+          </form>
+
+          {addServerOpen ? (
+            <AddServerPanel onClose={() => setAddServerOpen(false)} onViewHost={goToHost} />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setAddServerOpen(true)}
+              className="text-sm text-sky-400 hover:text-sky-300 py-2"
+            >
+              {t.addServerButton}
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -185,7 +210,14 @@ export default function App() {
       <header className="flex items-baseline justify-between gap-2">
         <h1 className="text-lg font-semibold shrink-0">{t.brand}</h1>
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm text-neutral-500 truncate max-w-[40vw]">{hostID}</span>
+          <span className="text-sm text-neutral-500 truncate max-w-[30vw]">{hostID}</span>
+          <button
+            type="button"
+            onClick={() => setAddServerOpen((open) => !open)}
+            className="text-sm text-sky-400 hover:text-sky-300 shrink-0 py-2 px-1"
+          >
+            {t.addServerButton}
+          </button>
           <button
             type="button"
             onClick={openPairPanel}
@@ -195,6 +227,8 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {addServerOpen && <AddServerPanel onClose={() => setAddServerOpen(false)} onViewHost={goToHost} />}
 
       {pairPanelOpen && (
         <div className="bg-neutral-900 border border-neutral-700 rounded p-4 flex flex-col gap-3">

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
@@ -30,7 +31,7 @@ func (r *countingReceiver) ReceiveBatch(ctx context.Context, hostID string, batc
 		return errAtCapacity
 	}
 	r.batchesOK++
-	r.itemsReceived += len(batch.GetMetrics()) + len(batch.GetEvents()) + len(batch.GetLogLines())
+	r.itemsReceived += len(batch.GetMetrics()) + len(batch.GetEvents()) + len(batch.GetLogLines()) + len(batch.GetInventories())
 	return nil
 }
 
@@ -153,5 +154,53 @@ func TestAcceptance_KillHubMidStream_SurvivesAgentRestart_ThenBackfillSucceeds(t
 	if freshReceiver.items() != remainingAfterCrash {
 		t.Fatalf("expected the recovered hub to have received exactly the %d items that survived the crash, got %d",
 			remainingAfterCrash, freshReceiver.items())
+	}
+}
+
+func TestSink_EndToEndFlushesCollectorItemsToRealTransportServer(t *testing.T) {
+	const hostID = "host-a"
+	const token = "test-token"
+
+	tokens := transport.NewMemoryTokenStore()
+	if err := tokens.AddToken(hostID, token); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	receiver := &countingReceiver{maxBatchesOK: 10}
+	hubURL := startHub(t, receiver, tokens)
+	client := &transport.Client{BaseURL: hubURL, Token: token}
+
+	buf, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error opening buffer: %v", err)
+	}
+	defer buf.Close()
+
+	sink := NewSink(hostID, buf, WithClock(func() time.Time { return time.Unix(1_700_000_000, 0) }))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sink.Run(ctx, TransportSender(client, hostID), FlushOptions{
+		Interval:   time.Hour,
+		BatchSize:  10,
+		MinBackoff: time.Millisecond,
+		MaxBackoff: time.Millisecond,
+	})
+
+	sink.Gauge("bitacora_cpu_usage_ratio", 0.7, nil)
+	sink.Event(schema.Event{
+		ID: "evt-a", Source: "agent", Type: "agent.started", Severity: schema.SeverityInfo, Title: "started",
+	})
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if receiver.items() == 2 && buf.Len() == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("expected real hub to receive 2 items and buffer to drain, received=%d buffered=%d", receiver.items(), buf.Len())
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 }

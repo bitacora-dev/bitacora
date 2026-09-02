@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { claimPairing, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type Summary } from "./api";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
+import { useTranslation } from "./i18n";
 
 const POLL_INTERVAL_MS = 10_000;
 
@@ -29,6 +30,7 @@ interface PairPanelData {
 }
 
 export default function App() {
+  const { t, intlTag } = useTranslation();
   const [hostID, setHostID] = useState(hostIDFromURL);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -118,7 +120,7 @@ export default function App() {
   if (claimingFromURL) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
-        <p className="text-neutral-500 text-sm">Pairing device…</p>
+        <p className="text-neutral-500 text-sm">{t.pairingDevice}</p>
       </div>
     );
   }
@@ -127,8 +129,8 @@ export default function App() {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
         <div className="flex flex-col gap-3 w-full max-w-xs">
-          <h1 className="text-lg font-semibold text-center">Bitácora</h1>
-          <p className="text-sm text-neutral-400 text-center">This device isn't paired yet.</p>
+          <h1 className="text-lg font-semibold text-center">{t.brand}</h1>
+          <p className="text-sm text-neutral-400 text-center">{t.notPaired}</p>
           {pairError && (
             <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded p-3">{pairError}</div>
           )}
@@ -138,7 +140,7 @@ export default function App() {
             disabled={bootstrapping}
             className="bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded px-3 py-3"
           >
-            {bootstrapping ? "Pairing…" : "Pair this device"}
+            {bootstrapping ? t.pairButtonPending : t.pairButton}
           </button>
         </div>
       </div>
@@ -161,17 +163,17 @@ export default function App() {
           }}
         >
           <label className="text-sm text-neutral-400" htmlFor="host_id">
-            Host ID
+            {t.hostIdLabel}
           </label>
           <input
             id="host_id"
             name="host_id"
             className="bg-neutral-900 border border-neutral-700 rounded px-3 py-3"
-            placeholder="01J8XQ..."
+            placeholder={t.hostIdPlaceholder}
             autoFocus
           />
           <button type="submit" className="bg-sky-600 hover:bg-sky-500 rounded px-3 py-3">
-            View
+            {t.viewButton}
           </button>
         </form>
       </div>
@@ -181,7 +183,7 @@ export default function App() {
   return (
     <div className="min-h-screen p-4 pb-[env(safe-area-inset-bottom)] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] max-w-2xl mx-auto flex flex-col gap-6">
       <header className="flex items-baseline justify-between gap-2">
-        <h1 className="text-lg font-semibold shrink-0">Bitácora</h1>
+        <h1 className="text-lg font-semibold shrink-0">{t.brand}</h1>
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm text-neutral-500 truncate max-w-[40vw]">{hostID}</span>
           <button
@@ -189,7 +191,7 @@ export default function App() {
             onClick={openPairPanel}
             className="text-sm text-sky-400 hover:text-sky-300 shrink-0 py-2 px-1"
           >
-            Add device
+            {t.addDeviceButton}
           </button>
         </div>
       </header>
@@ -197,12 +199,12 @@ export default function App() {
       {pairPanelOpen && (
         <div className="bg-neutral-900 border border-neutral-700 rounded p-4 flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Pair a new device</h2>
+            <h2 className="text-sm font-medium">{t.pairNewDeviceHeading}</h2>
             <button
               type="button"
               onClick={() => setPairPanelOpen(false)}
               className="text-neutral-500 hover:text-neutral-300 py-2 px-2 -mr-2"
-              aria-label="Close"
+              aria-label={t.closeAria}
             >
               ✕
             </button>
@@ -210,12 +212,12 @@ export default function App() {
           {pairPanelError && (
             <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded p-3">{pairPanelError}</div>
           )}
-          {!pairPanel && !pairPanelError && <p className="text-neutral-500 text-sm">Generating code…</p>}
+          {!pairPanel && !pairPanelError && <p className="text-neutral-500 text-sm">{t.generatingCode}</p>}
           {pairPanel && (
             <div className="flex flex-col items-center gap-2">
-              <img src={pairPanel.qr} alt="Pairing QR code" className="w-48 h-48 bg-white rounded" />
+              <img src={pairPanel.qr} alt={t.qrAlt} className="w-48 h-48 bg-white rounded" />
               <p className="text-xs text-neutral-500">
-                Expires at {new Date(pairPanel.expiresAt).toLocaleTimeString()}
+                {t.expiresAt(new Date(pairPanel.expiresAt).toLocaleTimeString(intlTag))}
               </p>
               <p className="text-xs text-neutral-400 break-all select-all text-center">{pairPanel.url}</p>
             </div>
@@ -224,28 +226,26 @@ export default function App() {
       )}
 
       {error && (
-        <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded p-3">
-          Couldn't reach the hub: {error}
-        </div>
+        <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded p-3">{t.hubUnreachable(error)}</div>
       )}
 
       {summary && (
         <>
           <section className="flex flex-col gap-4">
-            <TimeSeriesChart title="CPU usage" points={summary.cpu} color="#38bdf8" formatValue={pct} />
-            <TimeSeriesChart title="Memory used" points={summary.memory} color="#a78bfa" formatValue={pct} />
+            <TimeSeriesChart title={t.cpuUsageTitle} points={summary.cpu} color="#38bdf8" formatValue={pct} />
+            <TimeSeriesChart title={t.memoryUsedTitle} points={summary.memory} color="#a78bfa" formatValue={pct} />
           </section>
 
           <section>
             <h2 className="text-sm font-medium text-neutral-400 mb-2">
-              Events (last {Math.round(summary.window_secs / 60)}m)
+              {t.eventsHeading(Math.round(summary.window_secs / 60))}
             </h2>
             <EventsList events={summary.events} />
           </section>
         </>
       )}
 
-      {!summary && !error && <p className="text-neutral-500 text-sm">Loading…</p>}
+      {!summary && !error && <p className="text-neutral-500 text-sm">{t.loading}</p>}
     </div>
   );
 }

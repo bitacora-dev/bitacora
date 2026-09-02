@@ -1,4 +1,5 @@
 import type { BitacoraEvent } from "../api";
+import { useTranslation } from "../i18n";
 
 const SEVERITY_COLOR: Record<BitacoraEvent["severity"], string> = {
   debug: "text-neutral-500",
@@ -10,8 +11,10 @@ const SEVERITY_COLOR: Record<BitacoraEvent["severity"], string> = {
 };
 
 export default function EventsList({ events }: { events: BitacoraEvent[] }) {
+  const { t, intlTag } = useTranslation();
+
   if (events.length === 0) {
-    return <p className="text-neutral-500 text-sm">No events in this window.</p>;
+    return <p className="text-neutral-500 text-sm">{t.noEvents}</p>;
   }
 
   // Most recent first.
@@ -22,8 +25,8 @@ export default function EventsList({ events }: { events: BitacoraEvent[] }) {
       {sorted.map((e) => (
         <li key={e.id} className="py-2 flex flex-col gap-0.5 min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-neutral-500">
-            <span className="shrink-0">{new Date(e.ts).toLocaleTimeString()}</span>
-            <span className={SEVERITY_COLOR[e.severity]}>{e.severity}</span>
+            <span className="shrink-0">{new Date(e.ts).toLocaleTimeString(intlTag)}</span>
+            <span className={SEVERITY_COLOR[e.severity]}>{t.severity[e.severity]}</span>
             <span className="text-neutral-600 truncate">{e.type}</span>
           </div>
           <div className="text-sm break-words">{e.title}</div>

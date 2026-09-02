@@ -58,15 +58,22 @@ type Server struct {
 	// unauthenticated, which keeps existing callers that build a bare
 	// Server{} working, and the pairing endpoints answer 503.
 	Devices *DeviceTokenStore
+	// Hosts registers ingest tokens for POST /v1/hosts (ADR-0008), so a
+	// new machine can be enrolled from the web UI instead of over SSH
+	// with `bitacora-hub -add-token`. Nil makes that route answer 503;
+	// it never falls back to an unauthenticated or no-op path.
+	Hosts HostRegistrar
 }
 
 // Handler returns the http.Handler serving /v1/summary (device-token
-// authenticated when Devices is set), the pairing bootstrap endpoints, and,
-// if WebUI is set, the single-page UI at "/".
+// authenticated when Devices is set), host enrollment (always device-token
+// authenticated), the pairing bootstrap endpoints, and, if WebUI is set,
+// the single-page UI at "/".
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/summary", s.requireDeviceToken(s.handleSummary))
 	mux.HandleFunc("/v1/inventory", s.requireDeviceToken(s.handleInventory))
+	mux.HandleFunc("/v1/hosts", s.handleCreateHost)
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/v1/devices/claim", s.handleDeviceClaim)
 	if s.WebUI != nil {

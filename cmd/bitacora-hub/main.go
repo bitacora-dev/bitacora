@@ -2,14 +2,15 @@
 // the web UI (ADR-0002) and the agent-facing ingest endpoint (ADR-0008) —
 // all in the same process, over the same listener.
 //
-// To register an ingest token for a host without touching SQL by hand
-// (the `bita agent create` tool ADR-0008 describes doesn't exist yet, see
-// internal/transport/README.md), run:
+// Registering an ingest token for a host is normally done from the web UI
+// ("Añadir servidor", POST /v1/hosts). This flag is the offline equivalent
+// for when the UI isn't reachable — for instance before any device has
+// been paired:
 //
 //	bitacora-hub -data-dir=/var/lib/bitacora -add-token=<host_id>:<token-en-texto-plano>
 //
-// This writes the token's Argon2id hash to the persistent SQLite token
-// store and exits without starting the server.
+// Both paths write the token's Argon2id hash to the same persistent
+// SQLite token store; -add-token exits without starting the server.
 package main
 
 import (
@@ -141,6 +142,10 @@ func newHub(dataDir string) (*hub, error) {
 		Inventories: relStore,
 		WebUI:       webui.FS(),
 		Devices:     devices,
+		// Same store -add-token writes to: enrolling a host from the web
+		// UI (POST /v1/hosts) and from the CLI must produce exactly the
+		// same persisted Argon2id hash, not two parallel registries.
+		Hosts: tokenStore,
 	}
 
 	ingestSrv := &transport.Server{

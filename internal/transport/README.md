@@ -29,8 +29,15 @@ Protobuf body compressed with zstd.
 - **Agent-side buffer/backfill** (ADR-0008's WAL, 2h/256MB, priority
   discard) — separate task.
 - **`bita agent create`** — the tool ADR-0008 says generates and delivers
-  a token. Not built; `MemoryTokenStore.AddToken` is the equivalent for
-  tests today.
+  a token. Not built, and not planned there either: `bita` is a
+  local-only, read-only tool (ADR-0012), so writing a token to a remote
+  hub over the network doesn't belong in it. Hosts are enrolled from the
+  hub's own web UI instead ("Añadir servidor" → `POST /v1/hosts`, in
+  `internal/hubapi/hosts.go`), which mints the `host_id` and token,
+  registers the Argon2id hash through the same `AddToken` the CLI uses,
+  and shows the plaintext token exactly once.
+  `bitacora-hub -add-token=<host_id>:<token>` remains the offline
+  equivalent for when the UI isn't reachable.
 - **Immediate send on a `critical` event** (bypassing the 10s/1MB batch
   cadence) — that cadence logic lives in the agent's batching loop, which
   doesn't exist yet either.

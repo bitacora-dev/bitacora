@@ -8,6 +8,15 @@ it ships a first tagged release.
 
 ## [Unreleased]
 
+### Added
+
+- Enroll a host from the hub's web UI ("Añadir servidor"): `POST /v1/hosts`
+  mints a `host_id` and an ingest token, registers the token's Argon2id
+  hash in the same store `bitacora-hub -add-token` writes to, and returns
+  the plaintext token exactly once, along with the command to run on the
+  new machine. The route always requires a valid device token (ADR-0014) —
+  unlike device pairing, it has no unauthenticated first-use path.
+
 ## [0.1.0] - 2026-08-30
 
 First usable release: a read-only agent/hub pair that can be pointed at a

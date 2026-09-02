@@ -62,6 +62,34 @@ export async function fetchSummary(hostID: string, windowStr = "15m"): Promise<S
   return res.json();
 }
 
+export interface CreateHostResponse {
+  host_id: string;
+  token: string;
+  created_at: string;
+  host_id_path: string;
+  token_path: string;
+}
+
+// Enrolls a new host and returns its ingest token. The plaintext token is
+// only ever readable in this response — the hub stores an Argon2id hash and
+// nothing can hand it back later, so the caller must show it immediately.
+export async function createHost(hostID?: string): Promise<CreateHostResponse> {
+  const token = getDeviceToken();
+  const res = await fetch("/v1/hosts", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(hostID ? { host_id: hostID } : {}),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`POST /v1/hosts -> ${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
 export async function startPairing(): Promise<PairResponse> {
   const res = await fetch("/v1/devices/pair", { method: "POST" });
   if (!res.ok) {

@@ -18,7 +18,7 @@ import (
 // exists, so agentbuffer stays testable without a network stack.
 func TransportSender(client *transport.Client, hostID string) Sender {
 	return func(ctx context.Context, items []Item) error {
-		batch := itemsToBatch(hostID, items)
+		batch := ItemsToBatch(hostID, items)
 		_, err := client.Send(ctx, batch)
 		if err != nil {
 			return fmt.Errorf("sending batch of %d item(s): %w", len(items), err)
@@ -27,7 +27,7 @@ func TransportSender(client *transport.Client, hostID string) Sender {
 	}
 }
 
-func itemsToBatch(hostID string, items []Item) *bitacorapb.Batch {
+func ItemsToBatch(hostID string, items []Item) *bitacorapb.Batch {
 	batch := &bitacorapb.Batch{
 		BatchId: ulid.Make().String(),
 		HostId:  hostID,

@@ -16,11 +16,30 @@ import (
 )
 
 type fakeMetrics struct {
-	samples map[string][]metricstore.Sample // metric name -> samples, ignores matchers
+	samples map[string][]metricstore.Sample // metric name -> samples, filtered by matchers
 }
 
 func (f *fakeMetrics) Query(ctx context.Context, name string, from, to time.Time, extra ...*labels.Matcher) ([]metricstore.Sample, error) {
-	return f.samples[name], nil
+	var out []metricstore.Sample
+	for _, sample := range f.samples[name] {
+		if matchesSample(name, sample, extra...) {
+			out = append(out, sample)
+		}
+	}
+	return out, nil
+}
+
+func matchesSample(name string, sample metricstore.Sample, matchers ...*labels.Matcher) bool {
+	for _, matcher := range matchers {
+		value := sample.Labels[matcher.Name]
+		if matcher.Name == labels.MetricName {
+			value = name
+		}
+		if !matcher.Matches(value) {
+			return false
+		}
+	}
+	return true
 }
 
 type fakeEvents struct {
@@ -40,8 +59,13 @@ func (f *fakeEvents) ListEvents(ctx context.Context, from, to time.Time, hostID 
 func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
 	now := time.Now()
 	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
-		"bitacora_cpu_usage_ratio":   {{Timestamp: now, Value: 0.42}},
-		"bitacora_memory_used_ratio": {{Timestamp: now, Value: 0.7}},
+		"bitacora_cpu_usage_ratio": {
+			{Labels: map[string]string{"host_id": "host-a", "cpu": "total"}, Timestamp: now, Value: 0.42},
+			{Labels: map[string]string{"host_id": "host-a", "cpu": "0"}, Timestamp: now, Value: 0.91},
+			{Labels: map[string]string{"host_id": "host-a", "cpu": "1"}, Timestamp: now, Value: 0.13},
+			{Labels: map[string]string{"host_id": "host-b", "cpu": "total"}, Timestamp: now, Value: 0.55},
+		},
+		"bitacora_memory_used_ratio": {{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now, Value: 0.7}},
 	}}
 	events := &fakeEvents{events: []schema.Event{
 		{ID: "evt-1", TS: now, HostID: "host-a", Source: "kernel", Type: "kernel.segfault", Severity: schema.SeverityError, Title: "segfault", Schema: 1},
@@ -66,13 +90,46 @@ func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
 		t.Fatalf("expected host_id host-a, got %q", got.HostID)
 	}
 	if len(got.CPU) != 1 || got.CPU[0].Value != 0.42 {
-		t.Fatalf("expected 1 cpu point at 0.42, got %+v", got.CPU)
+		t.Fatalf("expected only the total cpu point at 0.42, got %+v", got.CPU)
 	}
 	if len(got.Memory) != 1 || got.Memory[0].Value != 0.7 {
 		t.Fatalf("expected 1 memory point at 0.7, got %+v", got.Memory)
 	}
 	if len(got.Events) != 1 || got.Events[0].ID != "evt-1" {
 		t.Fatalf("expected 1 event evt-1, got %+v", got.Events)
+	}
+}
+
+func TestHandleSummary_FiltersCPUToTotalSeries(t *testing.T) {
+	now := time.Now()
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_cpu_usage_ratio": {
+			{Labels: map[string]string{"host_id": "host-a", "cpu": "0"}, Timestamp: now, Value: 0.9},
+			{Labels: map[string]string{"host_id": "host-a", "cpu": "total"}, Timestamp: now.Add(time.Second), Value: 0.42},
+			{Labels: map[string]string{"host_id": "host-a", "cpu": "1"}, Timestamp: now.Add(2 * time.Second), Value: 0.2},
+			{Labels: map[string]string{"host_id": "host-b", "cpu": "total"}, Timestamp: now.Add(3 * time.Second), Value: 0.77},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unexpected error decoding response: %v", err)
+	}
+
+	if len(got.CPU) != 1 {
+		t.Fatalf("expected exactly 1 total cpu point, got %+v", got.CPU)
+	}
+	if got.CPU[0].Value != 0.42 || !got.CPU[0].TS.Equal(now.Add(time.Second)) {
+		t.Fatalf("expected only host-a cpu=total point, got %+v", got.CPU[0])
 	}
 }
 

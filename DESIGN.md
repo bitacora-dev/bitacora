@@ -2,6 +2,11 @@
 
 <!-- impeccable:design-schema 1 -->
 
+The canonical implementation rules for the web dashboard live in
+[`web/DESIGN.md`](web/DESIGN.md). This root document records the design
+direction produced by the dashboard redesign; use the web guide when reviewing
+frontend changes.
+
 ## Surface
 
 The main Bitacora dashboard is an Operate surface. It is designed for quick server-state inspection, not persuasion or storytelling.

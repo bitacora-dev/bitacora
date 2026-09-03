@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && cgo
 
 // This file requires CGO and libsystemd — sdjournal is a cgo binding over
 // libsystemd, and there is no pure-Go implementation of the journal

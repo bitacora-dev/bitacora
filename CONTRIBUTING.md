@@ -34,6 +34,8 @@ working around it in code.
   the frontend. See [ADR-0001](docs/adr/0001-lenguajes-y-stack.md).
 - Code, identifiers and comments are in English. ADRs stay in Spanish for now
   (see [ADR-0013](docs/adr/0013-nombre-licencia-y-gobernanza.md)).
+- Frontend UI changes must follow [web/DESIGN.md](web/DESIGN.md), which is the
+  reviewable design-rule contract derived from the dashboard redesign.
 - `gofmt` and `go vet` must be clean before opening a PR.
 - No dependency that requires CGO by default in the agent.
 - License boundary: Apache-2.0 code may only import Apache-2.0 code inside

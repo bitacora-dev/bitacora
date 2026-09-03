@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package rsync extracts schema.JobStats from an rsync run wrapped with
 // `--stats` (ADR-0010): rsync has no structured output mode, so this parses
 // the fixed-format summary block it prints at the end.

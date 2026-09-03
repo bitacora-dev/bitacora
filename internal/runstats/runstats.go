@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package runstats defines the extractor contract bitacora-run uses to turn
 // a wrapped command's raw output into canonical schema.JobStats (ADR-0010),
 // and picks the right one for a given command line.

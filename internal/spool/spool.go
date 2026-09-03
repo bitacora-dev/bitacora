@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package spool implements the helper-to-agent exchange directory
 // (ADR-0005): privileged helpers write one JSON file per run, atomically;
 // the agent (or, for now, `bita doctor`) reads them and judges freshness.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package schema defines the canonical data model shared by every piece of
 // Bitácora: metrics, events and log lines (ADR-0006), and the host_id that
 // ties them all together (ADR-0004). Nothing that stores or transports data

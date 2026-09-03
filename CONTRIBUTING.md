@@ -36,6 +36,11 @@ working around it in code.
   (see [ADR-0013](docs/adr/0013-nombre-licencia-y-gobernanza.md)).
 - `gofmt` and `go vet` must be clean before opening a PR.
 - No dependency that requires CGO by default in the agent.
+- License boundary: Apache-2.0 code may only import Apache-2.0 code inside
+  this repository, plus the Go standard library and compatible external
+  dependencies. AGPL-3.0 core code may import Apache-2.0 internal contracts
+  and adapters, but not the other way around. See
+  [ADR-0018](docs/adr/0018-frontera-licencia-bitacora-run.md).
 
 ## Security-sensitive changes
 
@@ -49,6 +54,8 @@ opening a public issue.
 ## License
 
 Bitácora core (`bitacora-hub`, `bitacora-agent`, `bita`, web UI) is AGPL-3.0.
-`bitacora-run` is Apache-2.0. By contributing, you agree your contribution is
-licensed under the license of the directory it lands in — see
-[ADR-0013](docs/adr/0013-nombre-licencia-y-gobernanza.md).
+`bitacora-run` and its direct internal support contracts/adapters are
+Apache-2.0. By contributing, you agree your contribution is licensed under the
+license of the directory it lands in — see
+[ADR-0013](docs/adr/0013-nombre-licencia-y-gobernanza.md) and
+[ADR-0018](docs/adr/0018-frontera-licencia-bitacora-run.md).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // bitacora-run is the primary instrumentation path for anything periodic
 // (ADR-0010): a small wrapper anteponed to any command —
 //

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package execwrap runs a wrapped command for bitacora-run (ADR-0010),
 // capturing its stdout/stderr, real exit code and, when it was killed
 // rather than exited, the signal — while still passing the child's output

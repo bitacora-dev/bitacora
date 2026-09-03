@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package jobwriter hands a finished schema.Job off to the local agent
 // (ADR-0010): over its Unix socket when reachable, or into the spool
 // (ADR-0005's exchange directory, one file per job) when it isn't.

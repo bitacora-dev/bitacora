@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package rclone extracts schema.JobStats from an rclone run wrapped with
 // `--use-json-log` (ADR-0010): structured JSON, no regex. rclone periodically
 // logs a line carrying a "stats" object (via `--stats <interval>`); the last

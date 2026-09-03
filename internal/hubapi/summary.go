@@ -256,8 +256,9 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	from := now.Add(-window)
 	hostMatcher := labels.MustNewMatcher(labels.MatchEqual, "host_id", hostID)
+	totalCPUMatcher := labels.MustNewMatcher(labels.MatchEqual, "cpu", "total")
 
-	cpu, err := s.Metrics.Query(r.Context(), "bitacora_cpu_usage_ratio", from, now, hostMatcher)
+	cpu, err := s.Metrics.Query(r.Context(), "bitacora_cpu_usage_ratio", from, now, hostMatcher, totalCPUMatcher)
 	if err != nil {
 		http.Error(w, "querying cpu metrics", http.StatusInternalServerError)
 		return

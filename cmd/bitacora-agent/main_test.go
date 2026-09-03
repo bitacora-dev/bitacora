@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bitacora-dev/bitacora/internal/collector"
 )
 
 func TestReadToken_PrefersTokenFile(t *testing.T) {
@@ -72,5 +75,27 @@ func TestParseConfig_RejectsHubURLWithoutTokenSource(t *testing.T) {
 
 	if _, err := parseConfig(); err == nil {
 		t.Fatal("expected hub URL without token source to be rejected")
+	}
+}
+
+func TestBuildRegistryIncludesProductionCollectors(t *testing.T) {
+	reg := buildRegistry()
+	regs, disabled := reg.Resolve(context.Background(), collector.Config{}, &collector.HostInfo{}, map[collector.Capability]bool{})
+
+	names := map[string]bool{}
+	for _, reg := range regs {
+		names[reg.Collector.Name()] = true
+	}
+	for _, disabled := range disabled {
+		names[disabled.Name] = true
+	}
+
+	for _, name := range []string{"cpu", "memory", "docker", "journald"} {
+		if !names[name] {
+			t.Fatalf("expected production collector %q to be assembled in bitacora-agent registry; got %v", name, names)
+		}
+	}
+	if names["example"] {
+		t.Fatal("example collector must not be assembled in the production agent registry by default")
 	}
 }

@@ -17,9 +17,12 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/agentbuffer"
 	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
+	"github.com/bitacora-dev/bitacora/internal/collector/cpu"
 	"github.com/bitacora-dev/bitacora/internal/collector/diskarray"
-	"github.com/bitacora-dev/bitacora/internal/collector/example"
+	"github.com/bitacora-dev/bitacora/internal/collector/docker"
 	"github.com/bitacora-dev/bitacora/internal/collector/hwidentity"
+	"github.com/bitacora-dev/bitacora/internal/collector/journald"
+	"github.com/bitacora-dev/bitacora/internal/collector/memory"
 	"github.com/bitacora-dev/bitacora/internal/collector/network"
 	"github.com/bitacora-dev/bitacora/internal/collector/pkgupdates"
 	"github.com/bitacora-dev/bitacora/internal/collector/publicsurface"
@@ -60,24 +63,7 @@ func main() {
 	manifest := capabilities.Detect(detectCfg, hostID, hostname, agentVersion, time.Now())
 	reportManifest(ctx, manifest, cfg)
 
-	reg := collector.Registry{}
-	reg.Register(example.New(), 10*time.Second, 5*time.Second)
-	reg.Register(publicsurface.New(), 5*time.Minute, 30*time.Second)
-	reg.Register(shares.New(), 5*time.Minute, 10*time.Second)
-	reg.Register(users.New(), 5*time.Minute, 10*time.Second)
-	reg.Register(network.New(), 30*time.Second, 10*time.Second)
-	reg.Register(ups.New(), time.Minute, 10*time.Second)
-	reg.Register(hwidentity.New(), 5*time.Minute, 10*time.Second)
-	reg.Register(diskarray.New(), 5*time.Minute, 10*time.Second)
-	// shareusage walks share directories (like `du -sh`), which can take
-	// minutes on large media shares — ADR-0016 calls for a low-frequency
-	// "once a day" job, not the same cadence as cheap collectors.
-	reg.Register(shareusage.New(), 24*time.Hour, time.Minute)
-	// pkgupdates' UnRaid-plugin and Docker-image sources each make a real
-	// network round-trip per item — a long interval avoids hammering
-	// third-party plugin sources and container registries on every cycle,
-	// same reasoning as shareusage's cadence above.
-	reg.Register(pkgupdates.New(), 6*time.Hour, 2*time.Minute)
+	reg := buildRegistry()
 
 	buffer, err := agentbuffer.Open(cfg.spoolDir)
 	if err != nil {
@@ -103,6 +89,31 @@ func main() {
 	defer rt.Close()
 
 	<-ctx.Done()
+}
+
+func buildRegistry() collector.Registry {
+	reg := collector.Registry{}
+	reg.Register(cpu.New(), 10*time.Second, 5*time.Second)
+	reg.Register(memory.New(), 10*time.Second, 5*time.Second)
+	reg.Register(network.New(), 30*time.Second, 10*time.Second)
+	reg.Register(docker.New(), 30*time.Second, 10*time.Second)
+	reg.Register(journald.New(), 10*time.Second, 5*time.Second)
+	reg.Register(publicsurface.New(), 5*time.Minute, 30*time.Second)
+	reg.Register(shares.New(), 5*time.Minute, 10*time.Second)
+	reg.Register(users.New(), 5*time.Minute, 10*time.Second)
+	reg.Register(ups.New(), time.Minute, 10*time.Second)
+	reg.Register(hwidentity.New(), 5*time.Minute, 10*time.Second)
+	reg.Register(diskarray.New(), 5*time.Minute, 10*time.Second)
+	// shareusage walks share directories (like `du -sh`), which can take
+	// minutes on large media shares — ADR-0016 calls for a low-frequency
+	// "once a day" job, not the same cadence as cheap collectors.
+	reg.Register(shareusage.New(), 24*time.Hour, time.Minute)
+	// pkgupdates' UnRaid-plugin and Docker-image sources each make a real
+	// network round-trip per item — a long interval avoids hammering
+	// third-party plugin sources and container registries on every cycle,
+	// same reasoning as shareusage's cadence above.
+	reg.Register(pkgupdates.New(), 6*time.Hour, 2*time.Minute)
+	return reg
 }
 
 type config struct {

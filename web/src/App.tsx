@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { claimPairing, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type Summary } from "./api";
+import { claimPairing, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type SeriesPoint, type Summary } from "./api";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
 import AddServerPanel from "./components/AddServerPanel";
@@ -22,7 +22,30 @@ function stripPairParam(): void {
   window.history.replaceState(null, "", url);
 }
 
-const pct = (v: number) => `${Math.round(v * 100)}%`;
+const formatRatio = (v: number, locale: string) =>
+  new Intl.NumberFormat(locale, {
+    style: "percent",
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(v);
+
+const formatBytes = (value: number, locale: string) => {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const amount = new Intl.NumberFormat(locale, {
+    maximumFractionDigits: size >= 10 || unitIndex === 0 ? 0 : 1,
+  }).format(size);
+  return `${amount} ${units[unitIndex]}`;
+};
+
+function latest(points: SeriesPoint[]): SeriesPoint | null {
+  return points.length > 0 ? points[points.length - 1] : null;
+}
 
 interface PairPanelData {
   url: string;
@@ -36,8 +59,6 @@ export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Device pairing: gates the whole app behind a claimed token, per
-  // ADR-0014's device-token design.
   const [token, setToken] = useState<string | null>(getDeviceToken);
   const [claimingFromURL, setClaimingFromURL] = useState(() => pairCodeFromURL() !== null);
   const [pairError, setPairError] = useState<string | null>(null);
@@ -46,11 +67,27 @@ export default function App() {
   const [pairPanel, setPairPanel] = useState<PairPanelData | null>(null);
   const [pairPanelError, setPairPanelError] = useState<string | null>(null);
   const [pairPanelOpen, setPairPanelOpen] = useState(false);
-
-  // Host enrollment (POST /v1/hosts): reachable both from the header and
-  // from the empty "which host?" screen, which is where a fresh install
-  // lands with no server registered yet.
   const [addServerOpen, setAddServerOpen] = useState(false);
+
+  const memoryTotalByTS = useMemo(() => {
+    const byTS = new Map<string, number>();
+    for (const point of summary?.memory_total_bytes ?? []) byTS.set(point.ts, point.value);
+    return byTS;
+  }, [summary?.memory_total_bytes]);
+
+  const memoryAvailableByTS = useMemo(() => {
+    const byTS = new Map<string, number>();
+    for (const point of summary?.memory_available_bytes ?? []) byTS.set(point.ts, point.value);
+    return byTS;
+  }, [summary?.memory_available_bytes]);
+
+  const memoryAvailable = latest(summary?.memory_available_bytes ?? []);
+  const swapFree = latest(summary?.memory_swap_free_bytes ?? []);
+  const swapTotal = latest(summary?.memory_swap_total_bytes ?? []);
+  const generatedAt = summary ? new Date(summary.generated_at).toLocaleTimeString(intlTag) : "";
+  const windowMinutes = summary ? Math.round(summary.window_secs / 60) : 0;
+  const ratio = useCallback((value: number) => formatRatio(value, intlTag), [intlTag]);
+  const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
 
   const goToHost = (value: string) => {
     const url = new URL(window.location.href);
@@ -133,40 +170,34 @@ export default function App() {
 
   if (claimingFromURL) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <p className="text-neutral-500 text-sm">{t.pairingDevice}</p>
-      </div>
+      <main className="auth-shell">
+        <p>{t.pairingDevice}</p>
+      </main>
     );
   }
 
   if (!token) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-        <div className="flex flex-col gap-3 w-full max-w-xs">
-          <h1 className="text-lg font-semibold text-center">{t.brand}</h1>
-          <p className="text-sm text-neutral-400 text-center">{t.notPaired}</p>
-          {pairError && (
-            <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded p-3">{pairError}</div>
-          )}
-          <button
-            type="button"
-            onClick={bootstrapPairing}
-            disabled={bootstrapping}
-            className="bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded px-3 py-3"
-          >
+      <main className="auth-shell">
+        <section className="auth-panel">
+          <h1>{t.brand}</h1>
+          <p>{t.notPaired}</p>
+          {pairError && <div className="error-panel">{pairError}</div>}
+          <button type="button" onClick={bootstrapPairing} disabled={bootstrapping} className="primary-button">
             {bootstrapping ? t.pairButtonPending : t.pairButton}
           </button>
-        </div>
-      </div>
+        </section>
+      </main>
     );
   }
 
   if (!hostID) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
-        <div className="flex flex-col gap-3 w-full max-w-sm">
+      <main className="auth-shell">
+        <section className="auth-panel auth-panel-wide">
+          <h1>{t.brand}</h1>
           <form
-            className="flex flex-col gap-3"
+            className="host-form"
             onSubmit={(e) => {
               e.preventDefault();
               const value = (e.currentTarget.elements.namedItem("host_id") as HTMLInputElement).value.trim();
@@ -174,17 +205,9 @@ export default function App() {
               goToHost(value);
             }}
           >
-            <label className="text-sm text-neutral-400" htmlFor="host_id">
-              {t.hostIdLabel}
-            </label>
-            <input
-              id="host_id"
-              name="host_id"
-              className="bg-neutral-900 border border-neutral-700 rounded px-3 py-3"
-              placeholder={t.hostIdPlaceholder}
-              autoFocus
-            />
-            <button type="submit" className="bg-sky-600 hover:bg-sky-500 rounded px-3 py-3">
+            <label htmlFor="host_id">{t.hostIdLabel}</label>
+            <input id="host_id" name="host_id" placeholder={t.hostIdPlaceholder} autoFocus />
+            <button type="submit" className="primary-button">
               {t.viewButton}
             </button>
           </form>
@@ -192,37 +215,28 @@ export default function App() {
           {addServerOpen ? (
             <AddServerPanel onClose={() => setAddServerOpen(false)} onViewHost={goToHost} />
           ) : (
-            <button
-              type="button"
-              onClick={() => setAddServerOpen(true)}
-              className="text-sm text-sky-400 hover:text-sky-300 py-2"
-            >
+            <button type="button" onClick={() => setAddServerOpen(true)} className="link-button">
               {t.addServerButton}
             </button>
           )}
-        </div>
-      </div>
+        </section>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen p-4 pb-[env(safe-area-inset-bottom)] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] max-w-2xl mx-auto flex flex-col gap-6">
-      <header className="flex items-baseline justify-between gap-2">
-        <h1 className="text-lg font-semibold shrink-0">{t.brand}</h1>
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm text-neutral-500 truncate max-w-[30vw]">{hostID}</span>
-          <button
-            type="button"
-            onClick={() => setAddServerOpen((open) => !open)}
-            className="text-sm text-sky-400 hover:text-sky-300 shrink-0 py-2 px-1"
-          >
+    <main className="dashboard-shell">
+      <header className="dashboard-header">
+        <div>
+          <h1>{t.brand}</h1>
+          <p>{t.dashboardSubtitle}</p>
+        </div>
+        <div className="header-actions">
+          <span title={hostID}>{hostID}</span>
+          <button type="button" onClick={() => setAddServerOpen((open) => !open)} className="link-button">
             {t.addServerButton}
           </button>
-          <button
-            type="button"
-            onClick={openPairPanel}
-            className="text-sm text-sky-400 hover:text-sky-300 shrink-0 py-2 px-1"
-          >
+          <button type="button" onClick={openPairPanel} className="link-button">
             {t.addDeviceButton}
           </button>
         </div>
@@ -231,55 +245,105 @@ export default function App() {
       {addServerOpen && <AddServerPanel onClose={() => setAddServerOpen(false)} onViewHost={goToHost} />}
 
       {pairPanelOpen && (
-        <div className="bg-neutral-900 border border-neutral-700 rounded p-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">{t.pairNewDeviceHeading}</h2>
-            <button
-              type="button"
-              onClick={() => setPairPanelOpen(false)}
-              className="text-neutral-500 hover:text-neutral-300 py-2 px-2 -mr-2"
-              aria-label={t.closeAria}
-            >
-              ✕
-            </button>
+        <section className="control-panel pair-panel">
+          <div className="panel-title-row">
+            <h2>{t.pairNewDeviceHeading}</h2>
+            <button type="button" onClick={() => setPairPanelOpen(false)} className="icon-button" aria-label={t.closeAria} />
           </div>
-          {pairPanelError && (
-            <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded p-3">{pairPanelError}</div>
-          )}
-          {!pairPanel && !pairPanelError && <p className="text-neutral-500 text-sm">{t.generatingCode}</p>}
+          {pairPanelError && <div className="error-panel">{pairPanelError}</div>}
+          {!pairPanel && !pairPanelError && <p className="muted-text">{t.generatingCode}</p>}
           {pairPanel && (
-            <div className="flex flex-col items-center gap-2">
-              <img src={pairPanel.qr} alt={t.qrAlt} className="w-48 h-48 bg-white rounded" />
-              <p className="text-xs text-neutral-500">
-                {t.expiresAt(new Date(pairPanel.expiresAt).toLocaleTimeString(intlTag))}
-              </p>
-              <p className="text-xs text-neutral-400 break-all select-all text-center">{pairPanel.url}</p>
+            <div className="qr-layout">
+              <img src={pairPanel.qr} alt={t.qrAlt} />
+              <p>{t.expiresAt(new Date(pairPanel.expiresAt).toLocaleTimeString(intlTag))}</p>
+              <p>{pairPanel.url}</p>
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      {error && (
-        <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded p-3">{t.hubUnreachable(error)}</div>
-      )}
+      {error && <div className="error-panel">{t.hubUnreachable(error)}</div>}
 
       {summary && (
         <>
-          <section className="flex flex-col gap-4">
-            <TimeSeriesChart title={t.cpuUsageTitle} points={summary.cpu} color="#38bdf8" formatValue={pct} />
-            <TimeSeriesChart title={t.memoryUsedTitle} points={summary.memory} color="#a78bfa" formatValue={pct} />
+          <section className="status-strip" aria-label={t.dashboardSubtitle}>
+            <article>
+              <span>{t.cpuStatusLabel}</span>
+              <strong>{latest(summary.cpu) ? ratio(latest(summary.cpu)?.value ?? 0) : t.noSamples}</strong>
+            </article>
+            <article>
+              <span>{t.memoryStatusLabel}</span>
+              <strong>
+                {latest(summary.memory_used_bytes) && latest(summary.memory_total_bytes)
+                  ? t.memoryOfTotal(bytes(latest(summary.memory_used_bytes)?.value ?? 0), bytes(latest(summary.memory_total_bytes)?.value ?? 0))
+                  : t.noSamples}
+              </strong>
+            </article>
+            <article>
+              <span>{t.windowLabel(windowMinutes)}</span>
+              <strong>{generatedAt ? t.updatedAt(generatedAt) : t.noSamples}</strong>
+            </article>
           </section>
 
-          <section>
-            <h2 className="text-sm font-medium text-neutral-400 mb-2">
-              {t.eventsHeading(Math.round(summary.window_secs / 60))}
-            </h2>
-            <EventsList events={summary.events} />
+          <section className="metrics-grid">
+            <TimeSeriesChart
+              title={t.cpuUsageTitle}
+              points={summary.cpu}
+              color="#38bdf8"
+              formatAxisValue={ratio}
+              describePoint={(point) => ({ primary: ratio(point.value) })}
+            />
+            <TimeSeriesChart
+              title={t.memoryUsedTitle}
+              points={summary.memory_used_bytes.length > 0 ? summary.memory_used_bytes : summary.memory}
+              color="#f8d66d"
+              formatAxisValue={(value) => (summary.memory_used_bytes.length > 0 ? bytes(value) : ratio(value))}
+              describePoint={(point) => {
+                if (summary.memory_used_bytes.length === 0) return { primary: ratio(point.value) };
+                const total = memoryTotalByTS.get(point.ts) ?? latest(summary.memory_total_bytes)?.value;
+                const available = memoryAvailableByTS.get(point.ts) ?? memoryAvailable?.value;
+                return {
+                  primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value),
+                  secondary: available ? t.memoryAvailable(bytes(available)) : undefined,
+                };
+              }}
+            />
+          </section>
+
+          <section className="lower-grid">
+            <article className="control-panel events-panel">
+              <div className="panel-title-row">
+                <h2>{t.eventsHeading(windowMinutes)}</h2>
+                <span>{summary.events.length}</span>
+              </div>
+              <EventsList events={summary.events} />
+            </article>
+
+            <article className="control-panel signal-panel">
+              <h2>{t.collectorStateHeading}</h2>
+              <p>{t.collectorStateIntro}</p>
+              <dl>
+                <div>
+                  <dt>{t.collectorCoreLabel}</dt>
+                  <dd>{t.collectorCoreValue}</dd>
+                </div>
+                <div>
+                  <dt>{t.collectorOptionalLabel}</dt>
+                  <dd>{t.collectorOptionalValue}</dd>
+                </div>
+                {swapFree && swapTotal && (
+                  <div>
+                    <dt>{t.memoryUsedTitle}</dt>
+                    <dd>{t.swapFree(bytes(swapFree.value), bytes(swapTotal.value))}</dd>
+                  </div>
+                )}
+              </dl>
+            </article>
           </section>
         </>
       )}
 
-      {!summary && !error && <p className="text-neutral-500 text-sm">{t.loading}</p>}
-    </div>
+      {!summary && !error && <p className="loading-text">{t.loading}</p>}
+    </main>
   );
 }

@@ -223,12 +223,17 @@ type SeriesPoint struct {
 // GET /v1/summary?host_id=... debe devolver todo lo necesario para
 // pintar la pantalla principal en una sola petición").
 type Summary struct {
-	HostID      string         `json:"host_id"`
-	GeneratedAt time.Time      `json:"generated_at"`
-	WindowSecs  float64        `json:"window_secs"`
-	CPU         []SeriesPoint  `json:"cpu"`
-	Memory      []SeriesPoint  `json:"memory"`
-	Events      []schema.Event `json:"events"`
+	HostID               string         `json:"host_id"`
+	GeneratedAt          time.Time      `json:"generated_at"`
+	WindowSecs           float64        `json:"window_secs"`
+	CPU                  []SeriesPoint  `json:"cpu"`
+	Memory               []SeriesPoint  `json:"memory"`
+	MemoryTotalBytes     []SeriesPoint  `json:"memory_total_bytes"`
+	MemoryAvailableBytes []SeriesPoint  `json:"memory_available_bytes"`
+	MemoryUsedBytes      []SeriesPoint  `json:"memory_used_bytes"`
+	MemorySwapTotalBytes []SeriesPoint  `json:"memory_swap_total_bytes"`
+	MemorySwapFreeBytes  []SeriesPoint  `json:"memory_swap_free_bytes"`
+	Events               []schema.Event `json:"events"`
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -268,6 +273,26 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "querying memory metrics", http.StatusInternalServerError)
 		return
 	}
+	memTotal, err := s.Metrics.Query(r.Context(), "bitacora_memory_total_bytes", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying memory total metrics", http.StatusInternalServerError)
+		return
+	}
+	memAvailable, err := s.Metrics.Query(r.Context(), "bitacora_memory_available_bytes", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying memory available metrics", http.StatusInternalServerError)
+		return
+	}
+	swapTotal, err := s.Metrics.Query(r.Context(), "bitacora_memory_swap_total_bytes", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying memory swap total metrics", http.StatusInternalServerError)
+		return
+	}
+	swapFree, err := s.Metrics.Query(r.Context(), "bitacora_memory_swap_free_bytes", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying memory swap free metrics", http.StatusInternalServerError)
+		return
+	}
 	events, err := s.Events.ListEvents(r.Context(), from, now, hostID)
 	if err != nil {
 		http.Error(w, "querying events", http.StatusInternalServerError)
@@ -275,12 +300,17 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	summary := Summary{
-		HostID:      hostID,
-		GeneratedAt: now,
-		WindowSecs:  window.Seconds(),
-		CPU:         toSeries(cpu),
-		Memory:      toSeries(mem),
-		Events:      events,
+		HostID:               hostID,
+		GeneratedAt:          now,
+		WindowSecs:           window.Seconds(),
+		CPU:                  toSeries(cpu),
+		Memory:               toSeries(mem),
+		MemoryTotalBytes:     toSeries(memTotal),
+		MemoryAvailableBytes: toSeries(memAvailable),
+		MemoryUsedBytes:      memoryUsedSeries(memTotal, memAvailable),
+		MemorySwapTotalBytes: toSeries(swapTotal),
+		MemorySwapFreeBytes:  toSeries(swapFree),
+		Events:               events,
 	}
 	if summary.Events == nil {
 		summary.Events = []schema.Event{}
@@ -338,6 +368,30 @@ func toSeries(samples []metricstore.Sample) []SeriesPoint {
 	points := make([]SeriesPoint, len(samples))
 	for i, s := range samples {
 		points[i] = SeriesPoint{TS: s.Timestamp, Value: s.Value}
+	}
+	return points
+}
+
+func memoryUsedSeries(total, available []metricstore.Sample) []SeriesPoint {
+	if len(total) == 0 || len(available) == 0 {
+		return []SeriesPoint{}
+	}
+	points := make([]SeriesPoint, 0, len(available))
+	totalByTS := make(map[time.Time]float64, len(total))
+	for _, sample := range total {
+		totalByTS[sample.Timestamp] = sample.Value
+	}
+	latestTotal := total[len(total)-1].Value
+	for _, sample := range available {
+		totalValue, ok := totalByTS[sample.Timestamp]
+		if !ok {
+			totalValue = latestTotal
+		}
+		used := totalValue - sample.Value
+		if used < 0 {
+			used = 0
+		}
+		points = append(points, SeriesPoint{TS: sample.Timestamp, Value: used})
 	}
 	return points
 }

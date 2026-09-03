@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package snapraid extracts schema.JobStats from a SnapRAID `sync` or
 // `scrub` run (ADR-0010): both print a fixed-format summary block of
 // "<count> <label>" lines just before the final "Everything OK" (or an

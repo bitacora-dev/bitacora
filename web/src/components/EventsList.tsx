@@ -14,22 +14,27 @@ export default function EventsList({ events }: { events: BitacoraEvent[] }) {
   const { t, intlTag } = useTranslation();
 
   if (events.length === 0) {
-    return <p className="text-neutral-500 text-sm">{t.noEvents}</p>;
+    return (
+      <div className="events-empty">
+        <h3>{t.eventsEmptyHeading}</h3>
+        <p>{t.eventsEmptyBody}</p>
+      </div>
+    );
   }
 
   // Most recent first.
   const sorted = [...events].sort((a, b) => b.ts.localeCompare(a.ts));
 
   return (
-    <ul className="divide-y divide-neutral-800">
+    <ul className="event-list">
       {sorted.map((e) => (
-        <li key={e.id} className="py-2 flex flex-col gap-0.5 min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-neutral-500">
-            <span className="shrink-0">{new Date(e.ts).toLocaleTimeString(intlTag)}</span>
+        <li key={e.id}>
+          <div>
+            <span>{new Date(e.ts).toLocaleTimeString(intlTag)}</span>
             <span className={SEVERITY_COLOR[e.severity]}>{t.severity[e.severity]}</span>
-            <span className="text-neutral-600 truncate">{e.type}</span>
+            <span>{e.type}</span>
           </div>
-          <div className="text-sm break-words">{e.title}</div>
+          <p>{e.title}</p>
         </li>
       ))}
     </ul>

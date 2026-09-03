@@ -65,7 +65,11 @@ func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
 			{Labels: map[string]string{"host_id": "host-a", "cpu": "1"}, Timestamp: now, Value: 0.13},
 			{Labels: map[string]string{"host_id": "host-b", "cpu": "total"}, Timestamp: now, Value: 0.55},
 		},
-		"bitacora_memory_used_ratio": {{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now, Value: 0.7}},
+		"bitacora_memory_used_ratio":       {{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now, Value: 0.7}},
+		"bitacora_memory_total_bytes":      {{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now, Value: 16 * 1024 * 1024 * 1024}},
+		"bitacora_memory_available_bytes":  {{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now, Value: 4 * 1024 * 1024 * 1024}},
+		"bitacora_memory_swap_total_bytes": {{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now, Value: 2 * 1024 * 1024 * 1024}},
+		"bitacora_memory_swap_free_bytes":  {{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now, Value: 1024 * 1024 * 1024}},
 	}}
 	events := &fakeEvents{events: []schema.Event{
 		{ID: "evt-1", TS: now, HostID: "host-a", Source: "kernel", Type: "kernel.segfault", Severity: schema.SeverityError, Title: "segfault", Schema: 1},
@@ -94,6 +98,15 @@ func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
 	}
 	if len(got.Memory) != 1 || got.Memory[0].Value != 0.7 {
 		t.Fatalf("expected 1 memory point at 0.7, got %+v", got.Memory)
+	}
+	if len(got.MemoryUsedBytes) != 1 || got.MemoryUsedBytes[0].Value != 12*1024*1024*1024 {
+		t.Fatalf("expected 12 GiB memory used, got %+v", got.MemoryUsedBytes)
+	}
+	if len(got.MemoryTotalBytes) != 1 || got.MemoryTotalBytes[0].Value != 16*1024*1024*1024 {
+		t.Fatalf("expected 16 GiB memory total, got %+v", got.MemoryTotalBytes)
+	}
+	if len(got.MemoryAvailableBytes) != 1 || got.MemoryAvailableBytes[0].Value != 4*1024*1024*1024 {
+		t.Fatalf("expected 4 GiB memory available, got %+v", got.MemoryAvailableBytes)
 	}
 	if len(got.Events) != 1 || got.Events[0].ID != "evt-1" {
 		t.Fatalf("expected 1 event evt-1, got %+v", got.Events)
@@ -153,10 +166,41 @@ func TestHandleSummary_EmptyDataReturnsEmptyArraysNotNull(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	for _, field := range []string{`"cpu":[]`, `"memory":[]`, `"events":[]`} {
+	for _, field := range []string{`"cpu":[]`, `"memory":[]`, `"memory_total_bytes":[]`, `"memory_available_bytes":[]`, `"memory_used_bytes":[]`, `"events":[]`} {
 		if !strings.Contains(body, field) {
 			t.Fatalf("expected %s in response (empty array, not null), got %s", field, body)
 		}
+	}
+}
+
+func TestHandleSummary_DerivesMemoryUsedBytesFromTotalAndAvailable(t *testing.T) {
+	now := time.Now()
+	total := float64(8 * 1024 * 1024 * 1024)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_memory_total_bytes": {
+			{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now.Add(-time.Second), Value: total},
+		},
+		"bitacora_memory_available_bytes": {
+			{Labels: map[string]string{"host_id": "host-a"}, Timestamp: now, Value: 3 * 1024 * 1024 * 1024},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unexpected error decoding response: %v", err)
+	}
+
+	if len(got.MemoryUsedBytes) != 1 || got.MemoryUsedBytes[0].Value != 5*1024*1024*1024 {
+		t.Fatalf("expected 5 GiB memory used derived from latest total, got %+v", got.MemoryUsedBytes)
 	}
 }
 

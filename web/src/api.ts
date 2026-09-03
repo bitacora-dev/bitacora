@@ -1,6 +1,5 @@
-// Types mirror internal/hubapi.Summary exactly — keep them in sync by
-// hand; there are only three fields that matter and a generator would be
-// overkill at this size.
+// Types mirror internal/hubapi.Summary exactly. Keep them in sync by hand;
+// the shape is intentionally small enough that a generator would be noise.
 
 export interface SeriesPoint {
   ts: string;
@@ -30,6 +29,11 @@ export interface Summary {
   window_secs: number;
   cpu: SeriesPoint[];
   memory: SeriesPoint[];
+  memory_total_bytes: SeriesPoint[];
+  memory_available_bytes: SeriesPoint[];
+  memory_used_bytes: SeriesPoint[];
+  memory_swap_total_bytes: SeriesPoint[];
+  memory_swap_free_bytes: SeriesPoint[];
   events: BitacoraEvent[];
 }
 

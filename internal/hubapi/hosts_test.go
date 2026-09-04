@@ -8,7 +8,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 )
 
@@ -20,6 +22,18 @@ type fakeRegistrar struct {
 	entries []struct{ hostID, hash string }
 	err     error
 }
+
+type fakeHostRecords struct {
+	created []struct{ id, name string }
+	hosts   []schema.Host
+}
+
+func (f *fakeHostRecords) CreateHost(_ context.Context, hostID, name string) error {
+	f.created = append(f.created, struct{ id, name string }{hostID, name})
+	return nil
+}
+
+func (f *fakeHostRecords) ListHosts(context.Context) ([]schema.Host, error) { return f.hosts, nil }
 
 func (f *fakeRegistrar) AddToken(hostID, plaintextToken string) error {
 	if f.err != nil {
@@ -109,6 +123,46 @@ func TestCreateHost_GeneratesHostIDAndToken(t *testing.T) {
 	}
 	if !reg.verify(got.HostID, got.Token) {
 		t.Fatal("the returned token does not verify against the hash registered for its host_id")
+	}
+}
+
+func TestCreateHost_PersistsOptionalName(t *testing.T) {
+	records := &fakeHostRecords{}
+	srv, deviceToken := newEnrollServer(t, &fakeRegistrar{})
+	srv.HostRecords = records
+
+	rec := postHosts(t, srv, deviceToken, `{"name":"Production"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if len(records.created) != 1 || records.created[0].name != "Production" || records.created[0].id == "" {
+		t.Fatalf("unexpected stored hosts: %+v", records.created)
+	}
+}
+
+func TestListHosts_RequiresDeviceTokenAndReturnsHostMetadata(t *testing.T) {
+	records := &fakeHostRecords{hosts: []schema.Host{{ID: "host-a", Name: "Production", Hostname: "web-01", AgentVersion: "1.2.3", LastSeenAt: time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)}}}
+	srv, token := newEnrollServer(t, &fakeRegistrar{})
+	srv.HostRecords = records
+
+	unauthorized := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/hosts", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/hosts", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got []schema.Host
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decoding hosts: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "Production" || got[0].Hostname != "web-01" || got[0].LastSeenAt.IsZero() {
+		t.Fatalf("unexpected hosts: %+v", got)
 	}
 }
 
@@ -260,7 +314,7 @@ func TestCreateHost_RejectsBadRequests(t *testing.T) {
 func TestCreateHost_RejectsNonPost(t *testing.T) {
 	srv, deviceToken := newEnrollServer(t, &fakeRegistrar{})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/hosts", nil)
+	req := httptest.NewRequest(http.MethodPut, "/v1/hosts", nil)
 	req.Header.Set("Authorization", "Bearer "+deviceToken)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)

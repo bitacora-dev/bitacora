@@ -277,4 +277,27 @@ func runConformanceTests(t *testing.T, newStore func(t *testing.T) Relational) {
 			t.Fatal("expected an invalid inventory to be rejected before it touches storage")
 		}
 	})
+
+	t.Run("CreatesListsAndUpdatesHostMetadata", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		seenAt := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+		if err := s.CreateHost(ctx, "host-a", "Production"); err != nil {
+			t.Fatalf("creating host: %v", err)
+		}
+		if err := s.RecordHostManifest(ctx, "host-a", "web-01", "1.2.3", seenAt); err != nil {
+			t.Fatalf("recording manifest: %v", err)
+		}
+		hosts, err := s.ListHosts(ctx)
+		if err != nil {
+			t.Fatalf("listing hosts: %v", err)
+		}
+		if len(hosts) != 1 {
+			t.Fatalf("host count = %d, want 1", len(hosts))
+		}
+		got := hosts[0]
+		if got.ID != "host-a" || got.Name != "Production" || got.Hostname != "web-01" || got.AgentVersion != "1.2.3" || !got.LastSeenAt.Equal(seenAt) {
+			t.Fatalf("unexpected host: %+v", got)
+		}
+	})
 }

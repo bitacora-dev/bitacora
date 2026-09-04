@@ -31,6 +31,7 @@ type Server struct {
 	Tokens       TokenStore
 	Idempotency  IdempotencyStore
 	Receiver     BatchReceiver
+	Manifests    HostManifestRecorder
 	Limiter      *PerTokenLimiter // nil disables rate limiting
 	MaxBodyBytes int64            // 0 = DefaultMaxBodyBytes
 }
@@ -39,6 +40,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/ingest", s.handleIngest)
+	mux.HandleFunc("/v1/manifest", s.handleManifest)
 	return mux
 }
 

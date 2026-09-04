@@ -18,6 +18,7 @@ export default function AddServerPanel({ onClose, onViewHost }: AddServerPanelPr
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [name, setName] = useState("");
 
   const command = host ? agentSetupCommand({ hubURL: window.location.origin, host }) : "";
 
@@ -25,7 +26,7 @@ export default function AddServerPanel({ onClose, onViewHost }: AddServerPanelPr
     setPending(true);
     setError(null);
     try {
-      setHost(await createHost());
+      setHost(await createHost(name.trim() || undefined));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -65,6 +66,10 @@ export default function AddServerPanel({ onClose, onViewHost }: AddServerPanelPr
       {!host && (
         <>
           <p className="text-sm text-neutral-400">{t.addServerIntro}</p>
+          <label className="flex flex-col gap-1 text-sm text-neutral-400" htmlFor="server-name">
+            {t.serverNameLabel}
+            <input id="server-name" value={name} onChange={(event) => setName(event.target.value)} placeholder={t.serverNamePlaceholder} className="rounded bg-neutral-950 border border-neutral-700 px-3 py-2 text-neutral-100" />
+          </label>
           <button
             type="button"
             onClick={create}

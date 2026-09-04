@@ -52,6 +52,13 @@ var postgresMigrations = []string{
 		items_json  JSONB NOT NULL,
 		PRIMARY KEY (host_id, kind)
 	)`,
+	`CREATE TABLE IF NOT EXISTS hosts (
+		id            TEXT PRIMARY KEY,
+		name          TEXT NOT NULL DEFAULT '',
+		hostname      TEXT NOT NULL DEFAULT '',
+		agent_version TEXT NOT NULL DEFAULT '',
+		last_seen_at  BIGINT
+	)`,
 }
 
 // PostgresStore is the optional Relational backend (ADR-0003): same
@@ -202,4 +209,31 @@ func (s *PostgresStore) GetInventory(ctx context.Context, hostID string, kind sc
 		WHERE host_id = $1 AND kind = $2
 	`, hostID, string(kind))
 	return scanInventory(row)
+}
+
+// CreateHost implements Relational.
+func (s *PostgresStore) CreateHost(ctx context.Context, hostID, name string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO hosts (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = excluded.name`, hostID, name)
+	if err != nil {
+		return fmt.Errorf("creating host %s: %w", hostID, err)
+	}
+	return nil
+}
+
+// RecordHostManifest implements Relational.
+func (s *PostgresStore) RecordHostManifest(ctx context.Context, hostID, hostname, agentVersion string, receivedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO hosts (id, hostname, agent_version, last_seen_at) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET hostname = excluded.hostname, agent_version = excluded.agent_version, last_seen_at = excluded.last_seen_at`, hostID, hostname, agentVersion, receivedAt.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("recording manifest for host %s: %w", hostID, err)
+	}
+	return nil
+}
+
+// ListHosts implements Relational.
+func (s *PostgresStore) ListHosts(ctx context.Context) ([]schema.Host, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, hostname, agent_version, last_seen_at FROM hosts ORDER BY CASE WHEN name = '' THEN hostname ELSE name END, id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing hosts: %w", err)
+	}
+	return scanHosts(rows)
 }

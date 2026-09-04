@@ -135,7 +135,9 @@ func newHub(dataDir string) (*hub, error) {
 		return nil, fmt.Errorf("opening token store: %w", err)
 	}
 
-	devices := hubapi.NewDeviceTokenStore()
+	// Device-token hashes share the SQLite file with ingest credentials, but
+	// use their own table and methods because they are never bound to host_id.
+	devices := hubapi.NewDeviceTokenStore(tokenStore)
 	readSrv := &hubapi.Server{
 		Metrics:     metricsStore,
 		Events:      relStore,

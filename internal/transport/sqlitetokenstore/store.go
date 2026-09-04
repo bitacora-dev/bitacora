@@ -28,6 +28,11 @@ var migrations = []string{
 		token_hash TEXT NOT NULL,
 		created_at INTEGER NOT NULL
 	)`,
+	`CREATE TABLE IF NOT EXISTS device_tokens (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		token_hash TEXT NOT NULL,
+		created_at INTEGER NOT NULL
+	)`,
 }
 
 // New opens path, creates parent directories when needed, and applies
@@ -83,6 +88,68 @@ func (s *Store) AddToken(hostID, plaintextToken string) error {
 		return fmt.Errorf("storing token for host %s: %w", hostID, err)
 	}
 	return nil
+}
+
+// AddDeviceToken hashes plaintextToken with Argon2id and persists it for a
+// reading device. Device tokens deliberately have no host_id: unlike ingest
+// credentials, they authorize a browser or PWA to read the hub (ADR-0014).
+func (s *Store) AddDeviceToken(plaintextToken string) error {
+	hash, err := transport.HashToken(plaintextToken)
+	if err != nil {
+		return fmt.Errorf("hashing device token: %w", err)
+	}
+
+	if _, err := s.db.Exec(`
+		INSERT INTO device_tokens (token_hash, created_at)
+		VALUES (?, ?)
+	`, hash, time.Now().UTC().UnixMilli()); err != nil {
+		return fmt.Errorf("storing device token: %w", err)
+	}
+	return nil
+}
+
+// HasAnyDeviceToken reports whether at least one device token exists.
+func (s *Store) HasAnyDeviceToken(ctx context.Context) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM device_tokens)`).Scan(&exists); err != nil {
+		return false, fmt.Errorf("checking device tokens: %w", err)
+	}
+	return exists, nil
+}
+
+// LookupDeviceToken verifies token against the persisted device-token hashes.
+func (s *Store) LookupDeviceToken(ctx context.Context, token string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT token_hash
+		FROM device_tokens
+		ORDER BY id ASC
+	`)
+	if err != nil {
+		return false, fmt.Errorf("querying device token hashes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return false, fmt.Errorf("scanning device token hash: %w", err)
+		}
+		match, err := transport.VerifyToken(token, hash)
+		if err != nil {
+			continue
+		}
+		if match {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterating device token hashes: %w", err)
+	}
+	return false, nil
 }
 
 // Lookup implements transport.TokenStore.

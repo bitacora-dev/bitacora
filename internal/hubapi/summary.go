@@ -151,7 +151,12 @@ func (s *Server) handleDevicePair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.Devices.HasAnyToken() {
+	hasDeviceToken, err := s.Devices.HasAnyToken(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "checking device tokens")
+		return
+	}
+	if hasDeviceToken {
 		token, ok := bearerToken(r)
 		if !ok {
 			writeJSONError(w, http.StatusUnauthorized, "missing bearer token")

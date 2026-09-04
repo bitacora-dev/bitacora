@@ -142,6 +142,49 @@ func TestRunAddToken_InvalidSpec(t *testing.T) {
 	}
 }
 
+// TestDevicePairingSurvivesHubRebuild proves the regression that an
+// in-memory-only DeviceTokenStore misses: a device paired before a hub restart
+// must still be recognized after newHub rebuilds every store from dataDir.
+func TestDevicePairingSurvivesHubRebuild(t *testing.T) {
+	dataDir := t.TempDir()
+	first, err := newHub(dataDir)
+	if err != nil {
+		t.Fatalf("first newHub: %v", err)
+	}
+
+	code, token, _, err := first.devices.Start(context.Background())
+	if err != nil {
+		first.Close()
+		t.Fatalf("starting pairing: %v", err)
+	}
+	if claimed, ok := first.devices.Claim(context.Background(), code); !ok || claimed != token {
+		first.Close()
+		t.Fatalf("claiming pairing = (%q, %v), want (%q, true)", claimed, ok, token)
+	}
+	first.Close()
+
+	rebuilt, err := newHub(dataDir)
+	if err != nil {
+		t.Fatalf("rebuilt newHub: %v", err)
+	}
+	defer rebuilt.Close()
+
+	valid, err := rebuilt.devices.Lookup(context.Background(), token)
+	if err != nil {
+		t.Fatalf("looking up persisted device token: %v", err)
+	}
+	if !valid {
+		t.Fatal("expected paired device token to remain valid after hub rebuild")
+	}
+	hasAny, err := rebuilt.devices.HasAnyToken(context.Background())
+	if err != nil {
+		t.Fatalf("checking persisted device tokens: %v", err)
+	}
+	if !hasAny {
+		t.Fatal("expected rebuilt device store to report at least one token")
+	}
+}
+
 // TestEnrollHostFromWebAPIThenIngest proves the whole point of the web
 // enrollment flow: a host created through POST /v1/hosts — the request the
 // "Añadir servidor" button makes, authenticated with a device token — gets

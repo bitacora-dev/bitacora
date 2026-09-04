@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { claimPairing, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type SeriesPoint, type Summary } from "./api";
+import { claimPairing, fetchHosts, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type Host, type SeriesPoint, type Summary } from "./api";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
 import AddServerPanel from "./components/AddServerPanel";
@@ -58,6 +58,7 @@ export default function App() {
   const [hostID, setHostID] = useState(hostIDFromURL);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hosts, setHosts] = useState<Host[]>([]);
 
   const [token, setToken] = useState<string | null>(getDeviceToken);
   const [claimingFromURL, setClaimingFromURL] = useState(() => pairCodeFromURL() !== null);
@@ -139,6 +140,11 @@ export default function App() {
     };
   }, [hostID, token]);
 
+  useEffect(() => {
+    if (!token) return;
+    fetchHosts().then(setHosts).catch(() => setHosts([]));
+  }, [token]);
+
   const bootstrapPairing = async () => {
     setBootstrapping(true);
     setPairError(null);
@@ -196,6 +202,12 @@ export default function App() {
       <main className="auth-shell">
         <section className="auth-panel auth-panel-wide">
           <h1>{t.brand}</h1>
+          {hosts.length > 1 && (
+            <select aria-label={t.hostSelectorLabel} value="" onChange={(event) => event.target.value && goToHost(event.target.value)}>
+              <option value="">{t.hostSelectorLabel}</option>
+              {hosts.map((host) => <option key={host.id} value={host.id}>{host.name || host.hostname || host.id}</option>)}
+            </select>
+          )}
           <form
             className="host-form"
             onSubmit={(e) => {
@@ -232,7 +244,11 @@ export default function App() {
           <p>{t.dashboardSubtitle}</p>
         </div>
         <div className="header-actions">
-          <span title={hostID}>{hostID}</span>
+          {hosts.length > 1 ? (
+            <select aria-label={t.hostSelectorLabel} value={hostID} onChange={(event) => goToHost(event.target.value)}>
+              {hosts.map((host) => <option key={host.id} value={host.id}>{host.name || host.hostname || host.id}</option>)}
+            </select>
+          ) : <span title={hostID}>{hostID}</span>}
           <button type="button" onClick={() => setAddServerOpen((open) => !open)} className="link-button">
             {t.addServerButton}
           </button>

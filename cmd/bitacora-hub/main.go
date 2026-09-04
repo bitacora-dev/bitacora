@@ -147,13 +147,15 @@ func newHub(dataDir string) (*hub, error) {
 		// Same store -add-token writes to: enrolling a host from the web
 		// UI (POST /v1/hosts) and from the CLI must produce exactly the
 		// same persisted Argon2id hash, not two parallel registries.
-		Hosts: tokenStore,
+		Hosts:       tokenStore,
+		HostRecords: relStore,
 	}
 
 	ingestSrv := &transport.Server{
 		Tokens:      tokenStore,
 		Idempotency: transport.NewMemoryIdempotencyStore(),
 		Receiver:    ingestreceiver.New(metricsStore, relStore, logStore),
+		Manifests:   relStore,
 	}
 
 	mux := http.NewServeMux()

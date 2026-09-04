@@ -63,6 +63,9 @@ type Server struct {
 	// with `bitacora-hub -add-token`. Nil makes that route answer 503;
 	// it never falls back to an unauthenticated or no-op path.
 	Hosts HostRegistrar
+	// HostRecords stores operator-assigned host names and agent metadata. It
+	// is deliberately separate from Hosts, which owns only ingest credentials.
+	HostRecords HostRecordStore
 }
 
 // Handler returns the http.Handler serving /v1/summary (device-token
@@ -73,7 +76,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/summary", s.requireDeviceToken(s.handleSummary))
 	mux.HandleFunc("/v1/inventory", s.requireDeviceToken(s.handleInventory))
-	mux.HandleFunc("/v1/hosts", s.handleCreateHost)
+	mux.HandleFunc("/v1/hosts", s.handleHosts)
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/v1/devices/claim", s.handleDeviceClaim)
 	if s.WebUI != nil {

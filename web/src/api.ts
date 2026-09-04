@@ -74,10 +74,30 @@ export interface CreateHostResponse {
   token_path: string;
 }
 
+export interface Host {
+  id: string;
+  name?: string;
+  hostname?: string;
+  agent_version?: string;
+  last_seen_at?: string;
+}
+
+export async function fetchHosts(): Promise<Host[]> {
+  const token = getDeviceToken();
+  const res = await fetch("/v1/hosts", {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GET /v1/hosts -> ${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
 // Enrolls a new host and returns its ingest token. The plaintext token is
 // only ever readable in this response — the hub stores an Argon2id hash and
 // nothing can hand it back later, so the caller must show it immediately.
-export async function createHost(hostID?: string): Promise<CreateHostResponse> {
+export async function createHost(name?: string, hostID?: string): Promise<CreateHostResponse> {
   const token = getDeviceToken();
   const res = await fetch("/v1/hosts", {
     method: "POST",
@@ -85,7 +105,7 @@ export async function createHost(hostID?: string): Promise<CreateHostResponse> {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify(hostID ? { host_id: hostID } : {}),
+    body: JSON.stringify({ ...(hostID ? { host_id: hostID } : {}), ...(name ? { name } : {}) }),
   });
   if (!res.ok) {
     const body = await res.text();

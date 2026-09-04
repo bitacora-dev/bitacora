@@ -1,6 +1,7 @@
 package hubapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -29,6 +31,13 @@ const ingestTokenBytes = 32
 // `bitacora-hub -add-token` writes through.
 type HostRegistrar interface {
 	AddToken(hostID, plaintextToken string) error
+}
+
+// HostRecordStore persists metadata that is safe to expose to paired clients.
+// It intentionally contains no ingest token material.
+type HostRecordStore interface {
+	CreateHost(ctx context.Context, hostID, name string) error
+	ListHosts(ctx context.Context) ([]schema.Host, error)
 }
 
 // CreateHostResponse is POST /v1/hosts's response. Token is the only time
@@ -99,6 +108,7 @@ func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		HostID string `json:"host_id"`
+		Name   string `json:"name"`
 	}
 	// An empty body is the common case ("give me a brand new host"), and
 	// http.Request.Body yields io.EOF for it, so that isn't an error.
@@ -125,6 +135,12 @@ func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "registering ingest token")
 		return
 	}
+	if s.HostRecords != nil {
+		if err := s.HostRecords.CreateHost(r.Context(), hostID, body.Name); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "storing host")
+			return
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -135,6 +151,31 @@ func (s *Server) handleCreateHost(w http.ResponseWriter, r *http.Request) {
 		HostIDPath: agentHostIDPath,
 		TokenPath:  agentTokenPath,
 	})
+}
+
+func (s *Server) handleHosts(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		s.handleCreateHost(w, r)
+	case http.MethodGet:
+		s.requireDeviceToken(s.handleListHosts)(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
+	if s.HostRecords == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "host listing is not configured")
+		return
+	}
+	hosts, err := s.HostRecords.ListHosts(r.Context())
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "listing hosts")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(hosts)
 }
 
 func newIngestToken() (string, error) {

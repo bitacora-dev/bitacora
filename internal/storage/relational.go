@@ -42,6 +42,16 @@ type Relational interface {
 	// ok=false if nothing has been reported yet.
 	GetInventory(ctx context.Context, hostID string, kind schema.InventoryKind) (inv schema.Inventory, ok bool, err error)
 
+	// CreateHost stores the optional operator-assigned name at enrollment.
+	CreateHost(ctx context.Context, hostID, name string) error
+
+	// RecordHostManifest updates the agent-reported identity and the time at
+	// which the hub received its authenticated manifest.
+	RecordHostManifest(ctx context.Context, hostID, hostname, agentVersion string, receivedAt time.Time) error
+
+	// ListHosts returns all known hosts, ordered by their display identity.
+	ListHosts(ctx context.Context) ([]schema.Host, error)
+
 	// Close releases every resource the store holds open.
 	Close() error
 }

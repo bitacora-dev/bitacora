@@ -32,6 +32,9 @@ type SQLiteStore struct {
 
 	invMu sync.Mutex
 	invDB *sql.DB
+
+	hostMu  sync.Mutex
+	hostsDB *sql.DB
 }
 
 var _ Relational = (*SQLiteStore)(nil)
@@ -108,6 +111,13 @@ func (s *SQLiteStore) Close() error {
 	defer s.invMu.Unlock()
 	if s.invDB != nil {
 		if err := s.invDB.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
+	if s.hostsDB != nil {
+		if err := s.hostsDB.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -301,6 +311,75 @@ func (s *SQLiteStore) GetInventory(ctx context.Context, hostID string, kind sche
 		WHERE host_id = ? AND kind = ?
 	`, hostID, string(kind))
 	return scanInventory(row)
+}
+
+func (s *SQLiteStore) hostDatabase() (*sql.DB, error) {
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
+	if s.hostsDB != nil {
+		return s.hostsDB, nil
+	}
+	db, err := sql.Open("sqlite", filepath.Join(s.dir, "hosts.db"))
+	if err != nil {
+		return nil, fmt.Errorf("opening hosts db: %w", err)
+	}
+	for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL", "PRAGMA busy_timeout=5000"} {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("applying %q to hosts db: %w", pragma, err)
+		}
+	}
+	for _, stmt := range hostMigrations {
+		if _, err := db.Exec(stmt); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrating hosts db: %w", err)
+		}
+	}
+	s.hostsDB = db
+	return db, nil
+}
+
+// CreateHost implements Relational.
+func (s *SQLiteStore) CreateHost(ctx context.Context, hostID, name string) error {
+	return s.enqueueWrite(ctx, func(ctx context.Context) error {
+		db, err := s.hostDatabase()
+		if err != nil {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `INSERT INTO hosts (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name`, hostID, name)
+		if err != nil {
+			return fmt.Errorf("creating host %s: %w", hostID, err)
+		}
+		return nil
+	})
+}
+
+// RecordHostManifest implements Relational.
+func (s *SQLiteStore) RecordHostManifest(ctx context.Context, hostID, hostname, agentVersion string, receivedAt time.Time) error {
+	return s.enqueueWrite(ctx, func(ctx context.Context) error {
+		db, err := s.hostDatabase()
+		if err != nil {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `INSERT INTO hosts (id, hostname, agent_version, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET hostname = excluded.hostname, agent_version = excluded.agent_version, last_seen_at = excluded.last_seen_at`, hostID, hostname, agentVersion, receivedAt.UnixMilli())
+		if err != nil {
+			return fmt.Errorf("recording manifest for host %s: %w", hostID, err)
+		}
+		return nil
+	})
+}
+
+// ListHosts implements Relational.
+func (s *SQLiteStore) ListHosts(ctx context.Context) ([]schema.Host, error) {
+	db, err := s.hostDatabase()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id, name, hostname, agent_version, last_seen_at FROM hosts ORDER BY CASE WHEN name = '' THEN hostname ELSE name END, id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing hosts: %w", err)
+	}
+	return scanHosts(rows)
 }
 
 func monthsBetween(from, to time.Time) []string {

@@ -33,7 +33,7 @@ func TestPostgresStore_Conformance(t *testing.T) {
 			// Each subtest expects a fresh store; the database itself is
 			// shared and persistent (unlike SQLite's per-test temp dir), so
 			// clear it between subtests instead of between whole test runs.
-			if _, err := s.db.Exec("TRUNCATE events, inventories"); err != nil {
+			if _, err := s.db.Exec("TRUNCATE events, inventories, hosts"); err != nil {
 				t.Errorf("unexpected error truncating tables: %v", err)
 			}
 			if err := s.Close(); err != nil {

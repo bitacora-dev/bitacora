@@ -10,6 +10,9 @@ export interface Dictionary {
   pairButtonPending: string;
   hostIdLabel: string;
   hostIdPlaceholder: string;
+	serverNameLabel: string;
+	serverNamePlaceholder: string;
+	hostSelectorLabel: string;
   viewButton: string;
   addDeviceButton: string;
   addServerButton: string;

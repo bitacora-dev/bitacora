@@ -10,12 +10,39 @@ it ships a first tagged release.
 
 ### Added
 
-- Enroll a host from the hub's web UI ("Añadir servidor"): `POST /v1/hosts`
-  mints a `host_id` and an ingest token, registers the token's Argon2id
-  hash in the same store `bitacora-hub -add-token` writes to, and returns
-  the plaintext token exactly once, along with the command to run on the
-  new machine. The route always requires a valid device token (ADR-0014) —
-  unlike device pairing, it has no unauthenticated first-use path.
+- Build and publish a deployable `bitacora-hub` container image, including
+  immutable development image tags keyed by commit SHA.
+- Persist hub ingest tokens in SQLite, so configured agent credentials
+  survive hub restarts.
+- Deliver agent telemetry to the hub end to end: the agent can send batches
+  over HTTP/2 to `/v1/ingest`, and the hub stores their metrics, events and
+  logs instead of accepting them only in memory.
+- Enroll hosts securely through `POST /v1/hosts` and the dashboard's "Añadir
+  servidor" flow. It creates a host identity and one-time ingest credential,
+  then gives the operator the command needed to connect the new machine.
+- Display names for hosts throughout the ingest manifest, API and dashboard,
+  so operators can identify machines by a meaningful name instead of an ID.
+- Spanish and English dashboard localization, with Spanish as the default.
+- A redesigned dashboard with a clearer hierarchy for server summaries and
+  events.
+- Register the production CPU, memory, Docker and journald collectors with
+  the agent so their data is collected in normal deployments.
+- Enforce the Apache-licensed `bitacora-run` boundary with its own license
+  material and CI validation.
+
+### Changed
+
+- Document the dashboard design system and contributor-facing UI rules so
+  future interface changes remain coherent.
+
+### Fixed
+
+- Require an existing device token when pairing an additional device, while
+  preserving the authenticated first-device setup flow.
+- Persist device tokens across hub restarts, preventing previously paired
+  clients from losing access.
+- Calculate CPU summary values from the total CPU series only, rather than
+  mixing per-core series into a misleading aggregate.
 
 ## [0.1.0] - 2026-08-30
 

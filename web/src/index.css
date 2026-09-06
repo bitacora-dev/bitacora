@@ -419,6 +419,10 @@ body {
   padding: 0.85rem;
 }
 
+.error-recovery-panel {
+  border-color: rgb(251 113 133 / 0.5);
+}
+
 .icon-button {
   position: relative;
   width: 2rem;

@@ -91,7 +91,8 @@ export async function fetchHosts(): Promise<Host[]> {
     const body = await res.text();
     throw new Error(`GET /v1/hosts -> ${res.status}: ${body}`);
   }
-  return res.json();
+  const hosts: unknown = await res.json();
+  return Array.isArray(hosts) ? hosts : [];
 }
 
 // Enrolls a new host and returns its ingest token. The plaintext token is

@@ -8,6 +8,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -38,9 +39,10 @@ import (
 var agentVersion = "dev"
 
 func main() {
+	logger := log.New(os.Stderr, "bitacora-agent: ", log.LstdFlags)
 	cfg, err := parseConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bitacora-agent: config: %v\n", err)
+		logger.Printf("config: %v", err)
 		os.Exit(2)
 	}
 
@@ -49,7 +51,7 @@ func main() {
 
 	hostID, err := schema.LoadOrCreateHostID(schema.DefaultHostIDPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bitacora-agent: loading host_id: %v\n", err)
+		logger.Printf("loading host_id: %v", err)
 		os.Exit(1)
 	}
 	hostname, err := os.Hostname()
@@ -61,27 +63,31 @@ func main() {
 	detectCfg := capabilities.DefaultConfig
 	detectCfg.PubliclyExposed = os.Getenv("BITACORA_PUBLIC_EXPOSED") == "1"
 	manifest := capabilities.Detect(detectCfg, hostID, hostname, agentVersion, time.Now())
-	reportManifest(ctx, manifest, cfg)
+	reportManifest(ctx, manifest, cfg, logger)
 
 	reg := buildRegistry()
 
 	buffer, err := agentbuffer.Open(cfg.spoolDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bitacora-agent: opening outbound buffer: %v\n", err)
+		logger.Printf("opening outbound buffer: %v", err)
 		os.Exit(1)
 	}
 	defer buffer.Close()
 
-	sink := agentbuffer.NewSink(hostID, buffer, agentbuffer.WithLogger(func(format string, args ...any) {
-		fmt.Fprintf(os.Stderr, format+"\n", args...)
-	}))
+	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())
+	if cfg.hubURL == "" {
+		logger.Printf("sending to no configured hub as %s, %d collectors enabled; telemetry will remain buffered locally", hostID, len(regs))
+	} else {
+		logger.Printf("sending to %s as %s, %d collectors enabled", cfg.hubURL, hostID, len(regs))
+	}
+
+	sink := agentbuffer.NewSink(hostID, buffer, agentbuffer.WithLogger(logger.Printf))
 	if cfg.hubURL != "" {
 		client := &transport.Client{BaseURL: cfg.hubURL, Token: cfg.token}
 		go sink.Run(ctx, agentbuffer.TransportSender(client, hostID), agentbuffer.FlushOptions{})
 	} else {
-		fmt.Fprintln(os.Stderr, "bitacora-agent: hub URL is not configured; telemetry will remain buffered locally")
+		logger.Printf("hub URL is not configured; telemetry will remain buffered locally")
 	}
-	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())
 	collector.EmitDisabledEvents(sink, hostID, disabled, time.Now())
 
 	rt := collector.Runtime{Sink: sink}
@@ -152,7 +158,7 @@ func readToken(path, fallback string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func reportManifest(ctx context.Context, m capabilities.Manifest, cfg config) {
+func reportManifest(ctx context.Context, m capabilities.Manifest, cfg config, logger *log.Logger) {
 	if cfg.hubURL == "" {
 		return
 	}
@@ -161,6 +167,6 @@ func reportManifest(ctx context.Context, m capabilities.Manifest, cfg config) {
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := client.Send(sendCtx, m); err != nil {
-		fmt.Fprintf(os.Stderr, "bitacora-agent: sending manifest to hub: %v\n", err)
+		logger.Printf("sending manifest to hub: %v", err)
 	}
 }

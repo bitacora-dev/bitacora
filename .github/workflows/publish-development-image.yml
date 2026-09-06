@@ -1,0 +1,101 @@
+name: Publish development image
+
+on:
+  push:
+    branches: [development]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: development-image
+  cancel-in-progress: false
+
+jobs:
+  publish-and-deploy:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bitacora
+          POSTGRES_PASSWORD: bitacora
+          POSTGRES_DB: bitacora_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install journald headers
+        run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
+
+      - name: Verify the commit before publishing it
+        env:
+          BITACORA_TEST_POSTGRES_DSN: postgres://bitacora:bitacora@localhost:5432/bitacora_test?sslmode=disable
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./... -race -count=1
+          ./scripts/ci/check-no-exec.sh
+          ./scripts/ci/check-license-boundary.sh
+
+      - name: Check repository secrets
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          gitleaks detect --source . --config .gitleaks.toml --no-git
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish immutable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/bitacora-dev/bitacora-hub:${{ github.sha }}
+            ghcr.io/bitacora-dev/bitacora-hub:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Pin Dokploy to this commit and deploy it
+        env:
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_APPLICATION_ID }}
+          DOKPLOY_REGISTRY_PASSWORD: ${{ secrets.DOKPLOY_REGISTRY_PASSWORD }}
+          DOKPLOY_REGISTRY_USERNAME: ${{ secrets.DOKPLOY_REGISTRY_USERNAME }}
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          IMAGE: ghcr.io/bitacora-dev/bitacora-hub:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            --request POST "$DOKPLOY_URL/api/application.saveDockerProvider" \
+            --header "Content-Type: application/json" \
+            --header "x-api-key: $DOKPLOY_API_KEY" \
+            --data "$(jq -n \
+              --arg applicationId "$DOKPLOY_APPLICATION_ID" \
+              --arg dockerImage "$IMAGE" \
+              --arg password "$DOKPLOY_REGISTRY_PASSWORD" \
+              --arg username "$DOKPLOY_REGISTRY_USERNAME" \
+              --arg registryUrl "ghcr.io" \
+              '{applicationId: $applicationId, dockerImage: $dockerImage, password: $password, registryUrl: $registryUrl, username: $username}')"
+          curl --fail-with-body --silent --show-error \
+            --request POST "$DOKPLOY_URL/api/application.deploy" \
+            --header "Content-Type: application/json" \
+            --header "x-api-key: $DOKPLOY_API_KEY" \
+            --data "$(jq -n --arg applicationId "$DOKPLOY_APPLICATION_ID" '{applicationId: $applicationId}')"

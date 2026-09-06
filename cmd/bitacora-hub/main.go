@@ -26,6 +26,7 @@ import (
 	"golang.org/x/net/http2/h2c"
 
 	"github.com/bitacora-dev/bitacora/internal/hubapi"
+	"github.com/bitacora-dev/bitacora/internal/hubpipeline"
 	"github.com/bitacora-dev/bitacora/internal/ingestreceiver"
 	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
@@ -38,6 +39,10 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8081", "listen address (ADR-0002: agent talks to hub here by default)")
 	dataDir := flag.String("data-dir", "/var/lib/bitacora", "base directory for hub data")
+	extractionRulesDir := flag.String("extraction-rules-dir", hubpipeline.DefaultExtractionRulesDir, "operator extraction rules directory")
+	alertRulesDir := flag.String("alert-rules-dir", hubpipeline.DefaultAlertRulesDir, "operator event alert rules directory")
+	notificationsPath := flag.String("notifications", hubpipeline.DefaultNotificationsPath, "notification destinations YAML file")
+	hubURL := flag.String("hub-url", "", "public hub URL used in notification deep links")
 	addToken := flag.String("add-token", "", "register an ingest token and exit, without starting the server: <host_id>:<token-en-texto-plano>")
 	flag.Parse()
 
@@ -48,7 +53,12 @@ func main() {
 		return
 	}
 
-	h, err := newHub(*dataDir)
+	h, err := newHub(*dataDir, hubpipeline.Config{
+		ExtractionRulesDir: *extractionRulesDir,
+		AlertRulesDir:      *alertRulesDir,
+		NotificationsPath:  *notificationsPath,
+		HubURL:             *hubURL,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -111,7 +121,7 @@ func (h *hub) Close() {
 // newHub wires the read API and web UI (hubapi.Server) and the real
 // /v1/ingest endpoint (transport.Server, per ADR-0008) against storage
 // rooted at dataDir, merged into a single handler served by one listener.
-func newHub(dataDir string) (*hub, error) {
+func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) {
 	relStore, err := storage.NewSQLiteStore(filepath.Join(dataDir, "db"))
 	if err != nil {
 		return nil, fmt.Errorf("opening relational store: %w", err)
@@ -127,6 +137,16 @@ func newHub(dataDir string) (*hub, error) {
 	}
 
 	logStore := logstore.NewStore(filepath.Join(dataDir, "logs"))
+	config := hubpipeline.Config{}
+	if len(pipelineConfig) > 0 {
+		config = pipelineConfig[0]
+	}
+	processor, err := hubpipeline.New(relStore, config)
+	if err != nil {
+		relStore.Close()
+		metricsStore.Close()
+		return nil, fmt.Errorf("opening log pipeline: %w", err)
+	}
 
 	tokenStore, err := sqlitetokenstore.New(tokenStorePath(dataDir))
 	if err != nil {
@@ -154,7 +174,7 @@ func newHub(dataDir string) (*hub, error) {
 	ingestSrv := &transport.Server{
 		Tokens:      tokenStore,
 		Idempotency: transport.NewMemoryIdempotencyStore(),
-		Receiver:    ingestreceiver.New(metricsStore, relStore, logStore),
+		Receiver:    ingestreceiver.New(metricsStore, relStore, logStore, ingestreceiver.WithLogProcessor(processor)),
 		Manifests:   relStore,
 	}
 

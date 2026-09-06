@@ -34,12 +34,12 @@ func (m *Manager) Evaluate(now time.Time, ruleID string, labels map[string]strin
 	fp := Fingerprint(ruleID, labels)
 
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	a, ok := m.alerts[fp]
 	if !ok {
 		a = NewAlert(fp, ruleID, labels, severity)
 		m.alerts[fp] = a
 	}
-	m.mu.Unlock()
 
 	transitioned := a.EvaluateFor(now, conditionTrue, value, forDuration)
 	if !transitioned {

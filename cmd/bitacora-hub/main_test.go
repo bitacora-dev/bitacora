@@ -3,8 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,9 +18,143 @@ import (
 	"golang.org/x/net/http2/h2c"
 
 	"github.com/bitacora-dev/bitacora/internal/hubapi"
+	"github.com/bitacora-dev/bitacora/internal/hubpipeline"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
+
+// TestIngestLogPipelineEndToEnd covers the production path rather than an
+// isolated Receiver: an authenticated h2c ingest request persists a LogLine,
+// the hub extracts and persists an Event, evaluates its rule, and calls a real
+// ntfy-compatible HTTP destination.
+func TestIngestLogPipelineEndToEnd(t *testing.T) {
+	notifications := make(chan string, 1)
+	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading ntfy request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		notifications <- string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ntfy.Close()
+
+	configDir := t.TempDir()
+	extractionDir := filepath.Join(configDir, "extraction")
+	alertDir := filepath.Join(configDir, "alerts")
+	for _, dir := range []string{extractionDir, alertDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(extractionDir, "service-failed.yaml"), []byte(`
+id: service-failed
+source: journald
+match: 'service (?P<unit>\S+) entered failed state'
+emit:
+  type: service.entered_failed
+  severity: error
+  title: "service {{.unit}} entered failed state"
+  fingerprint_fields: [unit]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(alertDir, "service-failed.yaml"), []byte(`
+id: service-failed-alert
+on_event: service.entered_failed
+group_by: [attrs.unit]
+threshold:
+  count: 1
+  window: 1h
+severity: error
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notificationsPath := filepath.Join(configDir, "notifications.yaml")
+	if err := os.WriteFile(notificationsPath, []byte("routes:\n  - name: mobile\n    severities: [error]\n    ntfy:\n      topic_url: "+ntfy.URL+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := newHub(t.TempDir(), hubpipeline.Config{
+		ExtractionRulesDir: extractionDir,
+		AlertRulesDir:      alertDir,
+		NotificationsPath:  notificationsPath,
+		HubURL:             "https://hub.example.invalid/",
+	})
+	if err != nil {
+		t.Fatalf("newHub: %v", err)
+	}
+	defer h.Close()
+
+	const hostID = "host-a"
+	if err := h.tokens.AddToken(hostID, "test-token"); err != nil {
+		t.Fatalf("adding token: %v", err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	httpSrv := &http.Server{Handler: h2c.NewHandler(h.handler, &http2.Server{})}
+	go func() { _ = httpSrv.Serve(ln) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(ctx)
+	}()
+
+	baseURL := "http://" + ln.Addr().String()
+	client := &transport.Client{BaseURL: baseURL, Token: "test-token"}
+	if _, err := client.Send(context.Background(), &bitacorapb.Batch{
+		BatchId: ulid.Make().String(), HostId: hostID,
+		LogLines: []*bitacorapb.LogLine{{
+			TsMs: time.Now().UnixMilli(), HostId: hostID, Source: "journald",
+			Message: "service backup.service entered failed state",
+		}},
+	}); err != nil {
+		t.Fatalf("sending log line to /v1/ingest: %v", err)
+	}
+
+	select {
+	case body := <-notifications:
+		if !strings.Contains(body, "service-failed-alert") || !strings.Contains(body, hostID) {
+			t.Fatalf("unexpected ntfy notification body: %q", body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected ntfy notification from event alert rule")
+	}
+
+	_, deviceToken, _, err := h.devices.Start(context.Background())
+	if err != nil {
+		t.Fatalf("minting device token: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/summary?host_id="+hostID+"&window=1h", nil)
+	if err != nil {
+		t.Fatalf("building summary request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+deviceToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /v1/summary: %v", err)
+	}
+	defer resp.Body.Close()
+	var summary struct {
+		Events []struct {
+			Type  string `json:"type"`
+			Title string `json:"title"`
+		} `json:"events"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		t.Fatalf("decoding summary: %v", err)
+	}
+	for _, event := range summary.Events {
+		if event.Type == "service.entered_failed" && event.Title == "service backup.service entered failed state" {
+			return
+		}
+	}
+	t.Fatalf("extracted event not visible in hub summary: %+v", summary.Events)
+}
 
 // TestIngestEndToEnd proves ADR-0008 works end to end through the actual
 // process wiring newHub builds for main(), not through transport or

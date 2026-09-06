@@ -41,17 +41,39 @@ type LogAppender interface {
 	Append(line schema.LogLine) (*logstore.BlockMeta, error)
 }
 
+// LogProcessor performs hub-side work after a raw log line has been
+// persisted. It keeps extraction and alert evaluation out of agents while
+// letting Receiver retain responsibility for transport durability ordering.
+type LogProcessor interface {
+	Process(ctx context.Context, line schema.LogLine) error
+}
+
 // Receiver implements transport.BatchReceiver against real storage
 // backends.
 type Receiver struct {
-	Metrics MetricAppender
-	Events  EventInserter
-	Logs    LogAppender
+	Metrics   MetricAppender
+	Events    EventInserter
+	Logs      LogAppender
+	Processor LogProcessor
 }
 
 // New returns a Receiver writing to the given backends.
-func New(metrics MetricAppender, events EventInserter, logs LogAppender) *Receiver {
-	return &Receiver{Metrics: metrics, Events: events, Logs: logs}
+func New(metrics MetricAppender, events EventInserter, logs LogAppender, options ...Option) *Receiver {
+	r := &Receiver{Metrics: metrics, Events: events, Logs: logs}
+	for _, option := range options {
+		option(r)
+	}
+	return r
+}
+
+// Option configures an optional hub-side receive behavior.
+type Option func(*Receiver)
+
+// WithLogProcessor runs processor only after the raw LogLine has been
+// appended successfully. Processor errors are handled like other malformed
+// individual items: they never make an already accepted batch fail.
+func WithLogProcessor(processor LogProcessor) Option {
+	return func(r *Receiver) { r.Processor = processor }
 }
 
 // ReceiveBatch writes every item in batch to its backend and never fails
@@ -92,6 +114,12 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 		line := protoToLogLine(l)
 		if _, err := r.Logs.Append(line); err != nil {
 			slog.Error("ingestreceiver: dropping log line", "host_id", hostID, "batch_id", batchID, "source", l.GetSource(), "err", err)
+			continue
+		}
+		if r.Processor != nil {
+			if err := r.Processor.Process(ctx, line); err != nil {
+				slog.Error("ingestreceiver: processing persisted log line", "host_id", hostID, "batch_id", batchID, "source", l.GetSource(), "err", err)
+			}
 		}
 	}
 

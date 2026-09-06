@@ -13,11 +13,12 @@ interface Props {
   title: string;
   points: SeriesPoint[];
   color: string;
+  yRange?: [number, number];
   formatAxisValue: (v: number) => string;
   describePoint: (point: SeriesPoint, index: number) => PointReadout;
 }
 
-export default function TimeSeriesChart({ title, points, color, formatAxisValue, describePoint }: Props) {
+export default function TimeSeriesChart({ title, points, color, yRange, formatAxisValue, describePoint }: Props) {
   const { t, intlTag } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -43,10 +44,10 @@ export default function TimeSeriesChart({ title, points, color, formatAxisValue,
 
     const opts: uPlot.Options = {
       width: container.clientWidth,
-      height: 220,
+      height: container.clientHeight,
       cursor: { drag: { x: true, y: false }, points: { show: false } },
       legend: { show: false },
-      scales: { x: { time: true } },
+      scales: { x: { time: true }, ...(yRange ? { y: { range: yRange } } : {}) },
       axes: [
         {
           stroke: "#94a3b8",
@@ -80,7 +81,7 @@ export default function TimeSeriesChart({ title, points, color, formatAxisValue,
     chartRef.current = chart;
 
     const resize = new ResizeObserver(() => {
-      chart.setSize({ width: container.clientWidth, height: 220 });
+      chart.setSize({ width: container.clientWidth, height: container.clientHeight });
     });
     resize.observe(container);
 
@@ -97,7 +98,7 @@ export default function TimeSeriesChart({ title, points, color, formatAxisValue,
       chart.destroy();
       chartRef.current = null;
     };
-  }, [color, data, formatAxisValue, points.length]);
+  }, [color, data, formatAxisValue, points.length, yRange]);
 
   return (
     <div className="control-panel chart-panel">

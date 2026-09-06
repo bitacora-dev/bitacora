@@ -57,6 +57,9 @@ jobs:
       - name: os/exec lint (ADR-0012 — only helpers and bitacora-run may exec)
         run: ./scripts/ci/check-no-exec.sh
 
+      - name: Internal package importer lint
+        run: ./scripts/ci/check-internal-importers.sh
+
       - name: License boundary lint (ADR-0013 / ADR-0018)
         run: ./scripts/ci/check-license-boundary.sh
 

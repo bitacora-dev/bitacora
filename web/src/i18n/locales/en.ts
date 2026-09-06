@@ -61,6 +61,9 @@ export const en: Dictionary = {
     "On this installation the panel normally stays empty until a collector emits a relevant fact. No rows here means no events were received in the current window.",
   loading: "Loading…",
   noEvents: "No events in this window.",
+  unexpectedErrorHeading: "Bitácora could not load",
+  unexpectedErrorBody: "The application encountered an unexpected problem. Reload the page to try again.",
+  reloadPage: "Reload page",
   severity: {
     debug: "debug",
     info: "info",

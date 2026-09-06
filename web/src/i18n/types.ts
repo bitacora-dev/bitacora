@@ -60,5 +60,8 @@ export interface Dictionary {
   eventsEmptyBody: string;
   loading: string;
   noEvents: string;
+  unexpectedErrorHeading: string;
+  unexpectedErrorBody: string;
+  reloadPage: string;
   severity: Record<Severity, string>;
 }

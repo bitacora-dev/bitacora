@@ -174,6 +174,11 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "listing hosts")
 		return
 	}
+	// The web UI consumes this endpoint as an array. A nil Go slice encodes as
+	// JSON null, which is not an empty collection to JavaScript callers.
+	if hosts == nil {
+		hosts = []schema.Host{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(hosts)
 }

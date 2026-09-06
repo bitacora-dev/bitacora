@@ -61,6 +61,9 @@ export const es: Dictionary = {
     "En esta instalación lo normal es que el panel permanezca vacío hasta que un colector emita un hecho relevante. La ausencia de filas aquí significa que no se han recibido eventos en la ventana actual.",
   loading: "Cargando…",
   noEvents: "No hay eventos en esta ventana.",
+  unexpectedErrorHeading: "No se pudo cargar Bitácora",
+  unexpectedErrorBody: "La aplicación encontró un problema inesperado. Recarga la página para intentarlo de nuevo.",
+  reloadPage: "Recargar página",
   severity: {
     debug: "depuración",
     info: "info",

@@ -166,6 +166,23 @@ func TestListHosts_RequiresDeviceTokenAndReturnsHostMetadata(t *testing.T) {
 	}
 }
 
+func TestListHosts_EmptyListIsJSONArray(t *testing.T) {
+	srv, token := newEnrollServer(t, &fakeRegistrar{})
+	srv.HostRecords = &fakeHostRecords{}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/hosts", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
+		t.Fatalf("body = %q, want []", body)
+	}
+}
+
 func TestCreateHost_EachCallIsDistinct(t *testing.T) {
 	reg := &fakeRegistrar{}
 	srv, deviceToken := newEnrollServer(t, reg)

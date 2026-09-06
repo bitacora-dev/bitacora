@@ -7,6 +7,7 @@ import AddServerPanel from "./components/AddServerPanel";
 import { useTranslation } from "./i18n";
 
 const POLL_INTERVAL_MS = 10_000;
+const CPU_Y_RANGE: [number, number] = [0, 1];
 
 function hostIDFromURL(): string {
   return new URLSearchParams(window.location.search).get("host_id") ?? "";
@@ -69,6 +70,7 @@ export default function App() {
   const [pairPanelError, setPairPanelError] = useState<string | null>(null);
   const [pairPanelOpen, setPairPanelOpen] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
+  const [hostIDCopyStatus, setHostIDCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
 
   const memoryTotalByTS = useMemo(() => {
     const byTS = new Map<string, number>();
@@ -89,12 +91,24 @@ export default function App() {
   const windowMinutes = summary ? Math.round(summary.window_secs / 60) : 0;
   const ratio = useCallback((value: number) => formatRatio(value, intlTag), [intlTag]);
   const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
+  const selectedHost = hosts.find((host) => host.id === hostID);
+  const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
+
+  const copyHostID = async () => {
+    try {
+      await navigator.clipboard.writeText(hostID);
+      setHostIDCopyStatus("copied");
+    } catch {
+      setHostIDCopyStatus("failed");
+    }
+  };
 
   const goToHost = (value: string) => {
     const url = new URL(window.location.href);
     url.searchParams.set("host_id", value);
     window.history.replaceState(null, "", url);
     setHostID(value);
+    setHostIDCopyStatus("idle");
     setAddServerOpen(false);
   };
 
@@ -237,18 +251,40 @@ export default function App() {
   }
 
   return (
-    <main className="dashboard-shell">
+    <main className="dashboard-shell dashboard-shell--tall-portrait">
       <header className="dashboard-header">
         <div>
           <h1>{t.brand}</h1>
           <p>{t.dashboardSubtitle}</p>
+          <div className="host-identity">
+            <strong>{hostName}</strong>
+            <span className="host-id">{hostID}</span>
+            <button type="button" onClick={copyHostID} className="host-id-copy-button">
+              {hostIDCopyStatus === "copied" ? t.hostIdCopied : hostIDCopyStatus === "failed" ? t.hostIdCopyFailed : t.copyHostId}
+            </button>
+            <span className="sr-only" aria-live="polite">
+              {hostIDCopyStatus === "copied" ? t.hostIdCopied : hostIDCopyStatus === "failed" ? t.hostIdCopyFailed : ""}
+            </span>
+          </div>
         </div>
         <div className="header-actions">
           {hosts.length > 1 ? (
             <select aria-label={t.hostSelectorLabel} value={hostID} onChange={(event) => goToHost(event.target.value)}>
               {hosts.map((host) => <option key={host.id} value={host.id}>{host.name || host.hostname || host.id}</option>)}
             </select>
-          ) : <span title={hostID}>{hostID}</span>}
+          ) : null}
+          {summary && (
+            <dl className="dashboard-metadata">
+              <div>
+                <dt>{t.windowMetadataLabel}</dt>
+                <dd>{t.windowLabel(windowMinutes)}</dd>
+              </div>
+              <div>
+                <dt>{t.updatedAtLabel}</dt>
+                <dd>{generatedAt || t.noSamples}</dd>
+              </div>
+            </dl>
+          )}
           <button type="button" onClick={() => setAddServerOpen((open) => !open)} className="link-button">
             {t.addServerButton}
           </button>
@@ -282,30 +318,12 @@ export default function App() {
 
       {summary && (
         <>
-          <section className="status-strip" aria-label={t.dashboardSubtitle}>
-            <article>
-              <span>{t.cpuStatusLabel}</span>
-              <strong>{latest(summary.cpu) ? ratio(latest(summary.cpu)?.value ?? 0) : t.noSamples}</strong>
-            </article>
-            <article>
-              <span>{t.memoryStatusLabel}</span>
-              <strong>
-                {latest(summary.memory_used_bytes) && latest(summary.memory_total_bytes)
-                  ? t.memoryOfTotal(bytes(latest(summary.memory_used_bytes)?.value ?? 0), bytes(latest(summary.memory_total_bytes)?.value ?? 0))
-                  : t.noSamples}
-              </strong>
-            </article>
-            <article>
-              <span>{t.windowLabel(windowMinutes)}</span>
-              <strong>{generatedAt ? t.updatedAt(generatedAt) : t.noSamples}</strong>
-            </article>
-          </section>
-
           <section className="metrics-grid">
             <TimeSeriesChart
               title={t.cpuUsageTitle}
               points={summary.cpu}
               color="#38bdf8"
+              yRange={CPU_Y_RANGE}
               formatAxisValue={ratio}
               describePoint={(point) => ({ primary: ratio(point.value) })}
             />

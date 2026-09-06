@@ -27,6 +27,9 @@ export interface Dictionary {
   runOnNewMachine: string;
   copyCommand: string;
   copyDone: string;
+  copyHostId: string;
+  hostIdCopied: string;
+  hostIdCopyFailed: string;
   viewHostButton: string;
   pairNewDeviceHeading: string;
   closeAria: string;
@@ -37,13 +40,12 @@ export interface Dictionary {
   cpuUsageTitle: string;
   memoryUsedTitle: string;
   dashboardSubtitle: string;
-  updatedAt: (time: string) => string;
+  updatedAtLabel: string;
+  windowMetadataLabel: string;
   windowLabel: (minutes: number) => string;
   currentValueLabel: string;
   inspectedValueLabel: string;
   noSamples: string;
-  cpuStatusLabel: string;
-  memoryStatusLabel: string;
   memoryOfTotal: (used: string, total: string) => string;
   memoryAvailable: (available: string) => string;
   swapFree: (free: string, total: string) => string;

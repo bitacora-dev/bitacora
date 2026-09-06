@@ -38,6 +38,8 @@ consecuencias, incluidas las malas.
 | [0015](0015-ampliacion-de-superficie.md) | Ampliación de superficie: compartidos, VMs, usuarios, red y alimentación | Aceptado |
 | [0016](0016-identidad-de-hardware-y-desglose-de-almacenamiento.md) | Identidad de hardware y desglose de almacenamiento | Aceptado |
 | [0017](0017-actualizaciones-pendientes.md) | Paquetes, plugins y contenedores desactualizados | Aceptado |
+| [0018](0018-frontera-licencia-bitacora-run.md) | Frontera de licencia de bitacora-run | Propuesto |
+| [0019](0019-autenticacion-humana.md) | Autenticación humana del hub | Propuesto |
 
 ## Estado del proyecto
 

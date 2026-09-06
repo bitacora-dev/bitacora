@@ -183,6 +183,55 @@ body {
   color: var(--muted);
 }
 
+.host-identity,
+.dashboard-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.65rem;
+  margin-top: 0.6rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.host-identity strong {
+  color: var(--text);
+  font-size: 0.98rem;
+}
+
+.host-id {
+  max-width: min(52vw, 30rem);
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-id-copy-button {
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cyan);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.2rem 0.55rem;
+}
+
+.host-id-copy-button:hover {
+  color: #7dd3fc;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
@@ -199,38 +248,30 @@ body {
   white-space: nowrap;
 }
 
-.status-strip,
 .metrics-grid,
 .lower-grid {
   display: grid;
   gap: 1rem;
 }
 
-.status-strip {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.dashboard-metadata {
+  justify-content: end;
+  margin-top: 0;
 }
 
-.status-strip article {
-  min-width: 0;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: rgb(13 19 28 / 0.72);
-  padding: 1rem;
+.dashboard-metadata div {
+  display: flex;
+  gap: 0.35rem;
 }
 
-.status-strip span {
-  display: block;
-  margin-bottom: 0.45rem;
+.dashboard-metadata dt {
+  color: var(--dim);
+}
+
+.dashboard-metadata dd {
+  margin: 0;
   color: var(--muted);
-  font-size: 0.78rem;
-  text-transform: uppercase;
-}
-
-.status-strip strong {
-  display: block;
-  overflow-wrap: anywhere;
-  font-size: 1.45rem;
-  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
 }
 
 .metrics-grid {
@@ -490,10 +531,6 @@ body {
     grid-template-columns: minmax(56rem, 1.25fr) minmax(30rem, 0.75fr);
   }
 
-  .status-strip strong {
-    font-size: 1.7rem;
-  }
-
   .chart-value strong {
     font-size: 1.95rem;
   }
@@ -515,8 +552,8 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .status-strip {
-    grid-template-columns: 1fr;
+  .dashboard-metadata {
+    justify-content: start;
   }
 }
 
@@ -535,7 +572,6 @@ body {
     font-size: 1.65rem;
   }
 
-  .status-strip strong,
   .chart-value strong {
     font-size: 1.25rem;
   }
@@ -549,5 +585,19 @@ body {
   .chart-canvas {
     padding-right: 0.35rem;
     padding-left: 0.35rem;
+  }
+}
+
+@media (orientation: portrait) and (min-width: 900px) and (min-height: 1500px) {
+  .dashboard-shell--tall-portrait {
+    min-height: 1920px;
+  }
+
+  .dashboard-shell--tall-portrait .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-shell--tall-portrait .chart-canvas {
+    min-height: clamp(28rem, 31vh, 36rem);
   }
 }

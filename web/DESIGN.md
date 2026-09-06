@@ -51,13 +51,13 @@ Use these hierarchy rules:
 | Role | Current evidence | Rule |
 |---|---|---|
 | Brand/page title | `.auth-panel h1`, `.dashboard-header h1` use large, heavy text. | Reserve this scale for Bitácora and major shells only. |
-| Primary operating numbers | `.status-strip strong` and `.chart-value strong` use larger text and tabular numerals. | Current CPU, memory, and latest/inspected chart values are the primary scan targets. |
+| Primary operating numbers | `.chart-value strong` uses larger text and tabular numerals. | Latest or inspected chart values are the primary scan targets. |
 | Panel titles | `.chart-head h2`, `.panel-title-row h2`, `.signal-panel h2` are compact and bold. | Panel headings label the signal; they should not compete with current values. |
 | Context text | Muted labels, timestamps, availability, and window text use small muted type. | Context explains the value after the user has already seen the state. |
 | Prose | Event empty states and signal coverage prose cap line length. | Text blocks must keep readable measures; wide screens are not permission to stretch paragraphs. |
 
 Use `font-variant-numeric: tabular-nums` for changing numeric readouts, as in
-`status-strip`, `chart-value`, and count badges. This keeps polling updates from
+`chart-value`, dashboard metadata, and count badges. This keeps polling updates from
 visually jumping.
 
 ## Grid And Responsive Behavior
@@ -68,14 +68,17 @@ space while text-heavy blocks keep readable line lengths.
 
 | Viewport | Current behavior | Rule |
 |---|---|---|
-| Phone, below `560px` | Header, status, charts, events, and signal coverage stack; values shrink; chart readout aligns left. | One-column scanning wins. Avoid side-by-side controls that create cramped touch targets. |
-| Tablet/small laptop, below `980px` | Header actions stack; metrics and lower grids become one column. | Preserve order: state strip, charts, events, signal coverage. |
-| Laptop/default | Status strip has three columns; CPU and memory charts sit side by side; events and signal coverage share the lower row. | Keep the current state visible without scrolling on ordinary laptop sizes when data is present. |
+| Phone, below `560px` | Header, metadata, charts, events, and signal coverage stack; values shrink; chart readout aligns left. | One-column scanning wins. Avoid side-by-side controls that create cramped touch targets. |
+| Tablet/small laptop, below `980px` | Header actions stack; metrics and lower grids become one column. | Preserve order: header metadata, charts, events, signal coverage. |
+| Laptop/default | CPU and memory charts sit side by side; events and signal coverage share the lower row. | Keep the current state visible without scrolling on ordinary laptop sizes when data is present. |
 | Wide desktop, `1920px+` | Charts use wider tracks, lower grid grows, and text blocks remain capped. | Widen plots and data grids; do not turn prose into long horizontal ribbons. |
+| Tall portrait, `900px+` wide and `1500px+` high in portrait orientation (including `1080×1920`) | CPU and memory charts stack and each chart uses more vertical room. | Preserve long-form signal reading without forcing two narrow landscape charts onto an operational portrait display. |
 
-Use stable dimensions for fixed-format UI: chart height is `220px`, panel radius
-is `8px`, panel borders are `1px`, and normal dashboard gaps are `1rem` to
-`1.25rem`. Changing these values is a design change, not incidental cleanup.
+Use stable dimensions for fixed-format UI: the default chart height is `220px`,
+panel radius is `8px`, panel borders are `1px`, and normal dashboard gaps are
+`1rem` to `1.25rem`. Tall portrait is the intentional exception: its charts use
+the available vertical space. Changing these values is a design change, not
+incidental cleanup.
 
 ## Density And Information Order
 
@@ -88,12 +91,19 @@ The dashboard's question is "is my server OK?" The answer order is:
 5. Which signal areas are connected or pending?
 
 This order is encoded in [`App.tsx`](src/App.tsx): auth and host selection
-states first, then `status-strip`, `metrics-grid`, `EventsList`, and signal
+states first, then header metadata, `metrics-grid`, `EventsList`, and signal
 coverage. Do not lead with setup prose, marketing copy, or secondary collector
 detail on the main dashboard.
 
 Panels should be dense enough for repeated operations. Avoid decorative cards,
-oversized empty spacing, and hero-style composition inside the app shell.
+oversized empty spacing, and hero-style composition inside the app shell. The
+header carries the current time window and update time as discrete metadata;
+do not restore a separate summary-card row for those facts.
+
+The selected host's readable name is always visible in the header. Resolve it
+as `name`, then `hostname`, then the stable ULID. The ULID remains visible as
+copyable metadata even when only one host is enrolled, because its identity is
+not interchangeable with a mutable hostname (ADR-0004).
 
 ## Empty And Disabled States
 
@@ -166,8 +176,9 @@ The current baseline comes from [`index.css`](src/index.css),
   without replacing them with an equally visible focus treatment.
 - Icon-only buttons need an accessible label. The close buttons use
   `aria-label={t.closeAria}`.
+- The host-ID copy control has visible dictionary-backed text and announces its
+  success or failure through a polite live region.
 - Images need meaningful alt text. The pairing QR uses `alt={t.qrAlt}`.
-- The status strip has an accessible label from the dictionary.
 - Text and borders must keep contrast on `--bg`, `--panel`, and
   `--panel-strong`.
 - Interactive controls need stable hit areas. Existing primary buttons are at
@@ -180,6 +191,7 @@ The current baseline comes from [`index.css`](src/index.css),
 - [ ] The change follows ADR-0013: UI code and docs are English; ADRs remain Spanish.
 - [ ] New colors are either existing tokens or explicitly added to the minimum token set above.
 - [ ] Phone, laptop, and `1920px+` layouts keep the same information order and readable text measures.
+- [ ] Tall portrait (`1080×1920`) layouts stack charts and use available height.
 - [ ] Empty, disabled, and pending-collector states are explicit and not treated as broken UI.
 - [ ] Every user-facing string, including library-driven labels, comes from `web/src/i18n/`.
 - [ ] uPlot charts hide the native legend and expose a dictionary-backed current/inspected readout.

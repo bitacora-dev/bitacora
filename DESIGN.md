@@ -17,7 +17,7 @@ The dashboard uses a low-light control-room language: dark operational panels, t
 
 ## Layout
 
-The page uses the full viewport width. Phone screens stack status, charts, and events into one column. Laptop screens show status across the top and metrics in parallel where space allows. Wide desktop screens keep CPU and memory charts side by side with broad horizontal plotting space, while text-heavy blocks retain readable line lengths.
+The page uses the full viewport width. Phone screens stack charts and events into one column. Laptop screens keep CPU and memory metrics in parallel where space allows. Wide desktop screens keep CPU and memory charts side by side with broad horizontal plotting space, while text-heavy blocks retain readable line lengths. A dedicated tall-portrait class covers 1080×1920 operational displays: charts stack vertically and use the available height instead of becoming short landscape panels.
 
 ## Components
 
@@ -29,7 +29,7 @@ The base palette is near-black and blue-gray, with cyan for live CPU signal and 
 
 ## Typography
 
-System UI sans is used for maintainability. Values rely on tabular numerals and clear scale changes; prose is constrained to readable measures and never stretches across wide monitors.
+System UI sans is used for maintainability. Values rely on tabular numerals and clear scale changes; prose is constrained to readable measures and never stretches across wide monitors. The selected host's readable name is always visible, with its stable ULID exposed as copyable operational metadata.
 
 ## Motion and State
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
+	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/storage"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
@@ -85,6 +86,20 @@ func validLogLine(hostID string, ts time.Time) *bitacorapb.LogLine {
 		HostId:  hostID,
 		Source:  "journald",
 		Message: "hello from the agent",
+	}
+}
+
+func validInventory(hostID string, ts time.Time) *bitacorapb.Inventory {
+	return &bitacorapb.Inventory{
+		HostId:       hostID,
+		Kind:         string(schema.InventoryDisk),
+		ReportedAtMs: ts.UnixMilli(),
+		Schema:       1,
+		Items: []*bitacorapb.InventoryItem{{
+			Id:    "/mnt/disk1",
+			Name:  "disk1",
+			Attrs: map[string]string{"health": "passed", "used_bytes": "42"},
+		}},
 	}
 }
 
@@ -171,11 +186,31 @@ func TestReceiveBatch_WritesLogLine(t *testing.T) {
 	}
 }
 
+func TestReceiveBatch_WritesInventory(t *testing.T) {
+	events := newRelationalStore(t)
+	logs, _ := newLogStore(t)
+	r := New(newMetricStore(t), events, logs, WithInventoryUpserter(events))
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+
+	batch := &bitacorapb.Batch{BatchId: "b1", HostId: "host-a", Inventories: []*bitacorapb.Inventory{validInventory("host-a", ts)}}
+	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, ok, err := events.GetInventory(context.Background(), "host-a", schema.InventoryDisk)
+	if err != nil || !ok {
+		t.Fatalf("getting inventory: ok=%v err=%v", ok, err)
+	}
+	if !got.ReportedAt.Equal(ts) || len(got.Items) != 1 || got.Items[0].Attrs["health"] != "passed" {
+		t.Errorf("inventory did not round-trip: %+v", got)
+	}
+}
+
 func TestReceiveBatch_MixedBatchWritesEveryType(t *testing.T) {
 	ms := newMetricStore(t)
 	events := newRelationalStore(t)
 	logs, dir := newLogStore(t)
-	r := New(ms, events, logs)
+	r := New(ms, events, logs, WithInventoryUpserter(events))
 	ts := time.Now().UTC().Truncate(time.Millisecond)
 
 	batch := &bitacorapb.Batch{
@@ -186,6 +221,7 @@ func TestReceiveBatch_MixedBatchWritesEveryType(t *testing.T) {
 		LogLines: []*bitacorapb.LogLine{
 			validLogLine("host-a", ts),
 		},
+		Inventories: []*bitacorapb.Inventory{validInventory("host-a", ts)},
 	}
 
 	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
@@ -200,6 +236,9 @@ func TestReceiveBatch_MixedBatchWritesEveryType(t *testing.T) {
 	}
 	if result, err := logstore.ScanIndex(dir); err != nil || len(result.Blocks) != 1 {
 		t.Errorf("expected 1 log block on disk, got %d (err=%v)", len(result.Blocks), err)
+	}
+	if got, ok, err := events.GetInventory(context.Background(), "host-a", schema.InventoryDisk); err != nil || !ok || len(got.Items) != 1 {
+		t.Errorf("expected 1 inventory item, got %+v (ok=%v err=%v)", got, ok, err)
 	}
 }
 

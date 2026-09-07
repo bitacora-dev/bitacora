@@ -40,6 +40,7 @@ consecuencias, incluidas las malas.
 | [0017](0017-actualizaciones-pendientes.md) | Paquetes, plugins y contenedores desactualizados | Aceptado |
 | [0018](0018-frontera-licencia-bitacora-run.md) | Frontera de licencia de bitacora-run | Propuesto |
 | [0019](0019-autenticacion-humana.md) | Autenticación humana del hub | Propuesto |
+| [0020](0020-distribucion-agente-journald-cgo.md) | Distribución del agente Linux con soporte de journald | Propuesto |
 
 ## Estado del proyecto
 

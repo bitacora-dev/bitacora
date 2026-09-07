@@ -331,7 +331,7 @@ body {
 
 .chart-canvas {
   width: 100%;
-  min-height: 220px;
+  height: 220px;
   padding: 0.5rem 0.75rem 0.75rem;
 }
 
@@ -587,6 +587,7 @@ body {
   }
 
   .chart-canvas {
+    height: 200px;
     padding-right: 0.35rem;
     padding-left: 0.35rem;
   }
@@ -602,6 +603,6 @@ body {
   }
 
   .dashboard-shell--tall-portrait .chart-canvas {
-    min-height: clamp(28rem, 31vh, 36rem);
+    height: clamp(28rem, 31vh, 36rem);
   }
 }

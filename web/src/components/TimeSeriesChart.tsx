@@ -9,6 +9,15 @@ export interface PointReadout {
   secondary?: string;
 }
 
+export interface ChartSize {
+  width: number;
+  height: number;
+}
+
+export function chartSizeChanged(current: ChartSize, next: ChartSize): boolean {
+  return current.width !== next.width || current.height !== next.height;
+}
+
 interface Props {
   title: string;
   points: SeriesPoint[];
@@ -42,9 +51,11 @@ export default function TimeSeriesChart({ title, points, color, yRange, formatAx
     const container = containerRef.current;
     if (!container) return;
 
+    let size: ChartSize = { width: container.clientWidth, height: container.clientHeight };
+
     const opts: uPlot.Options = {
-      width: container.clientWidth,
-      height: container.clientHeight,
+      width: size.width,
+      height: size.height,
       cursor: { drag: { x: true, y: false }, points: { show: false } },
       legend: { show: false },
       scales: { x: { time: true }, ...(yRange ? { y: { range: yRange } } : {}) },
@@ -80,8 +91,21 @@ export default function TimeSeriesChart({ title, points, color, yRange, formatAx
     const chart = new uPlot(opts, data, container);
     chartRef.current = chart;
 
+    let animationFrame: number | null = null;
+    let disposed = false;
     const resize = new ResizeObserver(() => {
-      chart.setSize({ width: container.clientWidth, height: container.clientHeight });
+      if (animationFrame !== null) return;
+
+      animationFrame = requestAnimationFrame(() => {
+        animationFrame = null;
+        if (disposed) return;
+
+        const nextSize = { width: container.clientWidth, height: container.clientHeight };
+        if (!chartSizeChanged(size, nextSize)) return;
+
+        size = nextSize;
+        chart.setSize(nextSize);
+      });
     });
     resize.observe(container);
 
@@ -94,6 +118,8 @@ export default function TimeSeriesChart({ title, points, color, yRange, formatAx
       container.removeEventListener("mouseleave", clearCursor);
       container.removeEventListener("touchend", clearCursor);
       container.removeEventListener("touchcancel", clearCursor);
+      disposed = true;
+      if (animationFrame !== null) cancelAnimationFrame(animationFrame);
       resize.disconnect();
       chart.destroy();
       chartRef.current = null;

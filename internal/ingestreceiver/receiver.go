@@ -1,14 +1,7 @@
 // Package ingestreceiver implements transport.BatchReceiver: it takes a
 // bitacorapb.Batch — already authenticated, dedup-checked and decoded by
 // internal/transport per ADR-0008 — and writes each item to its backend
-// (metricstore, the relational event store, logstore).
-//
-// batch.inventories isn't handled here: there is no bitacorapb.Inventory
-// message in proto/ingest.proto yet, no schema.Inventory type, and no
-// storage.Relational.UpsertInventory method — ADR-0015/0016/0017 describe
-// the shape but it hasn't landed in code. Wiring it in is a follow-up once
-// those exist; this package only handles what the wire format actually
-// carries today (metrics, events, log lines).
+// (metricstore, the relational event store, logstore and Inventory store).
 package ingestreceiver
 
 import (
@@ -35,6 +28,13 @@ type EventInserter interface {
 	InsertEvent(ctx context.Context, e schema.Event) error
 }
 
+// InventoryUpserter is the write side of storage.Relational that Receiver
+// needs for declarative Inventory snapshots. Inventories replace the prior
+// snapshot for their host and kind rather than appending history.
+type InventoryUpserter interface {
+	UpsertInventory(ctx context.Context, inv schema.Inventory) error
+}
+
 // LogAppender is the write side of a logstore.Store that Receiver needs.
 // *logstore.Store satisfies this without any change on its end.
 type LogAppender interface {
@@ -51,10 +51,11 @@ type LogProcessor interface {
 // Receiver implements transport.BatchReceiver against real storage
 // backends.
 type Receiver struct {
-	Metrics   MetricAppender
-	Events    EventInserter
-	Logs      LogAppender
-	Processor LogProcessor
+	Metrics     MetricAppender
+	Events      EventInserter
+	Inventories InventoryUpserter
+	Logs        LogAppender
+	Processor   LogProcessor
 }
 
 // New returns a Receiver writing to the given backends.
@@ -76,9 +77,14 @@ func WithLogProcessor(processor LogProcessor) Option {
 	return func(r *Receiver) { r.Processor = processor }
 }
 
+// WithInventoryUpserter persists Inventory snapshots received from agents.
+func WithInventoryUpserter(inventories InventoryUpserter) Option {
+	return func(r *Receiver) { r.Inventories = inventories }
+}
+
 // ReceiveBatch writes every item in batch to its backend and never fails
 // the batch over a single bad item: a malformed or rejected metric, event
-// or log line is logged and skipped, and the rest of the batch is still
+// log line or Inventory is logged and skipped, and the rest of the batch is still
 // written (ADR-0008: the hub must stay reliable in the face of odd data).
 //
 // This is deliberate, not just convenient: internal/transport.Server marks
@@ -120,6 +126,17 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 			if err := r.Processor.Process(ctx, line); err != nil {
 				slog.Error("ingestreceiver: processing persisted log line", "host_id", hostID, "batch_id", batchID, "source", l.GetSource(), "err", err)
 			}
+		}
+	}
+
+	for _, i := range batch.GetInventories() {
+		if r.Inventories == nil {
+			slog.Error("ingestreceiver: dropping inventory because no inventory store is configured", "host_id", hostID, "batch_id", batchID, "kind", i.GetKind())
+			continue
+		}
+		inventory := protoToInventory(i)
+		if err := r.Inventories.UpsertInventory(ctx, inventory); err != nil {
+			slog.Error("ingestreceiver: dropping inventory", "host_id", hostID, "batch_id", batchID, "kind", i.GetKind(), "err", err)
 		}
 	}
 

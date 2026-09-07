@@ -7,7 +7,7 @@ import (
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
 
-// protoToMetric, protoToEvent and protoToLogLine are the mirror image of
+// protoToMetric, protoToEvent, protoToLogLine and protoToInventory are the mirror image of
 // agentbuffer.metricToProto/eventToProto/logLineToProto: those pack
 // schema.* into bitacorapb.* on the agent's way out, these unpack
 // bitacorapb.* back into schema.* on the hub's way in.
@@ -79,5 +79,27 @@ func protoToLogLine(l *bitacorapb.LogLine) schema.LogLine {
 		Level:           l.GetLevel(),
 		PID:             int(l.GetPid()),
 		Message:         l.GetMessage(),
+	}
+}
+
+func protoToInventory(i *bitacorapb.Inventory) schema.Inventory {
+	items := make([]schema.InventoryItem, 0, len(i.GetItems()))
+	for _, item := range i.GetItems() {
+		attrs := make(schema.Labels, len(item.GetAttrs()))
+		for key, value := range item.GetAttrs() {
+			attrs[key] = value
+		}
+		items = append(items, schema.InventoryItem{
+			ID:    item.GetId(),
+			Name:  item.GetName(),
+			Attrs: attrs,
+		})
+	}
+	return schema.Inventory{
+		HostID:     i.GetHostId(),
+		Kind:       schema.InventoryKind(i.GetKind()),
+		ReportedAt: time.UnixMilli(i.GetReportedAtMs()).UTC(),
+		Schema:     int(i.GetSchema()),
+		Items:      items,
 	}
 }

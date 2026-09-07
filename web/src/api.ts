@@ -35,6 +35,19 @@ export interface Summary {
   memory_swap_total_bytes: SeriesPoint[];
   memory_swap_free_bytes: SeriesPoint[];
   events: BitacoraEvent[];
+  jobs: Job[];
+}
+
+export interface Job {
+  id: string;
+  job_name: string;
+  host_id: string;
+  started_at: string;
+  finished_at: string;
+  duration_seconds: number;
+  status: "success" | "warning" | "failed" | "timeout" | "killed" | "running";
+  exit_code: number;
+  stats?: Record<string, unknown>;
 }
 
 export interface InventoryItem {

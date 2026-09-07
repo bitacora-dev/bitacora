@@ -75,6 +75,24 @@ message Inventory {
   repeated InventoryItem items = 5;
 }
 
+// Job is a completed scheduled operation. Statistics are intentionally absent
+// when the producer cannot state them reliably.
+message Job {
+  string id = 1;
+  string job_name = 2;
+  string host_id = 3;
+  int64 started_at_ms = 4;
+  int64 finished_at_ms = 5;
+  int64 duration_ms = 6;
+  string status = 7;
+  int32 exit_code = 8;
+  string signal = 9;
+  string peer_host_id = 10;
+  string trigger = 11;
+  int64 next_expected_ms = 12;
+  int32 schema = 13;
+}
+
 // Batch is what an agent pushes to POST /v1/ingest: a mixed batch of
 // metrics, events, log lines and inventories in one message (ADR-0008,
 // extended by ADR-0015).
@@ -85,6 +103,7 @@ message Batch {
   repeated Event events = 4;
   repeated LogLine log_lines = 5;
   repeated Inventory inventories = 6;
+	 repeated Job jobs = 7;
 }
 
 // IngestResponse is the hub's reply: the last confirmed offset, and

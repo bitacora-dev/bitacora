@@ -84,6 +84,11 @@ export const es: Dictionary = {
   eventsEmptyHeading: "Sin eventos recientes",
   eventsEmptyBody:
     "En esta instalación lo normal es que el panel permanezca vacío hasta que un colector emita un hecho relevante. La ausencia de filas aquí significa que no se han recibido eventos en la ventana actual.",
+  jobsHeading: (minutes) => `Operaciones (últimos ${minutes}m)`,
+  jobsEmptyHeading: "Sin operaciones recientes",
+  jobsEmptyBody: "Las copias y operaciones programadas aparecerán aquí al completarse.",
+  jobExitStatus: (exitCode, durationSeconds) => `Salida ${exitCode} · ${durationSeconds.toFixed(1)} s`,
+  jobStatus: { success: "correcta", warning: "advertencia", failed: "fallida", timeout: "agotada", killed: "interrumpida", running: "en curso" },
   loading: "Cargando…",
   noEvents: "No hay eventos en esta ventana.",
   unexpectedErrorHeading: "No se pudo cargar Bitácora",

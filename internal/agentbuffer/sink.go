@@ -119,6 +119,19 @@ func (s *Sink) Inventory(inv collector.Inventory) {
 	s.append(Item{Priority: PriorityEvent, TS: inv.ReportedAt, Inventory: &inv})
 }
 
+// Job queues a completed operation with the same durable, non-discardable
+// priority as events. Stats deliberately remain nil when the source has no
+// trustworthy values rather than being populated with zeroes.
+func (s *Sink) Job(job collector.Job) {
+	if job.HostID == "" {
+		job.HostID = s.HostID
+	}
+	if job.Schema == 0 {
+		job.Schema = schema.CurrentSchemaVersion
+	}
+	s.append(Item{Priority: PriorityEvent, TS: job.FinishedAt, Job: &job})
+}
+
 func (s *Sink) append(item Item) {
 	if s == nil || s.Buffer == nil {
 		return

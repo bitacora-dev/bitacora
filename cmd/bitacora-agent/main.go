@@ -25,6 +25,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/collector/journald"
 	"github.com/bitacora-dev/bitacora/internal/collector/memory"
 	"github.com/bitacora-dev/bitacora/internal/collector/network"
+	"github.com/bitacora-dev/bitacora/internal/collector/operations"
 	"github.com/bitacora-dev/bitacora/internal/collector/pkgupdates"
 	"github.com/bitacora-dev/bitacora/internal/collector/publicsurface"
 	"github.com/bitacora-dev/bitacora/internal/collector/shares"
@@ -119,6 +120,9 @@ func buildRegistry() collector.Registry {
 	// third-party plugin sources and container registries on every cycle,
 	// same reasoning as shareusage's cadence above.
 	reg.Register(pkgupdates.New(), 6*time.Hour, 2*time.Minute)
+	// The operations outbox is producer-owned and append-only; importing it is
+	// cheap and gives scheduled backups a real end-to-end path to the hub.
+	reg.Register(operations.New(), 15*time.Second, 5*time.Second)
 	return reg
 }
 

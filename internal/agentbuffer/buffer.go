@@ -40,7 +40,7 @@ const (
 	DefaultSegmentBytes = 4 << 20
 )
 
-// Item is one buffered record. Exactly one of Metric/Event/LogLine/Inventory
+// Item is one buffered record. Exactly one payload field is set.
 // is set.
 type Item struct {
 	Seq       uint64            `json:"seq"`
@@ -50,6 +50,7 @@ type Item struct {
 	Event     *schema.Event     `json:"event,omitempty"`
 	LogLine   *schema.LogLine   `json:"log_line,omitempty"`
 	Inventory *schema.Inventory `json:"inventory,omitempty"`
+	Job       *schema.Job       `json:"job,omitempty"`
 }
 
 // Buffer is the on-disk WAL. Safe for concurrent use.

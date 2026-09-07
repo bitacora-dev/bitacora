@@ -34,6 +34,9 @@ type MetricQuerier interface {
 type EventLister interface {
 	ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error)
 }
+type JobLister interface {
+	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
+}
 
 // InventoryGetter is the read side of storage.Relational that
 // GET /v1/inventory needs (ADR-0015).
@@ -45,6 +48,7 @@ type InventoryGetter interface {
 type Server struct {
 	Metrics MetricQuerier
 	Events  EventLister
+	Jobs    JobLister
 	// Inventories serves GET /v1/inventory (ADR-0015). Nil means that
 	// route always answers 404 — same "not wired everywhere yet" state
 	// as Metrics/Events had before real storage existed.
@@ -242,6 +246,7 @@ type Summary struct {
 	MemorySwapTotalBytes []SeriesPoint  `json:"memory_swap_total_bytes"`
 	MemorySwapFreeBytes  []SeriesPoint  `json:"memory_swap_free_bytes"`
 	Events               []schema.Event `json:"events"`
+	Jobs                 []schema.Job   `json:"jobs"`
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +311,14 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "querying events", http.StatusInternalServerError)
 		return
 	}
+	var jobs []schema.Job
+	if s.Jobs != nil {
+		jobs, err = s.Jobs.ListJobs(r.Context(), from, now, hostID)
+		if err != nil {
+			http.Error(w, "querying jobs", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	summary := Summary{
 		HostID:               hostID,
@@ -319,9 +332,13 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		MemorySwapTotalBytes: toSeries(swapTotal),
 		MemorySwapFreeBytes:  toSeries(swapFree),
 		Events:               events,
+		Jobs:                 jobs,
 	}
 	if summary.Events == nil {
 		summary.Events = []schema.Event{}
+	}
+	if summary.Jobs == nil {
+		summary.Jobs = []schema.Job{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

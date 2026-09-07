@@ -462,6 +462,58 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, from, to time.Time, hostID
 	return scanEvents(rows)
 }
 
+// ListEventPage implements Relational with database-side filtering and
+// pagination across the monthly event files.
+func (s *SQLiteStore) ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error) {
+	months := monthsBetween(from, to)
+	if len(months) == 0 {
+		return []schema.Event{}, 0, nil
+	}
+	for _, m := range months {
+		if _, err := s.monthDB(m); err != nil {
+			return nil, 0, fmt.Errorf("preparing month %s: %w", m, err)
+		}
+	}
+
+	attachDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return nil, 0, fmt.Errorf("opening attach connection: %w", err)
+	}
+	defer attachDB.Close()
+	attachDB.SetMaxOpenConns(1)
+	conn, err := attachDB.Conn(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("acquiring dedicated connection: %w", err)
+	}
+	defer conn.Close()
+
+	var unionParts []string
+	for i, m := range months {
+		alias := fmt.Sprintf("m%d", i)
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf("ATTACH DATABASE ? AS %s", alias), s.pathForMonth(m)); err != nil {
+			return nil, 0, fmt.Errorf("attaching %s: %w", m, err)
+		}
+		unionParts = append(unionParts, fmt.Sprintf("SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema FROM %s.events", alias))
+	}
+
+	base := fmt.Sprintf(` FROM (%s) WHERE ts BETWEEN ? AND ? AND (? = '' OR host_id = ?) AND (? = '' OR severity = ?) AND (? = '' OR type = ?)`, strings.Join(unionParts, " UNION ALL "))
+	args := []any{from.UnixMilli(), to.UnixMilli(), hostID, hostID, severity, severity, eventType, eventType}
+	var total int
+	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*)"+base, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting events: %w", err)
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema`+base+` ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying event page: %w", err)
+	}
+	defer rows.Close()
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return events, total, nil
+}
+
 // SearchEventTitles implements Relational, demonstrating that FTS5 is
 // available and wired up (ADR-0003's acceptance requirement), not just
 // present as an unused virtual table.

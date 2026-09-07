@@ -10,14 +10,20 @@ const SEVERITY_COLOR: Record<BitacoraEvent["severity"], string> = {
   critical: "text-red-300 font-semibold",
 };
 
-export default function EventsList({ events }: { events: BitacoraEvent[] }) {
+interface Props {
+  events: BitacoraEvent[];
+  emptyHeading?: string;
+  emptyBody?: string;
+}
+
+export default function EventsList({ events, emptyHeading, emptyBody }: Props) {
   const { t, intlTag } = useTranslation();
 
   if (events.length === 0) {
     return (
       <div className="events-empty">
-        <h3>{t.eventsEmptyHeading}</h3>
-        <p>{t.eventsEmptyBody}</p>
+        <h3>{emptyHeading ?? t.eventsEmptyHeading}</h3>
+        <p>{emptyBody ?? t.eventsEmptyBody}</p>
       </div>
     );
   }

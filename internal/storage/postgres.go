@@ -157,6 +157,43 @@ func (s *PostgresStore) ListEvents(ctx context.Context, from, to time.Time, host
 	return scanEvents(rows)
 }
 
+// ListEventPage implements Relational with database-side filtering and
+// pagination for the event-history API.
+func (s *PostgresStore) ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error) {
+	var total int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM events
+		WHERE ts BETWEEN $1 AND $2
+			AND ($3 = '' OR host_id = $3)
+			AND ($4 = '' OR severity = $4)
+			AND ($5 = '' OR type = $5)
+	`, from.UnixMilli(), to.UnixMilli(), hostID, severity, eventType).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting events: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema
+		FROM events
+		WHERE ts BETWEEN $1 AND $2
+			AND ($3 = '' OR host_id = $3)
+			AND ($4 = '' OR severity = $4)
+			AND ($5 = '' OR type = $5)
+		ORDER BY ts DESC, id DESC
+		LIMIT $6 OFFSET $7
+	`, from.UnixMilli(), to.UnixMilli(), hostID, severity, eventType, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying event page: %w", err)
+	}
+	defer rows.Close()
+
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return events, total, nil
+}
+
 // SearchEventTitles implements Relational using PostgreSQL full-text
 // search (the GIN index in postgresMigrations) — the equivalent of
 // SQLite's FTS5 for this backend.

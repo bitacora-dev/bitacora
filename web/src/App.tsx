@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { claimPairing, fetchEventHistory, fetchHosts, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type BitacoraEvent, type Host, type SeriesPoint, type Summary } from "./api";
+import { claimPairing, fetchEventHistory, fetchHosts, fetchInventory, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type SeriesPoint, type Summary } from "./api";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
 import AddServerPanel from "./components/AddServerPanel";
+import InventoryPanel from "./components/InventoryPanel";
 import { useTranslation } from "./i18n";
 
 const POLL_INTERVAL_MS = 10_000;
@@ -63,6 +64,8 @@ export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hosts, setHosts] = useState<Host[]>([]);
+  const [disks, setDisks] = useState<Inventory | null>(null);
+  const [updates, setUpdates] = useState<Inventory | null>(null);
 
   const [token, setToken] = useState<string | null>(getDeviceToken);
   const [claimingFromURL, setClaimingFromURL] = useState(() => pairCodeFromURL() !== null);
@@ -181,6 +184,34 @@ export default function App() {
       .then((page) => { setHistoryEvents(page.events); setHistoryTotal(page.total); setHistoryError(null); })
       .catch((err) => setHistoryError(err instanceof Error ? err.message : String(err)));
   }, [hostID, token, view, historyFrom, historyTo, historySeverity, historyType, historyOffset]);
+
+  useEffect(() => {
+    if (!hostID || !token) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const [nextDisks, nextUpdates] = await Promise.all([
+          fetchInventory(hostID, "disk"),
+          fetchInventory(hostID, "package_update"),
+        ]);
+        if (!cancelled) {
+          setDisks(nextDisks);
+          setUpdates(nextUpdates);
+        }
+      } catch {
+        // Inventory is optional. Keep the latest readable snapshot while a
+        // collector or its dedicated endpoint is temporarily unavailable.
+      }
+    };
+
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [hostID, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -419,6 +450,11 @@ export default function App() {
                 )}
               </dl>
             </article>
+          </section>
+
+          <section className="inventory-grid" aria-label={t.inventorySectionLabel}>
+            <InventoryPanel inventory={disks} kind="disk" />
+            <InventoryPanel inventory={updates} kind="package_update" />
           </section>
         </>
       )}

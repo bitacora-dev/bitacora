@@ -56,6 +56,20 @@ export interface EventHistoryQuery {
   offset: number;
 }
 
+export interface InventoryItem {
+  id: string;
+  name: string;
+  attrs: Record<string, string>;
+}
+
+export interface Inventory {
+  host_id: string;
+  kind: string;
+  reported_at: string;
+  schema: number;
+  items: InventoryItem[];
+}
+
 const TOKEN_KEY = "bitacora_device_token";
 
 export function getDeviceToken(): string | null {
@@ -95,6 +109,22 @@ export async function fetchEventHistory(hostID: string, query: EventHistoryQuery
   const token = getDeviceToken();
   const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// Returns null when a collector has not reported this inventory kind yet.
+// Missing optional inventory is a normal capability state, not a hub error.
+export async function fetchInventory(hostID: string, kind: string): Promise<Inventory | null> {
+  const url = `/v1/inventory?host_id=${encodeURIComponent(hostID)}&kind=${encodeURIComponent(kind)}`;
+  const token = getDeviceToken();
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GET ${url} -> ${res.status}: ${body}`);
+  }
   return res.json();
 }
 

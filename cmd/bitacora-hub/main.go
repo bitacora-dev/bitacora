@@ -174,8 +174,14 @@ func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) 
 	ingestSrv := &transport.Server{
 		Tokens:      tokenStore,
 		Idempotency: transport.NewMemoryIdempotencyStore(),
-		Receiver:    ingestreceiver.New(metricsStore, relStore, logStore, ingestreceiver.WithLogProcessor(processor)),
-		Manifests:   relStore,
+		Receiver: ingestreceiver.New(
+			metricsStore,
+			relStore,
+			logStore,
+			ingestreceiver.WithLogProcessor(processor),
+			ingestreceiver.WithInventoryUpserter(relStore),
+		),
+		Manifests: relStore,
 	}
 
 	mux := http.NewServeMux()

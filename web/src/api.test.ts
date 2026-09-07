@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchEventHistory, fetchHosts } from "./api";
+import { fetchEventHistory, fetchHosts, fetchInventory } from "./api";
 
 describe("fetchHosts", () => {
   afterEach(() => {
@@ -28,5 +28,29 @@ describe("fetchEventHistory", () => {
       "/v1/events?host_id=host+a&from=2026-01-01T00%3A00%3A00Z&to=2026-01-02T00%3A00%3A00Z&severity=error&type=kernel.segfault&limit=50&offset=100",
       { headers: { Authorization: "Bearer device-token" } },
     );
+  });
+});
+
+describe("fetchInventory", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("requests a host and kind with the device token", async () => {
+    vi.stubGlobal("localStorage", { getItem: vi.fn().mockReturnValue("device-token") });
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ host_id: "host a", kind: "disk", items: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(fetchInventory("host a", "disk")).resolves.toMatchObject({ kind: "disk", items: [] });
+    expect(fetch).toHaveBeenCalledWith("/v1/inventory?host_id=host%20a&kind=disk", {
+      headers: { Authorization: "Bearer device-token" },
+    });
+  });
+
+  it("treats an unreported optional inventory as absent", async () => {
+    vi.stubGlobal("localStorage", { getItem: vi.fn().mockReturnValue(null) });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("missing", { status: 404 })));
+
+    await expect(fetchInventory("host-a", "package_update")).resolves.toBeNull();
   });
 });

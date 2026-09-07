@@ -55,6 +55,15 @@ export interface Dictionary {
   collectorCoreValue: string;
   collectorOptionalLabel: string;
   collectorOptionalValue: string;
+  inventorySectionLabel: string;
+  disksHeading: string;
+  updatesHeading: string;
+  inventoryReportedAt: (time: string) => string;
+  inventoryPending: string;
+  disksEmpty: string;
+  updatesEmpty: string;
+  inventoryAttribute: (attribute: string) => string;
+  inventoryBytes: (bytes: number, locale: string) => string;
   eventsHeading: (minutes: number) => string;
   eventsEmptyHeading: string;
   eventsEmptyBody: string;

@@ -249,7 +249,8 @@ body {
 }
 
 .metrics-grid,
-.lower-grid {
+.lower-grid,
+.inventory-grid {
   display: grid;
   gap: 1rem;
 }
@@ -348,6 +349,69 @@ body {
 .lower-grid {
   grid-template-columns: minmax(0, 1.4fr) minmax(22rem, 0.6fr);
   align-items: start;
+}
+
+.inventory-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.inventory-panel {
+  min-width: 0;
+  padding: 1rem;
+}
+
+.inventory-reported,
+.inventory-empty {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.inventory-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inventory-list li {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 0.75rem;
+}
+
+.inventory-list li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.inventory-list strong {
+  overflow-wrap: anywhere;
+}
+
+.inventory-list dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
+
+.inventory-list dt {
+  color: var(--dim);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.inventory-list dd {
+  margin: 0.18rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .events-panel,
@@ -588,6 +652,10 @@ body {
     grid-template-columns: minmax(56rem, 1.25fr) minmax(30rem, 0.75fr);
   }
 
+  .inventory-grid {
+    grid-template-columns: minmax(56rem, 1.25fr) minmax(30rem, 0.75fr);
+  }
+
   .chart-value strong {
     font-size: 1.95rem;
   }
@@ -605,7 +673,8 @@ body {
   }
 
   .metrics-grid,
-  .lower-grid {
+  .lower-grid,
+  .inventory-grid {
     grid-template-columns: 1fr;
   }
 

@@ -18,11 +18,19 @@ export interface ChartSize {
 // separate from measurement so ticks do not collide with the plot edge.
 export const Y_AXIS_LABEL_MARGIN_PX = 16;
 
+// uPlot calls an axis size hook once during init, before any tick exists, and
+// passes a literal null there (uPlot.esm.js: `axis.size(self, null, i, 0)`).
+// Its own typings declare `values: string[]`, so TypeScript will not catch it.
+// Returning just the margin is the right initial guess: uPlot calls the hook
+// again with the real ticks as soon as it has them.
 export function yAxisSize(
-  labels: string[],
+  labels: string[] | null,
   measureText: (label: string) => number,
 ): number {
-  const widestLabel = labels.reduce((widest, label) => Math.max(widest, measureText(label)), 0);
+  const widestLabel = (labels ?? []).reduce(
+    (widest, label) => Math.max(widest, measureText(label)),
+    0,
+  );
   return Math.ceil(widestLabel + Y_AXIS_LABEL_MARGIN_PX);
 }
 

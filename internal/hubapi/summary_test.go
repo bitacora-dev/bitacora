@@ -181,6 +181,44 @@ func TestHandleSummary_FiltersCPUToTotalSeries(t *testing.T) {
 	}
 }
 
+func TestHandleSummary_AggregatesNetworkInterfacesAndExcludesLoopback(t *testing.T) {
+	first := time.Now().Add(-time.Second).UTC()
+	second := first.Add(time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_net_rx_bytes_per_second": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: first, Value: 100},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: first, Value: 25},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "lo"}, Timestamp: first, Value: 999},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: second, Value: 140},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: second, Value: 30},
+		},
+		"bitacora_net_tx_bytes_per_second": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: first, Value: 50},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: first, Value: 10},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "lo"}, Timestamp: first, Value: 999},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: second, Value: 70},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: second, Value: 15},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.NetworkRXBytesPerSecond) != 2 || got.NetworkRXBytesPerSecond[0].Value != 125 || got.NetworkRXBytesPerSecond[1].Value != 170 {
+		t.Fatalf("expected two aggregated receive points without loopback, got %+v", got.NetworkRXBytesPerSecond)
+	}
+	if len(got.NetworkTXBytesPerSecond) != 2 || got.NetworkTXBytesPerSecond[0].Value != 60 || got.NetworkTXBytesPerSecond[1].Value != 85 {
+		t.Fatalf("expected two aggregated transmit points without loopback, got %+v", got.NetworkTXBytesPerSecond)
+	}
+}
+
 func TestHandleSummary_RequiresHostID(t *testing.T) {
 	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}}
 	req := httptest.NewRequest(http.MethodGet, "/v1/summary", nil)

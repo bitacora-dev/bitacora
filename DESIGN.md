@@ -25,7 +25,7 @@ Panels use 8px corners, one-pixel borders, dark layered backgrounds, and real co
 
 ## Color
 
-The base palette is near-black and blue-gray, with cyan for live CPU signal and gold for memory/operational emphasis. Error states use muted red with enough contrast against the dark surface.
+The base palette is near-black and blue-gray, with cyan for live CPU signal and gold for memory/operational emphasis. Network traffic uses cyan for receive and green for transmit, so simultaneous rates remain distinguishable without competing with the surrounding chart chrome. Error states use muted red with enough contrast against the dark surface.
 
 ## Typography
 

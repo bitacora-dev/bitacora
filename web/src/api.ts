@@ -34,6 +34,8 @@ export interface Summary {
   memory_used_bytes: SeriesPoint[];
   memory_swap_total_bytes: SeriesPoint[];
   memory_swap_free_bytes: SeriesPoint[];
+  network_rx_bytes_per_second: SeriesPoint[];
+  network_tx_bytes_per_second: SeriesPoint[];
   events: BitacoraEvent[];
   jobs: Job[];
 }

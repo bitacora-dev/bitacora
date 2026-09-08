@@ -31,7 +31,7 @@ Current exceptions are transitional and should not spread:
 
 | Exception | Evidence | Rule |
 |---|---|---|
-| Chart series colors | [`App.tsx`](src/App.tsx) passes `#38bdf8` for CPU and `#f8d66d` for memory. | Keep CPU cyan and memory gold; move them behind named tokens when the chart API accepts tokens directly. |
+| Chart series colors | [`App.tsx`](src/App.tsx) passes `#38bdf8` for CPU and network receive, `#f8d66d` for memory, and `#4ade80` for network transmit. | Keep CPU and receive cyan, memory gold, and transmit green; move them behind named tokens when the chart API accepts tokens directly. |
 | uPlot axis/grid colors | [`TimeSeriesChart.tsx`](src/components/TimeSeriesChart.tsx) sets slate axis/grid colors. | Keep chart chrome muted and lower priority than the active series. |
 | Severity text colors | [`EventsList.tsx`](src/components/EventsList.tsx) uses Tailwind severity classes. | Severity color may stay semantic, but new event severity styling must remain readable on the dark panel background. |
 | Enrollment panel Tailwind classes | [`AddServerPanel.tsx`](src/components/AddServerPanel.tsx) still uses inline Tailwind utilities. | Prefer the shared CSS panel/button vocabulary for new dashboard work; do not use this as a reason to fork the visual language. |

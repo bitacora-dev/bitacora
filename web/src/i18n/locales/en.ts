@@ -38,6 +38,9 @@ export const en: Dictionary = {
   hubUnreachable: (error) => `Couldn't reach the hub: ${error}`,
   cpuUsageTitle: "CPU usage",
   memoryUsedTitle: "Memory used",
+  networkTrafficTitle: "Network traffic",
+  networkReceiveLabel: "Receive",
+  networkTransmitLabel: "Transmit",
   dashboardSubtitle: "Server operating state",
   updatedAtLabel: "Updated",
   windowMetadataLabel: "Time window",
@@ -48,6 +51,7 @@ export const en: Dictionary = {
   memoryOfTotal: (used, total) => `${used} of ${total}`,
   memoryAvailable: (available) => `${available} available`,
   swapFree: (free, total) => `Swap: ${free} free of ${total}`,
+  bytesPerSecond: (value) => `${value}/s`,
   collectorStateHeading: "Signal coverage",
   collectorStateIntro:
     "The summary shows the signals connected to this screen. Optional collectors that are not reporting yet are treated as pending capability, not empty gaps.",

@@ -1,6 +1,6 @@
 # ADR-0019: Autenticación humana del hub
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado
 - **Fecha:** 2026-09-06
 
 ## Contexto

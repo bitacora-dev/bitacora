@@ -39,7 +39,7 @@ consecuencias, incluidas las malas.
 | [0016](0016-identidad-de-hardware-y-desglose-de-almacenamiento.md) | Identidad de hardware y desglose de almacenamiento | Aceptado |
 | [0017](0017-actualizaciones-pendientes.md) | Paquetes, plugins y contenedores desactualizados | Aceptado |
 | [0018](0018-frontera-licencia-bitacora-run.md) | Frontera de licencia de bitacora-run | Propuesto |
-| [0019](0019-autenticacion-humana.md) | Autenticación humana del hub | Propuesto |
+| [0019](0019-autenticacion-humana.md) | Autenticación humana del hub | Aceptado |
 | [0021](0021-artefactos-web-generados-y-merge.md) | Artefactos web generados y resolución de merges | Aceptado |
 
 ## Estado del proyecto

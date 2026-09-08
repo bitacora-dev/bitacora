@@ -20,4 +20,16 @@ describe("yAxisSize", () => {
 
     expect(size).toBeGreaterThanOrEqual(48 + Y_AXIS_LABEL_MARGIN_PX);
   });
+
+  // uPlot calls the size hook with a literal null before the first tick exists.
+  // Dereferencing it threw during render and the ErrorBoundary took down the
+  // whole dashboard, not just the chart.
+  it("survives the null uPlot passes on the first sizing pass", () => {
+    expect(() => yAxisSize(null, () => 40)).not.toThrow();
+    expect(yAxisSize(null, () => 40)).toBe(Y_AXIS_LABEL_MARGIN_PX);
+  });
+
+  it("reserves only the margin when there are no ticks yet", () => {
+    expect(yAxisSize([], () => 40)).toBe(Y_AXIS_LABEL_MARGIN_PX);
+  });
 });

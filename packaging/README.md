@@ -44,7 +44,7 @@ chmod 0640 /etc/bitacora/token
 Then install and start the service:
 
 1. Run `packaging/scripts/provision-user.sh`. It creates the `bitacora` system
-   user and `/var/lib/bitacora/spool` as `root:bitacora` with mode `0750`.
+   user, its persistent state directory, and both spool directions.
 2. Copy `packaging/systemd/bitacora-agent.service` to
    `/etc/systemd/system/bitacora-agent.service`.
 3. Create `/etc/bitacora` as `root:bitacora` with mode `0750`. Copy
@@ -64,10 +64,21 @@ Do not put `BITACORA_TOKEN` directly in the environment file. Keep the token
 in the configured root-owned file so the service reads it without exposing it
 in process environment inspection.
 
+## Spool directions
+
+The spool has two independently owned paths so the unprivileged agent can
+persist its own telemetry without gaining write access to helper output.
+
+| Path | Direction | Owner and mode | Purpose |
+| --- | --- | --- | --- |
+| `/var/lib/bitacora` | Agent state | `bitacora:bitacora 0750` | Persists `host_id`, the journald cursor, and collector cursors. |
+| `/var/lib/bitacora/spool` | Inbound: privileged helpers → agent | `root:bitacora 0750` | Root helpers atomically publish data; the agent can read it. |
+| `/var/lib/bitacora/spool/outbound` | Outbound: agent → hub | `bitacora:bitacora 0750` | The agent creates and appends its durable WAL segments. |
+
 - `scripts/provision-user.sh` — creates the non-root `bitacora` system user,
-  grants it `systemd-journal` membership, and creates
-  `/var/lib/bitacora/spool` with the required `root:bitacora 0750`
-  permissions. Idempotent, run as root.
+  grants it `systemd-journal` membership, and provisions its persistent state,
+  inbound helper spool, and outbound WAL with the ownership above. Idempotent,
+  run as root.
 - `systemd/bitacora-agent.service` — the main daemon's sandboxed unit,
   exactly as specified in ADR-0005. Never relax any of these settings
   without a matching ADR.

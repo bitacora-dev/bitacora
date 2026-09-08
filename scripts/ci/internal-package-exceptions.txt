@@ -4,3 +4,4 @@ internal/collector/example | Reference implementation for ADR-0007; documentatio
 internal/netconsole | Pending integration of the ADR-0011 diagnostic console.
 internal/pstore | Pending integration of ADR-0011 persistent crash diagnostics.
 internal/resourcebudget | Pending integration of the agent resource budget enforcement.
+internal/hubauth/oidctest | Fake OIDC issuer shared by the hubauth flow tests and the hub wiring regression that proves agent ingest survives ADR-0019. Test-only by design: a production importer would mean shipping a fake issuer.

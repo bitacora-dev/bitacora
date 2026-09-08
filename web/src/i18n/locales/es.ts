@@ -38,6 +38,9 @@ export const es: Dictionary = {
   hubUnreachable: (error) => `No se pudo contactar con el hub: ${error}`,
   cpuUsageTitle: "Uso de CPU",
   memoryUsedTitle: "Memoria usada",
+  networkTrafficTitle: "Tráfico de red",
+  networkReceiveLabel: "Recepción",
+  networkTransmitLabel: "Transmisión",
   dashboardSubtitle: "Estado operativo del servidor",
   updatedAtLabel: "Actualizado",
   windowMetadataLabel: "Ventana temporal",
@@ -48,6 +51,7 @@ export const es: Dictionary = {
   memoryOfTotal: (used, total) => `${used} de ${total}`,
   memoryAvailable: (available) => `${available} disponibles`,
   swapFree: (free, total) => `Swap: ${free} libres de ${total}`,
+  bytesPerSecond: (value) => `${value}/s`,
   collectorStateHeading: "Cobertura de señales",
   collectorStateIntro:
     "El resumen muestra las señales conectadas a esta pantalla. Los colectores opcionales que aún no reportan datos se tratan como capacidad pendiente, no como huecos vacíos.",

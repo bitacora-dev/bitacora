@@ -106,6 +106,7 @@ export default function App() {
   const windowMinutes = summary ? Math.round(summary.window_secs / 60) : 0;
   const ratio = useCallback((value: number) => formatRatio(value, intlTag), [intlTag]);
   const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
+  const bytesPerSecond = useCallback((value: number) => t.bytesPerSecond(formatBytes(value, intlTag)), [intlTag, t]);
   const selectedHost = hosts.find((host) => host.id === hostID);
   const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
 
@@ -439,6 +440,14 @@ export default function App() {
                   secondary: available ? t.memoryAvailable(bytes(available)) : undefined,
                 };
               }}
+            />
+            <TimeSeriesChart
+              title={t.networkTrafficTitle}
+              series={[
+                { name: t.networkReceiveLabel, points: summary.network_rx_bytes_per_second, color: "#38bdf8", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
+                { name: t.networkTransmitLabel, points: summary.network_tx_bytes_per_second, color: "#4ade80", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
+              ]}
+              formatAxisValue={bytesPerSecond}
             />
           </section>
 

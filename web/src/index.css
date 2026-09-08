@@ -317,6 +317,15 @@ body {
   text-align: right;
 }
 
+.chart-series-value {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.chart-series-value + .chart-series-value {
+  margin-top: 0.4rem;
+}
+
 .chart-value strong {
   color: var(--text);
   font-size: 1.75rem;

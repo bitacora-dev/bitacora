@@ -39,6 +39,9 @@ export interface Dictionary {
   hubUnreachable: (error: string) => string;
   cpuUsageTitle: string;
   memoryUsedTitle: string;
+  networkTrafficTitle: string;
+  networkReceiveLabel: string;
+  networkTransmitLabel: string;
   dashboardSubtitle: string;
   updatedAtLabel: string;
   windowMetadataLabel: string;
@@ -49,6 +52,7 @@ export interface Dictionary {
   memoryOfTotal: (used: string, total: string) => string;
   memoryAvailable: (available: string) => string;
   swapFree: (free: string, total: string) => string;
+  bytesPerSecond: (value: string) => string;
   collectorStateHeading: string;
   collectorStateIntro: string;
   collectorCoreLabel: string;

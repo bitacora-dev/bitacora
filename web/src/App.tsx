@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { claimPairing, fetchHosts, fetchInventory, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type Host, type Inventory, type SeriesPoint, type Summary } from "./api";
+import { claimPairing, fetchEventHistory, fetchHosts, fetchInventory, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type SeriesPoint, type Summary } from "./api";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
 import AddServerPanel from "./components/AddServerPanel";
@@ -19,6 +19,10 @@ function pairCodeFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("pair");
 }
 
+function viewFromURL(): "summary" | "events" {
+  return new URLSearchParams(window.location.search).get("view") === "events" ? "events" : "summary";
+}
+
 function stripPairParam(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("pair");
@@ -32,8 +36,7 @@ const formatRatio = (v: number, locale: string) =>
     maximumFractionDigits: 1,
   }).format(v);
 
-const formatBytes = (value: number, locale: string) => {
-  const units = ["B", "KB", "MB", "GB", "TB"];
+const formatBytes = (value: number, locale: string, units: readonly string[]) => {
   let size = value;
   let unitIndex = 0;
   while (size >= 1024 && unitIndex < units.length - 1) {
@@ -75,6 +78,15 @@ export default function App() {
   const [pairPanelOpen, setPairPanelOpen] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
   const [hostIDCopyStatus, setHostIDCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
+  const [view, setView] = useState<"summary" | "events">(viewFromURL);
+  const [historyEvents, setHistoryEvents] = useState<BitacoraEvent[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [historySeverity, setHistorySeverity] = useState<BitacoraEvent["severity"] | "">("");
+  const [historyType, setHistoryType] = useState("");
+  const [historyFrom, setHistoryFrom] = useState(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+  const [historyTo, setHistoryTo] = useState(() => new Date().toISOString().slice(0, 16));
 
   const memoryTotalByTS = useMemo(() => {
     const byTS = new Map<string, number>();
@@ -94,7 +106,7 @@ export default function App() {
   const generatedAt = summary ? new Date(summary.generated_at).toLocaleTimeString(intlTag) : "";
   const windowMinutes = summary ? Math.round(summary.window_secs / 60) : 0;
   const ratio = useCallback((value: number) => formatRatio(value, intlTag), [intlTag]);
-  const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
+  const bytes = useCallback((value: number) => formatBytes(value, intlTag, t.byteUnits), [intlTag, t.byteUnits]);
   const selectedHost = hosts.find((host) => host.id === hostID);
   const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
 
@@ -114,6 +126,13 @@ export default function App() {
     setHostID(value);
     setHostIDCopyStatus("idle");
     setAddServerOpen(false);
+  };
+
+  const goToView = (next: "summary" | "events") => {
+    const url = new URL(window.location.href);
+    if (next === "events") url.searchParams.set("view", "events"); else url.searchParams.delete("view");
+    window.history.pushState(null, "", url);
+    setView(next);
   };
 
   useEffect(() => {
@@ -157,6 +176,15 @@ export default function App() {
       clearInterval(id);
     };
   }, [hostID, token]);
+
+  useEffect(() => {
+    if (!hostID || !token || view !== "events") return;
+    const from = new Date(historyFrom).toISOString();
+    const to = new Date(historyTo).toISOString();
+    fetchEventHistory(hostID, { from, to, severity: historySeverity, type: historyType, limit: 50, offset: historyOffset })
+      .then((page) => { setHistoryEvents(page.events); setHistoryTotal(page.total); setHistoryError(null); })
+      .catch((err) => setHistoryError(err instanceof Error ? err.message : String(err)));
+  }, [hostID, token, view, historyFrom, historyTo, historySeverity, historyType, historyOffset]);
 
   useEffect(() => {
     if (!hostID || !token) return;
@@ -323,6 +351,9 @@ export default function App() {
           <button type="button" onClick={openPairPanel} className="link-button">
             {t.addDeviceButton}
           </button>
+          <button type="button" onClick={() => goToView(view === "events" ? "summary" : "events")} className="link-button">
+            {view === "events" ? t.dashboardButton : t.eventsHistoryButton}
+          </button>
         </div>
       </header>
 
@@ -348,7 +379,22 @@ export default function App() {
 
       {error && <div className="error-panel">{t.hubUnreachable(error)}</div>}
 
-      {summary && (
+      {view === "events" ? (
+        <article className="control-panel events-history-panel">
+          <div className="panel-title-row"><h2>{t.eventsHistoryHeading}</h2><button type="button" onClick={() => goToView("summary")} className="link-button">{t.dashboardButton}</button></div>
+          <p>{t.eventsHistoryIntro}</p>
+          <p className="events-retention-notice">{t.eventsRetentionNotice}</p>
+          <div className="events-history-filters">
+            <label>{t.eventsFromLabel}<input type="datetime-local" value={historyFrom} onChange={(e) => { setHistoryOffset(0); setHistoryFrom(e.target.value); }} /></label>
+            <label>{t.eventsToLabel}<input type="datetime-local" value={historyTo} onChange={(e) => { setHistoryOffset(0); setHistoryTo(e.target.value); }} /></label>
+            <label>{t.eventsSeverityLabel}<select value={historySeverity} onChange={(e) => { setHistoryOffset(0); setHistorySeverity(e.target.value as BitacoraEvent["severity"] | ""); }}><option value="">{t.eventsAnySeverity}</option>{Object.entries(t.severity).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label>{t.eventsTypeLabel}<input value={historyType} onChange={(e) => { setHistoryOffset(0); setHistoryType(e.target.value); }} /></label>
+          </div>
+          {historyError && <div className="error-panel">{t.hubUnreachable(historyError)}</div>}
+          <EventsList events={historyEvents} emptyHeading={t.eventsHistoryEmptyHeading} emptyBody={t.eventsHistoryEmptyBody} />
+          <div className="events-history-pagination"><button type="button" className="link-button" disabled={historyOffset === 0} onClick={() => setHistoryOffset((offset) => Math.max(0, offset - 50))}>{t.eventsPreviousPage}</button><span>{t.eventsPage(historyTotal === 0 ? 0 : historyOffset + 1, Math.min(historyOffset + historyEvents.length, historyTotal), historyTotal)}</span><button type="button" className="link-button" disabled={historyOffset + historyEvents.length >= historyTotal} onClick={() => setHistoryOffset((offset) => offset + 50)}>{t.eventsNextPage}</button></div>
+        </article>
+      ) : summary && (
         <>
           <section className="metrics-grid">
             <TimeSeriesChart

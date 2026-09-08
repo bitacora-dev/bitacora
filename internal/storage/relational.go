@@ -29,6 +29,11 @@ type Relational interface {
 	InsertJob(ctx context.Context, job schema.Job) error
 	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
 
+	// ListEventPage returns one newest-first, filtered page plus the total
+	// number of matching events. The limit and offset are applied by the
+	// database so history consumers never materialize an arbitrary range.
+	ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error)
+
 	// SearchEventTitles returns events whose title matches an FTS5 query
 	// (see https://www.sqlite.org/fts5.html for query syntax), most
 	// recent first.

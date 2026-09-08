@@ -14,6 +14,18 @@ export interface ChartSize {
   height: number;
 }
 
+// uPlot draws its axis labels in a 12px system font. Keep the clearance
+// separate from measurement so ticks do not collide with the plot edge.
+export const Y_AXIS_LABEL_MARGIN_PX = 16;
+
+export function yAxisSize(
+  labels: string[],
+  measureText: (label: string) => number,
+): number {
+  const widestLabel = labels.reduce((widest, label) => Math.max(widest, measureText(label)), 0);
+  return Math.ceil(widestLabel + Y_AXIS_LABEL_MARGIN_PX);
+}
+
 export function chartSizeChanged(current: ChartSize, next: ChartSize): boolean {
   return current.width !== next.width || current.height !== next.height;
 }
@@ -53,6 +65,13 @@ export default function TimeSeriesChart({ title, points, color, yRange, formatAx
 
     let size: ChartSize = { width: container.clientWidth, height: container.clientHeight };
 
+    const measurementCanvas = document.createElement("canvas");
+    const context = measurementCanvas.getContext("2d");
+    const measureAxisLabel = (label: string) => {
+      if (!context) return label.length * 7;
+      context.font = "12px system-ui";
+      return context.measureText(label).width;
+    };
     const opts: uPlot.Options = {
       width: size.width,
       height: size.height,
@@ -65,6 +84,7 @@ export default function TimeSeriesChart({ title, points, color, yRange, formatAx
           grid: { stroke: "#1f2937", width: 1 },
         },
         {
+          size: (_u, labels) => yAxisSize(labels, measureAxisLabel),
           stroke: "#94a3b8",
           grid: { stroke: "#1f2937", width: 1 },
           values: (_u, vals) => vals.map((v) => formatAxisValue(v)),

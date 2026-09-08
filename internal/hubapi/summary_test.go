@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -49,11 +50,28 @@ type fakeEvents struct {
 func (f *fakeEvents) ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error) {
 	var out []schema.Event
 	for _, e := range f.events {
-		if e.HostID == hostID {
+		if e.HostID == hostID && !e.TS.Before(from) && !e.TS.After(to) {
 			out = append(out, e)
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeEvents) ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error) {
+	var matches []schema.Event
+	for _, e := range f.events {
+		if e.HostID != hostID || e.TS.Before(from) || e.TS.After(to) || (severity != "" && string(e.Severity) != severity) || (eventType != "" && e.Type != eventType) {
+			continue
+		}
+		matches = append(matches, e)
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].TS.After(matches[j].TS) })
+	total := len(matches)
+	if offset >= total {
+		return []schema.Event{}, total, nil
+	}
+	end := min(offset+limit, total)
+	return matches[offset:end], total, nil
 }
 
 func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
@@ -256,6 +274,52 @@ func TestHandleSummary_AcceptsValidDeviceToken(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 with a valid device token, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleEventsHistory_FiltersAndPaginatesAuthenticatedRequests(t *testing.T) {
+	devices := NewDeviceTokenStore()
+	_, token, _, err := devices.Start(context.Background())
+	if err != nil {
+		t.Fatalf("starting device token: %v", err)
+	}
+	from := time.Date(2026, time.January, 2, 10, 0, 0, 0, time.UTC)
+	events := &fakeEvents{events: []schema.Event{
+		{ID: "old", TS: from.Add(-time.Minute), HostID: "host-a", Type: "kernel.segfault", Severity: schema.SeverityError},
+		{ID: "first", TS: from.Add(time.Minute), HostID: "host-a", Type: "kernel.segfault", Severity: schema.SeverityError},
+		{ID: "skip-severity", TS: from.Add(2 * time.Minute), HostID: "host-a", Type: "kernel.segfault", Severity: schema.SeverityInfo},
+		{ID: "skip-type", TS: from.Add(3 * time.Minute), HostID: "host-a", Type: "service.restart", Severity: schema.SeverityError},
+		{ID: "second", TS: from.Add(4 * time.Minute), HostID: "host-a", Type: "kernel.segfault", Severity: schema.SeverityError},
+	}}
+	srv := &Server{Metrics: &fakeMetrics{}, Events: events, Devices: devices}
+	url := "/v1/events?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&severity=error&type=kernel.segfault&limit=1&offset=1"
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got EventHistory
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.Total != 2 || got.Offset != 1 || got.Limit != 1 || len(got.Events) != 1 || got.Events[0].ID != "first" {
+		t.Fatalf("unexpected page: %+v", got)
+	}
+}
+
+func TestHandleEventsHistory_RequiresExplicitRange(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/events?host_id=host-a", nil)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a missing range, got %d", rec.Code)
 	}
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchEventHistory, fetchHosts, fetchInventory } from "./api";
+import { fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory } from "./api";
 
 describe("fetchHosts", () => {
   afterEach(() => {
@@ -53,4 +53,15 @@ describe("fetchInventory", () => {
 
     await expect(fetchInventory("host-a", "package_update")).resolves.toBeNull();
   });
+});
+
+describe("fetchLogHistory", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	it("sends an explicit range, efficient filters and page", async () => {
+		vi.stubGlobal("localStorage", { getItem: vi.fn().mockReturnValue("device-token") });
+		const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ entries: [] }), { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		await fetchLogHistory("host a", { from: "2026-01-01T00:00:00Z", to: "2026-01-02T00:00:00Z", text: "failed", source: "journald", unit: "nginx.service", limit: 50, offset: 100 });
+		expect(fetch).toHaveBeenCalledWith("/v1/logs?host_id=host+a&from=2026-01-01T00%3A00%3A00Z&to=2026-01-02T00%3A00%3A00Z&limit=50&offset=100&text=failed&source=journald&unit=nginx.service", { headers: { Authorization: "Bearer device-token" } });
+	});
 });

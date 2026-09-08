@@ -69,6 +69,35 @@ export interface EventHistoryQuery {
   offset: number;
 }
 
+export interface LogEntry {
+  id: string;
+  ts: string;
+  host_id: string;
+  source: string;
+  unit?: string;
+  message: string;
+}
+
+export interface LogHistory {
+  host_id: string;
+  from: string;
+  to: string;
+  limit: number;
+  offset: number;
+  total: number;
+  entries: LogEntry[];
+}
+
+export interface LogHistoryQuery {
+  from: string;
+  to: string;
+  text?: string;
+  source?: string;
+  unit?: string;
+  limit: number;
+  offset: number;
+}
+
 export interface InventoryItem {
   id: string;
   name: string;
@@ -119,6 +148,18 @@ export async function fetchEventHistory(hostID: string, query: EventHistoryQuery
   params.set("limit", String(query.limit));
   params.set("offset", String(query.offset));
   const url = `/v1/events?${params}`;
+  const token = getDeviceToken();
+  const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+  if (!res.ok) throw new Error(`GET ${url} -> ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export async function fetchLogHistory(hostID: string, query: LogHistoryQuery): Promise<LogHistory> {
+  const params = new URLSearchParams({ host_id: hostID, from: query.from, to: query.to, limit: String(query.limit), offset: String(query.offset) });
+  if (query.text) params.set("text", query.text);
+  if (query.source) params.set("source", query.source);
+  if (query.unit) params.set("unit", query.unit);
+  const url = `/v1/logs?${params}`;
   const token = getDeviceToken();
   const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
   if (!res.ok) throw new Error(`GET ${url} -> ${res.status}: ${await res.text()}`);

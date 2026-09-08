@@ -12,6 +12,7 @@ import (
 
 	"github.com/prometheus/prometheus/model/labels"
 
+	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
@@ -45,6 +46,22 @@ func matchesSample(name string, sample metricstore.Sample, matchers ...*labels.M
 
 type fakeEvents struct {
 	events []schema.Event
+}
+
+type fakeLogs struct{ entries []logstore.Entry }
+
+func (f *fakeLogs) Query(_ context.Context, q logstore.Query) (logstore.Page, error) {
+	var matches []logstore.Entry
+	for _, entry := range f.entries {
+		if entry.HostID == q.HostID && !entry.TS.Before(q.From) && !entry.TS.After(q.To) && (q.Source == "" || entry.Source == q.Source) && (q.Unit == "" || entry.Unit == q.Unit) && (q.Text == "" || strings.Contains(entry.Message, q.Text)) {
+			matches = append(matches, entry)
+		}
+	}
+	if q.Offset >= len(matches) {
+		return logstore.Page{Entries: []logstore.Entry{}, Total: len(matches)}, nil
+	}
+	end := min(q.Offset+q.Limit, len(matches))
+	return logstore.Page{Entries: matches[q.Offset:end], Total: len(matches)}, nil
 }
 
 func (f *fakeEvents) ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error) {
@@ -320,6 +337,45 @@ func TestHandleEventsHistory_RequiresExplicitRange(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for a missing range, got %d", rec.Code)
+	}
+}
+
+func TestHandleLogs_QueriesBoundedPage(t *testing.T) {
+	from := time.Date(2026, time.January, 2, 10, 0, 0, 0, time.UTC)
+	srv := &Server{Logs: &fakeLogs{entries: []logstore.Entry{{ID: "one", TS: from.Add(time.Minute), HostID: "host-a", Source: "journald", Unit: "api.service", Message: "first"}, {ID: "two", TS: from.Add(2 * time.Minute), HostID: "host-a", Source: "journald", Unit: "api.service", Message: "second"}}}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/logs?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&source=journald&unit=api.service&limit=1&offset=1", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got LogHistory
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 || len(got.Entries) != 1 || got.Entries[0].ID != "two" {
+		t.Fatalf("unexpected page: %+v", got)
+	}
+}
+
+func TestHandleLogs_EmptyAndInvalidRequests(t *testing.T) {
+	srv := &Server{Logs: &fakeLogs{}}
+	for _, tc := range []struct {
+		name, url string
+		want      int
+	}{
+		{"empty range", "/v1/logs?host_id=missing&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&limit=50&offset=0", http.StatusOK},
+		{"missing host", "/v1/logs?from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z", http.StatusBadRequest},
+		{"invalid limit", "/v1/logs?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&limit=501", http.StatusBadRequest},
+		{"invalid offset", "/v1/logs?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&offset=-1", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.url, nil))
+			if rec.Code != tc.want {
+				t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

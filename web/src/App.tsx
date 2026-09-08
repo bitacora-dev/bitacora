@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { claimPairing, fetchEventHistory, fetchHosts, fetchInventory, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type SeriesPoint, type Summary } from "./api";
+import { claimPairing, fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type LogEntry, type SeriesPoint, type Summary } from "./api";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
+import LogsList from "./components/LogsList";
 import AddServerPanel from "./components/AddServerPanel";
 import InventoryPanel from "./components/InventoryPanel";
 import JobsList from "./components/JobsList";
@@ -20,8 +21,9 @@ function pairCodeFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("pair");
 }
 
-function viewFromURL(): "summary" | "events" {
-  return new URLSearchParams(window.location.search).get("view") === "events" ? "events" : "summary";
+function viewFromURL(): "summary" | "events" | "logs" {
+  const view = new URLSearchParams(window.location.search).get("view");
+  return view === "events" || view === "logs" ? view : "summary";
 }
 
 function stripPairParam(): void {
@@ -66,7 +68,7 @@ export default function App() {
   const [pairPanelOpen, setPairPanelOpen] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
   const [hostIDCopyStatus, setHostIDCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
-  const [view, setView] = useState<"summary" | "events">(viewFromURL);
+  const [view, setView] = useState<"summary" | "events" | "logs">(viewFromURL);
   const [historyEvents, setHistoryEvents] = useState<BitacoraEvent[]>([]);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -75,6 +77,15 @@ export default function App() {
   const [historyType, setHistoryType] = useState("");
   const [historyFrom, setHistoryFrom] = useState(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
   const [historyTo, setHistoryTo] = useState(() => new Date().toISOString().slice(0, 16));
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [logTotal, setLogTotal] = useState(0);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [logOffset, setLogOffset] = useState(0);
+  const [logText, setLogText] = useState("");
+  const [logSource, setLogSource] = useState("");
+  const [logUnit, setLogUnit] = useState("");
+  const [logFrom, setLogFrom] = useState(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+  const [logTo, setLogTo] = useState(() => new Date().toISOString().slice(0, 16));
 
   const memoryTotalByTS = useMemo(() => {
     const byTS = new Map<string, number>();
@@ -116,9 +127,9 @@ export default function App() {
     setAddServerOpen(false);
   };
 
-  const goToView = (next: "summary" | "events") => {
+  const goToView = (next: "summary" | "events" | "logs") => {
     const url = new URL(window.location.href);
-    if (next === "events") url.searchParams.set("view", "events"); else url.searchParams.delete("view");
+    if (next === "summary") url.searchParams.delete("view"); else url.searchParams.set("view", next);
     window.history.pushState(null, "", url);
     setView(next);
   };
@@ -173,6 +184,13 @@ export default function App() {
       .then((page) => { setHistoryEvents(page.events); setHistoryTotal(page.total); setHistoryError(null); })
       .catch((err) => setHistoryError(err instanceof Error ? err.message : String(err)));
   }, [hostID, token, view, historyFrom, historyTo, historySeverity, historyType, historyOffset]);
+
+  useEffect(() => {
+    if (!hostID || !token || view !== "logs") return;
+    fetchLogHistory(hostID, { from: new Date(logFrom).toISOString(), to: new Date(logTo).toISOString(), text: logText, source: logSource, unit: logUnit, limit: 50, offset: logOffset })
+      .then((page) => { setLogEntries(page.entries); setLogTotal(page.total); setLogError(null); })
+      .catch((err) => setLogError(err instanceof Error ? err.message : String(err)));
+  }, [hostID, token, view, logFrom, logTo, logText, logSource, logUnit, logOffset]);
 
   useEffect(() => {
     if (!hostID || !token) return;
@@ -339,9 +357,8 @@ export default function App() {
           <button type="button" onClick={openPairPanel} className="link-button">
             {t.addDeviceButton}
           </button>
-          <button type="button" onClick={() => goToView(view === "events" ? "summary" : "events")} className="link-button">
-            {view === "events" ? t.dashboardButton : t.eventsHistoryButton}
-          </button>
+          <button type="button" onClick={() => goToView("events")} className="link-button">{t.eventsHistoryButton}</button>
+          <button type="button" onClick={() => goToView("logs")} className="link-button">{t.logsHistoryButton}</button>
         </div>
       </header>
 
@@ -381,6 +398,21 @@ export default function App() {
           {historyError && <div className="error-panel">{t.hubUnreachable(historyError)}</div>}
           <EventsList events={historyEvents} emptyHeading={t.eventsHistoryEmptyHeading} emptyBody={t.eventsHistoryEmptyBody} />
           <div className="events-history-pagination"><button type="button" className="link-button" disabled={historyOffset === 0} onClick={() => setHistoryOffset((offset) => Math.max(0, offset - 50))}>{t.eventsPreviousPage}</button><span>{t.eventsPage(historyTotal === 0 ? 0 : historyOffset + 1, Math.min(historyOffset + historyEvents.length, historyTotal), historyTotal)}</span><button type="button" className="link-button" disabled={historyOffset + historyEvents.length >= historyTotal} onClick={() => setHistoryOffset((offset) => offset + 50)}>{t.eventsNextPage}</button></div>
+        </article>
+      ) : view === "logs" ? (
+        <article className="control-panel events-history-panel">
+          <div className="panel-title-row"><h2>{t.logsHistoryHeading}</h2><button type="button" onClick={() => goToView("summary")} className="link-button">{t.dashboardButton}</button></div>
+          <p>{t.logsHistoryIntro}</p><p className="events-retention-notice">{t.logsRetentionNotice}</p>
+          <div className="events-history-filters">
+            <label>{t.logsFromLabel}<input type="datetime-local" value={logFrom} onChange={(e) => { setLogOffset(0); setLogFrom(e.target.value); }} /></label>
+            <label>{t.logsToLabel}<input type="datetime-local" value={logTo} onChange={(e) => { setLogOffset(0); setLogTo(e.target.value); }} /></label>
+            <label>{t.logsTextLabel}<input value={logText} onChange={(e) => { setLogOffset(0); setLogText(e.target.value); }} /></label>
+            <label>{t.logsSourceLabel}<input value={logSource} onChange={(e) => { setLogOffset(0); setLogSource(e.target.value); }} /></label>
+            <label>{t.logsUnitLabel}<input value={logUnit} onChange={(e) => { setLogOffset(0); setLogUnit(e.target.value); }} /></label>
+          </div>
+          {logError && <div className="error-panel">{t.hubUnreachable(logError)}</div>}
+          <LogsList entries={logEntries} />
+          <div className="events-history-pagination"><button type="button" className="link-button" disabled={logOffset === 0} onClick={() => setLogOffset((offset) => Math.max(0, offset - 50))}>{t.eventsPreviousPage}</button><span>{t.eventsPage(logTotal === 0 ? 0 : logOffset + 1, Math.min(logOffset + logEntries.length, logTotal), logTotal)}</span><button type="button" className="link-button" disabled={logOffset + logEntries.length >= logTotal} onClick={() => setLogOffset((offset) => offset + 50)}>{t.eventsNextPage}</button></div>
         </article>
       ) : summary && (
         <>

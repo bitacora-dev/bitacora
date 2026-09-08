@@ -6,6 +6,7 @@ import EventsList from "./components/EventsList";
 import AddServerPanel from "./components/AddServerPanel";
 import InventoryPanel from "./components/InventoryPanel";
 import JobsList from "./components/JobsList";
+import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
 
 const POLL_INTERVAL_MS = 10_000;
@@ -35,19 +36,6 @@ const formatRatio = (v: number, locale: string) =>
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   }).format(v);
-
-const formatBytes = (value: number, locale: string, units: readonly string[]) => {
-  let size = value;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-  const amount = new Intl.NumberFormat(locale, {
-    maximumFractionDigits: size >= 10 || unitIndex === 0 ? 0 : 1,
-  }).format(size);
-  return `${amount} ${units[unitIndex]}`;
-};
 
 function latest(points: SeriesPoint[]): SeriesPoint | null {
   return points.length > 0 ? points[points.length - 1] : null;
@@ -106,7 +94,7 @@ export default function App() {
   const generatedAt = summary ? new Date(summary.generated_at).toLocaleTimeString(intlTag) : "";
   const windowMinutes = summary ? Math.round(summary.window_secs / 60) : 0;
   const ratio = useCallback((value: number) => formatRatio(value, intlTag), [intlTag]);
-  const bytes = useCallback((value: number) => formatBytes(value, intlTag, t.byteUnits), [intlTag, t.byteUnits]);
+  const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
   const selectedHost = hosts.find((host) => host.id === hostID);
   const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
 

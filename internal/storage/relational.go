@@ -26,6 +26,8 @@ type Relational interface {
 	// ListEvents returns every event in [from, to] for hostID, or for every
 	// host if hostID is empty, ordered by ts ascending.
 	ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error)
+	InsertJob(ctx context.Context, job schema.Job) error
+	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
 
 	// SearchEventTitles returns events whose title matches an FTS5 query
 	// (see https://www.sqlite.org/fts5.html for query syntax), most

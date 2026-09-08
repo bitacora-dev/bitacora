@@ -84,6 +84,11 @@ export const en: Dictionary = {
   eventsEmptyHeading: "No recent events",
   eventsEmptyBody:
     "On this installation the panel normally stays empty until a collector emits a relevant fact. No rows here means no events were received in the current window.",
+  jobsHeading: (minutes) => `Operations (last ${minutes}m)`,
+  jobsEmptyHeading: "No recent operations",
+  jobsEmptyBody: "Completed backups and scheduled operations will appear here.",
+  jobExitStatus: (exitCode, durationSeconds) => `Exit ${exitCode} · ${durationSeconds.toFixed(1)} s`,
+  jobStatus: { success: "success", warning: "warning", failed: "failed", timeout: "timed out", killed: "killed", running: "running" },
   loading: "Loading…",
   noEvents: "No events in this window.",
   unexpectedErrorHeading: "Bitácora could not load",

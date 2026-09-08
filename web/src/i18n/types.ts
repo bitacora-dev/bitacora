@@ -83,6 +83,11 @@ export interface Dictionary {
   eventsHistoryEmptyHeading: string;
   eventsHistoryEmptyBody: string;
   byteUnits: readonly [string, string, string, string, string];
+  jobsHeading: (minutes: number) => string;
+  jobsEmptyHeading: string;
+  jobsEmptyBody: string;
+  jobExitStatus: (exitCode: number, durationSeconds: number) => string;
+  jobStatus: Record<"success" | "warning" | "failed" | "timeout" | "killed" | "running", string>;
   loading: string;
   noEvents: string;
   unexpectedErrorHeading: string;

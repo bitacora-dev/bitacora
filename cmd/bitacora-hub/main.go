@@ -161,6 +161,7 @@ func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) 
 	readSrv := &hubapi.Server{
 		Metrics:     metricsStore,
 		Events:      relStore,
+		Jobs:        relStore,
 		Inventories: relStore,
 		WebUI:       webui.FS(),
 		Devices:     devices,
@@ -180,6 +181,7 @@ func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) 
 			logStore,
 			ingestreceiver.WithLogProcessor(processor),
 			ingestreceiver.WithInventoryUpserter(relStore),
+			ingestreceiver.WithJobInserter(relStore),
 		),
 		Manifests: relStore,
 	}

@@ -35,6 +35,8 @@ type SQLiteStore struct {
 
 	hostMu  sync.Mutex
 	hostsDB *sql.DB
+	jobMu   sync.Mutex
+	jobsDB  *sql.DB
 }
 
 var _ Relational = (*SQLiteStore)(nil)
@@ -118,6 +120,13 @@ func (s *SQLiteStore) Close() error {
 	defer s.hostMu.Unlock()
 	if s.hostsDB != nil {
 		if err := s.hostsDB.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	if s.jobsDB != nil {
+		if err := s.jobsDB.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

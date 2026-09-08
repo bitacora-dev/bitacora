@@ -5,6 +5,7 @@ import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
 import AddServerPanel from "./components/AddServerPanel";
 import InventoryPanel from "./components/InventoryPanel";
+import JobsList from "./components/JobsList";
 import { useTranslation } from "./i18n";
 
 const POLL_INTERVAL_MS = 10_000;
@@ -428,6 +429,11 @@ export default function App() {
                 <span>{summary.events.length}</span>
               </div>
               <EventsList events={summary.events} />
+            </article>
+
+            <article className="control-panel events-panel">
+              <div className="panel-title-row"><h2>{t.jobsHeading(windowMinutes)}</h2><span>{summary.jobs.length}</span></div>
+              <JobsList jobs={summary.jobs} />
             </article>
 
             <article className="control-panel signal-panel">

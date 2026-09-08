@@ -59,6 +59,8 @@ var postgresMigrations = []string{
 		agent_version TEXT NOT NULL DEFAULT '',
 		last_seen_at  BIGINT
 	)`,
+	`CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, job_name TEXT NOT NULL, host_id TEXT NOT NULL, started_at BIGINT NOT NULL, finished_at BIGINT NOT NULL, duration_seconds DOUBLE PRECISION NOT NULL, status TEXT NOT NULL, exit_code INTEGER NOT NULL, signal TEXT, stats_json JSONB, schema INTEGER NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS idx_jobs_host_finished ON jobs (host_id, finished_at)`,
 }
 
 // PostgresStore is the optional Relational backend (ADR-0003): same
@@ -192,6 +194,43 @@ func (s *PostgresStore) ListEventPage(ctx context.Context, from, to time.Time, h
 		return nil, 0, err
 	}
 	return events, total, nil
+}
+
+func (s *PostgresStore) InsertJob(ctx context.Context, job schema.Job) error {
+	if err := job.Validate(); err != nil {
+		return fmt.Errorf("invalid job: %w", err)
+	}
+	stats, err := json.Marshal(job.Stats)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO jobs (id,job_name,host_id,started_at,finished_at,duration_seconds,status,exit_code,signal,stats_json,schema) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO NOTHING`, job.ID, job.JobName, job.HostID, job.StartedAt.UnixMilli(), job.FinishedAt.UnixMilli(), job.DurationSecond, string(job.Status), job.ExitCode, job.Signal, string(stats), job.Schema)
+	return err
+}
+func (s *PostgresStore) ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,job_name,host_id,started_at,finished_at,duration_seconds,status,exit_code,signal,stats_json,schema FROM jobs WHERE host_id=$1 AND finished_at BETWEEN $2 AND $3 ORDER BY finished_at DESC`, hostID, from.UnixMilli(), to.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var jobs []schema.Job
+	for rows.Next() {
+		var j schema.Job
+		var started, finished int64
+		var stats string
+		if err := rows.Scan(&j.ID, &j.JobName, &j.HostID, &started, &finished, &j.DurationSecond, &j.Status, &j.ExitCode, &j.Signal, &stats, &j.Schema); err != nil {
+			return nil, err
+		}
+		j.StartedAt = time.UnixMilli(started).UTC()
+		j.FinishedAt = time.UnixMilli(finished).UTC()
+		if stats != "" && stats != "null" {
+			if err := json.Unmarshal([]byte(stats), &j.Stats); err != nil {
+				return nil, err
+			}
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, rows.Err()
 }
 
 // SearchEventTitles implements Relational using PostgreSQL full-text

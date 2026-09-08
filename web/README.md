@@ -7,7 +7,7 @@ returns everything it needs in one call (ADR-0014).
 ## Developing
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
@@ -31,6 +31,29 @@ npm run build
 git add ../internal/webui/dist
 ```
 
-If the frontend outgrows this (larger bundles, frequent changes), moving
-the build to CI instead of committing the output is a reasonable followup
-— not done now, to keep the CI job Node-free while the project is small.
+CI rebuilds the frontend and verifies that the committed output is current.
+Keeping `dist/` versioned still lets local Go builds run without Node.
+
+## Resolving generated asset conflicts
+
+`dist/` remains committed because the hub embeds it and therefore Go builds do
+not require Node. Its hashed output is not meaningful to merge line by line.
+Enable the repository-local merge driver once in every clone:
+
+```sh
+./scripts/git/configure-merge-drivers.sh
+```
+
+For conflicts under `internal/webui/dist/**`, the driver keeps the current
+branch's version. After the merge, regenerate the asset and commit the result:
+
+```sh
+cd web
+npm ci
+npm run build
+git add ../internal/webui/dist
+```
+
+The driver is intentionally local Git configuration, so it is never activated
+silently for contributors. Re-run the setup script after moving a checkout or
+if `.git/config` is recreated.

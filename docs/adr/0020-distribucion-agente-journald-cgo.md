@@ -1,6 +1,6 @@
 # ADR-0020: Distribución del agente Linux con soporte de journald
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado
 - **Fecha:** 2026-09-07
 
 ## Contexto

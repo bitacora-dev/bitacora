@@ -48,6 +48,25 @@ jobs:
       - name: Build both binaries
         run: go build ./...
 
+      - name: Build Linux amd64 agent with journald
+        run: >-
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64
+          go build -o dist/bitacora-agent-linux-amd64-journald ./cmd/bitacora-agent
+
+      - name: Verify journald is compiled into the agent
+        run: |
+          if strings dist/bitacora-agent-linux-amd64-journald | grep -Fq 'requires cgo and libsystemd'; then
+            echo 'the journald fallback was compiled into the deployment artifact' >&2
+            exit 1
+          fi
+
+      - name: Publish Linux amd64 journald agent
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitacora-agent-linux-amd64-journald
+          path: dist/bitacora-agent-linux-amd64-journald
+          if-no-files-found: error
+
       - name: Vet
         run: go vet ./...
 

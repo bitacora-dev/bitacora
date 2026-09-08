@@ -81,6 +81,17 @@ export interface Dictionary {
   eventsPage: (start: number, end: number, total: number) => string;
   eventsHistoryEmptyHeading: string;
   eventsHistoryEmptyBody: string;
+  logsHistoryButton: string;
+  logsHistoryHeading: string;
+  logsHistoryIntro: string;
+  logsRetentionNotice: string;
+  logsFromLabel: string;
+  logsToLabel: string;
+  logsTextLabel: string;
+  logsSourceLabel: string;
+  logsUnitLabel: string;
+  logsEmptyHeading: string;
+  logsEmptyBody: string;
   jobsHeading: (minutes: number) => string;
   jobsEmptyHeading: string;
   jobsEmptyBody: string;

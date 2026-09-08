@@ -162,6 +162,7 @@ func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) 
 		Metrics:     metricsStore,
 		Events:      relStore,
 		Jobs:        relStore,
+		Logs:        logStore,
 		Inventories: relStore,
 		WebUI:       webui.FS(),
 		Devices:     devices,

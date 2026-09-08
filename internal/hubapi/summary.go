@@ -16,6 +16,7 @@ import (
 
 	"github.com/prometheus/prometheus/model/labels"
 
+	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
@@ -40,6 +41,10 @@ type JobLister interface {
 	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
 }
 
+type LogQuerier interface {
+	Query(ctx context.Context, query logstore.Query) (logstore.Page, error)
+}
+
 // InventoryGetter is the read side of storage.Relational that
 // GET /v1/inventory needs (ADR-0015).
 type InventoryGetter interface {
@@ -51,6 +56,7 @@ type Server struct {
 	Metrics MetricQuerier
 	Events  EventLister
 	Jobs    JobLister
+	Logs    LogQuerier
 	// Inventories serves GET /v1/inventory (ADR-0015). Nil means that
 	// route always answers 404 — same "not wired everywhere yet" state
 	// as Metrics/Events had before real storage existed.
@@ -82,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/summary", s.requireDeviceToken(s.handleSummary))
 	mux.HandleFunc("/v1/events", s.requireDeviceToken(s.handleEvents))
+	mux.HandleFunc("/v1/logs", s.requireDeviceToken(s.handleLogs))
 	mux.HandleFunc("/v1/inventory", s.requireDeviceToken(s.handleInventory))
 	mux.HandleFunc("/v1/hosts", s.handleHosts)
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
@@ -269,6 +276,81 @@ const (
 	defaultEventHistoryLimit = 100
 	maxEventHistoryLimit     = 500
 )
+
+// LogHistory is a bounded page of durable log lines. It deliberately exposes
+// only flushed blocks: GET never changes ingestion state or forces a flush.
+type LogHistory struct {
+	HostID  string           `json:"host_id"`
+	From    time.Time        `json:"from"`
+	To      time.Time        `json:"to"`
+	Limit   int              `json:"limit"`
+	Offset  int              `json:"offset"`
+	Total   int              `json:"total"`
+	Entries []logstore.Entry `json:"entries"`
+}
+
+// handleLogs implements GET /v1/logs over durable log blocks. Ranges are
+// explicit and limited to 31 days because text filtering is intentionally
+// applied only after metadata has narrowed the compressed-block candidates.
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Logs == nil {
+		http.Error(w, "log store is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	hostID := q.Get("host_id")
+	if hostID == "" {
+		http.Error(w, "host_id is required", http.StatusBadRequest)
+		return
+	}
+	from, err := time.Parse(time.RFC3339, q.Get("from"))
+	if err != nil {
+		http.Error(w, "from must be an RFC3339 timestamp", http.StatusBadRequest)
+		return
+	}
+	to, err := time.Parse(time.RFC3339, q.Get("to"))
+	if err != nil || !to.After(from) {
+		http.Error(w, "to must be an RFC3339 timestamp after from", http.StatusBadRequest)
+		return
+	}
+	if to.Sub(from) > logstore.MaxQueryRange {
+		http.Error(w, "time range must not exceed 31 days", http.StatusBadRequest)
+		return
+	}
+	limit := defaultEventHistoryLimit
+	if raw := q.Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > maxEventHistoryLimit {
+			http.Error(w, "limit must be between 1 and 500", http.StatusBadRequest)
+			return
+		}
+	}
+	offset := 0
+	if raw := q.Get("offset"); raw != "" {
+		offset, err = strconv.Atoi(raw)
+		if err != nil || offset < 0 {
+			http.Error(w, "offset must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+	}
+	page, err := s.Logs.Query(r.Context(), logstore.Query{HostID: hostID, From: from, To: to, Text: q.Get("text"), Source: q.Get("source"), Unit: q.Get("unit"), Limit: limit, Offset: offset})
+	if err != nil {
+		http.Error(w, "querying logs", http.StatusInternalServerError)
+		return
+	}
+	if offset > page.Total {
+		offset = page.Total
+	}
+	if page.Entries == nil {
+		page.Entries = []logstore.Entry{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(LogHistory{HostID: hostID, From: from, To: to, Limit: limit, Offset: offset, Total: page.Total, Entries: page.Entries})
+}
 
 // handleEvents implements GET /v1/events. Unlike the dashboard summary, its
 // time range is explicit so history browsing cannot accidentally turn the

@@ -541,6 +541,11 @@ body {
   overflow-wrap: anywhere;
 }
 
+.log-list { display: grid; gap: 0; margin: 0.75rem 0 0; padding: 0; list-style: none; }
+.log-list li { min-width: 0; border-top: 1px solid var(--line-soft); padding: 0.8rem 0; }
+.log-list li > div { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; color: var(--dim); font-size: 0.78rem; }
+.log-list pre { margin: 0.35rem 0 0; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 0.82rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
 .signal-panel {
   display: grid;
   gap: 1rem;

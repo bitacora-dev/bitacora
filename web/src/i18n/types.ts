@@ -63,7 +63,6 @@ export interface Dictionary {
   disksEmpty: string;
   updatesEmpty: string;
   inventoryAttribute: (attribute: string) => string;
-  inventoryBytes: (bytes: number, locale: string) => string;
   eventsHeading: (minutes: number) => string;
   eventsEmptyHeading: string;
   eventsEmptyBody: string;
@@ -82,7 +81,6 @@ export interface Dictionary {
   eventsPage: (start: number, end: number, total: number) => string;
   eventsHistoryEmptyHeading: string;
   eventsHistoryEmptyBody: string;
-  byteUnits: readonly [string, string, string, string, string];
   jobsHeading: (minutes: number) => string;
   jobsEmptyHeading: string;
   jobsEmptyBody: string;

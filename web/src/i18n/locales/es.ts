@@ -79,7 +79,6 @@ export const es: Dictionary = {
     repo: "Repositorio",
     cache_age_seconds: "Antigüedad de caché (s)",
   })[attribute] ?? attribute,
-  inventoryBytes: (bytes, locale) => new Intl.NumberFormat(locale, { style: "unit", unit: "byte", notation: "compact", maximumFractionDigits: 1 }).format(bytes),
   eventsHeading: (minutes) => `Eventos (últimos ${minutes}m)`,
   eventsEmptyHeading: "Sin eventos recientes",
   eventsEmptyBody:
@@ -99,7 +98,6 @@ export const es: Dictionary = {
   eventsPage: (start, end, total) => `${start}–${end} de ${total}`,
   eventsHistoryEmptyHeading: "No hay eventos en este intervalo",
   eventsHistoryEmptyBody: "No se recibieron eventos que coincidan con el rango y los filtros seleccionados.",
-  byteUnits: ["B", "KB", "MB", "GB", "TB"],
   jobsHeading: (minutes) => `Operaciones (últimos ${minutes}m)`,
   jobsEmptyHeading: "Sin operaciones recientes",
   jobsEmptyBody: "Las copias y operaciones programadas aparecerán aquí al completarse.",

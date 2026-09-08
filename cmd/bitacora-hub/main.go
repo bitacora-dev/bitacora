@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ import (
 	"golang.org/x/net/http2/h2c"
 
 	"github.com/bitacora-dev/bitacora/internal/hubapi"
+	"github.com/bitacora-dev/bitacora/internal/hubauth"
 	"github.com/bitacora-dev/bitacora/internal/hubpipeline"
 	"github.com/bitacora-dev/bitacora/internal/ingestreceiver"
 	"github.com/bitacora-dev/bitacora/internal/logstore"
@@ -187,8 +189,29 @@ func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) 
 		Manifests: relStore,
 	}
 
+	// ADR-0019: human authentication, optional and off unless the operator
+	// configures a provider. Failing to reach a configured issuer stops the
+	// hub on purpose — booting with authentication silently disabled would
+	// serve the interface to anyone who can reach the origin, which is the
+	// exact hole the ADR exists to close.
+	auth, err := hubauth.New(context.Background(), hubauth.ConfigFromEnv())
+	if err != nil {
+		return nil, fmt.Errorf("configuring human authentication: %w", err)
+	}
+	// Assigning a nil *Authenticator straight into the interface field would
+	// leave it non-nil and gate the UI behind a login that does not exist.
+	if auth != nil {
+		readSrv.Humans = auth
+	}
+
 	mux := http.NewServeMux()
+	// Registered as an exact path, so it wins over "/" in the ServeMux and
+	// the agent-facing ingest never passes through the human boundary:
+	// requiring a browser session here would silence every agent at once.
 	mux.Handle("/v1/ingest", ingestSrv.Handler())
+	if auth != nil {
+		mux.Handle("/auth/", auth.Handler())
+	}
 	mux.Handle("/", readSrv.Handler())
 
 	return &hub{

@@ -56,4 +56,4 @@ No hay degradación funcional si no se usa Cloudflare. Para una instalación pur
 
 ## Límites y responsabilidad
 
-Cloudflare no sustituye la autenticación del hub ni el endurecimiento del host. El operador decide si acepta el intercambio entre ocultar el origen y depender de un tercero. Bitácora no crea reglas, no almacena tokens de Cloudflare y no soporta la automatización de esta configuración.
+Cloudflare no sustituye la autenticación del hub ni el endurecimiento del host. Para autenticar personas dentro del propio hub, vea [Autenticación humana del hub con OIDC](autenticacion-humana-oidc.md) (ADR-0019). El operador decide si acepta el intercambio entre ocultar el origen y depender de un tercero. Bitácora no crea reglas, no almacena tokens de Cloudflare y no soporta la automatización de esta configuración.

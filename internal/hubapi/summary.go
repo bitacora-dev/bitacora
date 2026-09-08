@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,13 @@ type LogQuerier interface {
 	Query(ctx context.Context, query logstore.Query) (logstore.Page, error)
 }
 
+// HumanSessions reports whether a request carries an authenticated human
+// session (ADR-0019). It is deliberately one method: hubapi must not depend
+// on how identity is established, only on whether it was.
+type HumanSessions interface {
+	HasSession(r *http.Request) bool
+}
+
 // InventoryGetter is the read side of storage.Relational that
 // GET /v1/inventory needs (ADR-0015).
 type InventoryGetter interface {
@@ -78,6 +86,10 @@ type Server struct {
 	// HostRecords stores operator-assigned host names and agent metadata. It
 	// is deliberately separate from Hosts, which owns only ingest credentials.
 	HostRecords HostRecordStore
+	// Humans is the human authentication boundary of ADR-0019. Nil keeps the
+	// pre-OIDC behaviour exactly: the UI is served to anyone who reaches the
+	// origin and data routes rely on device tokens alone.
+	Humans HumanSessions
 }
 
 // Handler returns the http.Handler serving /v1/summary (device-token
@@ -94,7 +106,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/v1/devices/claim", s.handleDeviceClaim)
 	if s.WebUI != nil {
-		mux.Handle("/", http.FileServer(http.FS(s.WebUI)))
+		// The UI is the surface ADR-0019 calls out: reaching the origin
+		// directly used to be enough to receive it. With OIDC configured it
+		// now needs a session of its own.
+		mux.Handle("/", s.requireHuman(http.FileServer(http.FS(s.WebUI))))
 	}
 	return mux
 }
@@ -108,6 +123,13 @@ func (s *Server) Handler() http.Handler {
 // reachable from outside that network, which happens in practice.
 func (s *Server) requireDeviceToken(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// A signed-in person is already authenticated: asking their browser
+		// for a device token on top of a verified session would be asking
+		// the same question twice.
+		if s.Humans != nil && s.Humans.HasSession(r) {
+			next(w, r)
+			return
+		}
 		if s.Devices == nil {
 			next(w, r)
 			return
@@ -125,6 +147,22 @@ func (s *Server) requireDeviceToken(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// requireHuman guards the web UI. Unlike the data routes it redirects instead
+// of answering 401: what is being served here is a page, and a browser that
+// lands on it should end up at the provider, not at a JSON error.
+func (s *Server) requireHuman(next http.Handler) http.Handler {
+	if s.Humans == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Humans.HasSession(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Redirect(w, r, "/auth/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+	})
 }
 
 func bearerToken(r *http.Request) (string, bool) {

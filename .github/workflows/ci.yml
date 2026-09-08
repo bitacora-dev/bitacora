@@ -37,6 +37,27 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Test frontend
+        working-directory: web
+        run: npm test
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Verify committed frontend build
+        run: git diff --exit-code -- internal/webui/dist
+
       - name: Install libsystemd-dev
         # internal/collector/journald's Linux reader uses sdjournal (cgo
         # binding over libsystemd) — a scoped, documented exception to
@@ -78,6 +99,9 @@ jobs:
 
       - name: Internal package importer lint
         run: ./scripts/ci/check-internal-importers.sh
+
+      - name: Generated frontend merge driver test
+        run: ./scripts/ci/test-dist-merge-driver.sh
 
       - name: License boundary lint (ADR-0013 / ADR-0018)
         run: ./scripts/ci/check-license-boundary.sh

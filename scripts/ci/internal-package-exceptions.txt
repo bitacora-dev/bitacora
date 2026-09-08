@@ -1,9 +1,6 @@
 # Each exception must have an explicit reason. Remove an entry once the
 # package gains a production importer.
-internal/alerting | Pending connection of the ADR-0009 alert engine (task #660).
 internal/collector/example | Reference implementation for ADR-0007; documentation code, not a runtime collector.
-internal/extraction | Pending connection of the ADR-0006 extraction pipeline (task #659).
-internal/notify | Pending connection of notification delivery for ADR-0009 (task #661).
 internal/netconsole | Pending integration of the ADR-0011 diagnostic console.
 internal/pstore | Pending integration of ADR-0011 persistent crash diagnostics.
 internal/resourcebudget | Pending integration of the agent resource budget enforcement.

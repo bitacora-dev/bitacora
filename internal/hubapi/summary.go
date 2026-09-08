@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,10 @@ type MetricQuerier interface {
 // EventLister is the read side of storage.Relational that Summary needs.
 type EventLister interface {
 	ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error)
+	ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error)
+}
+type JobLister interface {
+	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
 }
 
 // InventoryGetter is the read side of storage.Relational that
@@ -45,6 +50,7 @@ type InventoryGetter interface {
 type Server struct {
 	Metrics MetricQuerier
 	Events  EventLister
+	Jobs    JobLister
 	// Inventories serves GET /v1/inventory (ADR-0015). Nil means that
 	// route always answers 404 — same "not wired everywhere yet" state
 	// as Metrics/Events had before real storage existed.
@@ -75,6 +81,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/summary", s.requireDeviceToken(s.handleSummary))
+	mux.HandleFunc("/v1/events", s.requireDeviceToken(s.handleEvents))
 	mux.HandleFunc("/v1/inventory", s.requireDeviceToken(s.handleInventory))
 	mux.HandleFunc("/v1/hosts", s.handleHosts)
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
@@ -242,6 +249,81 @@ type Summary struct {
 	MemorySwapTotalBytes []SeriesPoint  `json:"memory_swap_total_bytes"`
 	MemorySwapFreeBytes  []SeriesPoint  `json:"memory_swap_free_bytes"`
 	Events               []schema.Event `json:"events"`
+	Jobs                 []schema.Job   `json:"jobs"`
+}
+
+// EventHistory is a bounded page of historical events. Events are not pruned
+// by this API; retention is a deployment/storage concern and intentionally has
+// no configured policy here.
+type EventHistory struct {
+	HostID string         `json:"host_id"`
+	From   time.Time      `json:"from"`
+	To     time.Time      `json:"to"`
+	Limit  int            `json:"limit"`
+	Offset int            `json:"offset"`
+	Total  int            `json:"total"`
+	Events []schema.Event `json:"events"`
+}
+
+const (
+	defaultEventHistoryLimit = 100
+	maxEventHistoryLimit     = 500
+)
+
+// handleEvents implements GET /v1/events. Unlike the dashboard summary, its
+// time range is explicit so history browsing cannot accidentally turn the
+// operational overview into an unbounded query.
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	hostID := q.Get("host_id")
+	if hostID == "" {
+		http.Error(w, "host_id is required", http.StatusBadRequest)
+		return
+	}
+	from, err := time.Parse(time.RFC3339, q.Get("from"))
+	if err != nil {
+		http.Error(w, "from must be an RFC3339 timestamp", http.StatusBadRequest)
+		return
+	}
+	to, err := time.Parse(time.RFC3339, q.Get("to"))
+	if err != nil || !to.After(from) {
+		http.Error(w, "to must be an RFC3339 timestamp after from", http.StatusBadRequest)
+		return
+	}
+	limit := defaultEventHistoryLimit
+	if raw := q.Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > maxEventHistoryLimit {
+			http.Error(w, fmt.Sprintf("limit must be between 1 and %d", maxEventHistoryLimit), http.StatusBadRequest)
+			return
+		}
+	}
+	offset := 0
+	if raw := q.Get("offset"); raw != "" {
+		offset, err = strconv.Atoi(raw)
+		if err != nil || offset < 0 {
+			http.Error(w, "offset must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+	}
+
+	events, total, err := s.Events.ListEventPage(r.Context(), from, to, hostID, q.Get("severity"), q.Get("type"), limit, offset)
+	if err != nil {
+		http.Error(w, "querying events", http.StatusInternalServerError)
+		return
+	}
+	if offset > total {
+		offset = total
+	}
+	if events == nil {
+		events = []schema.Event{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(EventHistory{HostID: hostID, From: from, To: to, Limit: limit, Offset: offset, Total: total, Events: events})
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +388,14 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "querying events", http.StatusInternalServerError)
 		return
 	}
+	var jobs []schema.Job
+	if s.Jobs != nil {
+		jobs, err = s.Jobs.ListJobs(r.Context(), from, now, hostID)
+		if err != nil {
+			http.Error(w, "querying jobs", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	summary := Summary{
 		HostID:               hostID,
@@ -319,9 +409,13 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		MemorySwapTotalBytes: toSeries(swapTotal),
 		MemorySwapFreeBytes:  toSeries(swapFree),
 		Events:               events,
+		Jobs:                 jobs,
 	}
 	if summary.Events == nil {
 		summary.Events = []schema.Event{}
+	}
+	if summary.Jobs == nil {
+		summary.Jobs = []schema.Job{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

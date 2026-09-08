@@ -105,6 +105,46 @@ func runConformanceTests(t *testing.T, newStore func(t *testing.T) Relational) {
 		}
 	})
 
+	t.Run("ListEventPageFiltersAndPaginates", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		ts := time.Date(2026, 8, 25, 1, 5, 12, 0, time.UTC)
+		for _, id := range []string{"page-a", "page-b", "page-c"} {
+			event := sampleEvent(id, ts, "host-a")
+			if err := s.InsertEvent(ctx, event); err != nil {
+				t.Fatalf("inserting %s: %v", id, err)
+			}
+		}
+		otherHost := sampleEvent("page-other-host", ts, "host-b")
+		if err := s.InsertEvent(ctx, otherHost); err != nil {
+			t.Fatalf("inserting other host event: %v", err)
+		}
+
+		page, total, err := s.ListEventPage(ctx, ts.Add(-time.Minute), ts.Add(time.Minute), "host-a", "", "", 2, 0)
+		if err != nil {
+			t.Fatalf("listing first page: %v", err)
+		}
+		if total != 3 || len(page) != 2 || page[0].ID != "page-c" || page[1].ID != "page-b" {
+			t.Fatalf("unexpected newest-first first page: events=%+v total=%d", page, total)
+		}
+
+		page, total, err = s.ListEventPage(ctx, ts.Add(-time.Minute), ts.Add(time.Minute), "host-a", "", "", 2, 2)
+		if err != nil {
+			t.Fatalf("listing offset page: %v", err)
+		}
+		if total != 3 || len(page) != 1 || page[0].ID != "page-a" {
+			t.Fatalf("unexpected offset page: events=%+v total=%d", page, total)
+		}
+
+		page, total, err = s.ListEventPage(ctx, ts.Add(-time.Minute), ts.Add(time.Minute), "host-a", "", "", 2, 4)
+		if err != nil {
+			t.Fatalf("listing empty page: %v", err)
+		}
+		if total != 3 || len(page) != 0 {
+			t.Fatalf("expected empty page after final offset: events=%+v total=%d", page, total)
+		}
+	})
+
 	t.Run("SearchEventTitlesFindsMatch", func(t *testing.T) {
 		s := newStore(t)
 		ctx := context.Background()

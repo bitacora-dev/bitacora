@@ -27,6 +27,9 @@ type MetricAppender interface {
 type EventInserter interface {
 	InsertEvent(ctx context.Context, e schema.Event) error
 }
+type JobInserter interface {
+	InsertJob(ctx context.Context, job schema.Job) error
+}
 
 // InventoryUpserter is the write side of storage.Relational that Receiver
 // needs for declarative Inventory snapshots. Inventories replace the prior
@@ -53,6 +56,7 @@ type LogProcessor interface {
 type Receiver struct {
 	Metrics     MetricAppender
 	Events      EventInserter
+	Jobs        JobInserter
 	Inventories InventoryUpserter
 	Logs        LogAppender
 	Processor   LogProcessor
@@ -81,6 +85,7 @@ func WithLogProcessor(processor LogProcessor) Option {
 func WithInventoryUpserter(inventories InventoryUpserter) Option {
 	return func(r *Receiver) { r.Inventories = inventories }
 }
+func WithJobInserter(jobs JobInserter) Option { return func(r *Receiver) { r.Jobs = jobs } }
 
 // ReceiveBatch writes every item in batch to its backend and never fails
 // the batch over a single bad item: a malformed or rejected metric, event
@@ -137,6 +142,15 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 		inventory := protoToInventory(i)
 		if err := r.Inventories.UpsertInventory(ctx, inventory); err != nil {
 			slog.Error("ingestreceiver: dropping inventory", "host_id", hostID, "batch_id", batchID, "kind", i.GetKind(), "err", err)
+		}
+	}
+	for _, j := range batch.GetJobs() {
+		if r.Jobs == nil {
+			slog.Error("ingestreceiver: dropping job because no job store is configured", "host_id", hostID, "batch_id", batchID, "job_id", j.GetId())
+			continue
+		}
+		if err := r.Jobs.InsertJob(ctx, protoToJob(j)); err != nil {
+			slog.Error("ingestreceiver: dropping job", "host_id", hostID, "batch_id", batchID, "job_id", j.GetId(), "err", err)
 		}
 	}
 

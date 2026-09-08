@@ -35,6 +35,38 @@ export interface Summary {
   memory_swap_total_bytes: SeriesPoint[];
   memory_swap_free_bytes: SeriesPoint[];
   events: BitacoraEvent[];
+  jobs: Job[];
+}
+
+export interface Job {
+  id: string;
+  job_name: string;
+  host_id: string;
+  started_at: string;
+  finished_at: string;
+  duration_seconds: number;
+  status: "success" | "warning" | "failed" | "timeout" | "killed" | "running";
+  exit_code: number;
+  stats?: Record<string, unknown>;
+}
+
+export interface EventHistory {
+  host_id: string;
+  from: string;
+  to: string;
+  limit: number;
+  offset: number;
+  total: number;
+  events: BitacoraEvent[];
+}
+
+export interface EventHistoryQuery {
+  from: string;
+  to: string;
+  severity?: BitacoraEvent["severity"] | "";
+  type?: string;
+  limit: number;
+  offset: number;
 }
 
 export interface InventoryItem {
@@ -77,6 +109,19 @@ export async function fetchSummary(hostID: string, windowStr = "15m"): Promise<S
     const body = await res.text();
     throw new Error(`GET ${url} -> ${res.status}: ${body}`);
   }
+  return res.json();
+}
+
+export async function fetchEventHistory(hostID: string, query: EventHistoryQuery): Promise<EventHistory> {
+  const params = new URLSearchParams({ host_id: hostID, from: query.from, to: query.to });
+  if (query.severity) params.set("severity", query.severity);
+  if (query.type) params.set("type", query.type);
+  params.set("limit", String(query.limit));
+  params.set("offset", String(query.offset));
+  const url = `/v1/events?${params}`;
+  const token = getDeviceToken();
+  const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
+  if (!res.ok) throw new Error(`GET ${url} -> ${res.status}: ${await res.text()}`);
   return res.json();
 }
 

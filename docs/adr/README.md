@@ -41,6 +41,7 @@ consecuencias, incluidas las malas.
 | [0018](0018-frontera-licencia-bitacora-run.md) | Frontera de licencia de bitacora-run | Propuesto |
 | [0019](0019-autenticacion-humana.md) | Autenticación humana del hub | Propuesto |
 | [0020](0020-distribucion-agente-journald-cgo.md) | Distribución del agente Linux con soporte de journald | Aceptado |
+| [0021](0021-artefactos-web-generados-y-merge.md) | Artefactos web generados y resolución de merges | Aceptado |
 
 ## Estado del proyecto
 

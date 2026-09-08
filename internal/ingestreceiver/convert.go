@@ -103,3 +103,11 @@ func protoToInventory(i *bitacorapb.Inventory) schema.Inventory {
 		Items:      items,
 	}
 }
+
+func protoToJob(j *bitacorapb.Job) schema.Job {
+	job := schema.Job{ID: j.GetId(), JobName: j.GetJobName(), HostID: j.GetHostId(), StartedAt: time.UnixMilli(j.GetStartedAtMs()).UTC(), FinishedAt: time.UnixMilli(j.GetFinishedAtMs()).UTC(), DurationSecond: float64(j.GetDurationMs()) / 1000, Status: schema.JobStatus(j.GetStatus()), ExitCode: int(j.GetExitCode()), Signal: j.GetSignal(), PeerHostID: j.GetPeerHostId(), Trigger: j.GetTrigger(), Schema: int(j.GetSchema())}
+	if j.GetNextExpectedMs() != 0 {
+		job.NextExpected = time.UnixMilli(j.GetNextExpectedMs()).UTC()
+	}
+	return job
+}

@@ -36,6 +36,9 @@ type LogLine = schema.LogLine
 // a discrete occurrence.
 type Inventory = schema.Inventory
 
+// Job is a completed scheduled operation observed by a collector.
+type Job = schema.Job
+
 // Sink is where a Collector writes everything it produces. Collectors never
 // touch storage, the network, or the hub directly (ADR-0002) — they only
 // know about Sink.

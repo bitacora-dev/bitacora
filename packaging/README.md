@@ -7,7 +7,41 @@ implement the model itself.
 ## Install the systemd agent
 
 The agent always runs as the unprivileged `bitacora` user. Run these commands
-as root after placing the `bitacora-agent` binary at `/usr/bin/bitacora-agent`:
+as root after placing the Linux journald artifact at
+`/usr/bin/bitacora-agent`.
+
+### Build and retrieve the Linux journald artifact
+
+CI is the supported build location for Linux hosts that collect journald. The
+`Build Linux amd64 agent with journald` job compiles
+`bitacora-agent-linux-amd64-journald` with `CGO_ENABLED=1` and
+`libsystemd-dev`, then publishes it as the
+`bitacora-agent-linux-amd64-journald` workflow artifact. Download that
+artifact from the successful workflow run that contains the commit being
+deployed; do not build on each monitored host.
+
+Before replacing the installed binary, verify that the fallback reader was not
+compiled into it. `ldd` is not a valid check because sdjournal loads
+libsystemd with `dlopen`:
+
+```sh
+if strings bitacora-agent-linux-amd64-journald | grep -Fq 'requires cgo and libsystemd'; then
+  echo 'invalid journald artifact' >&2
+  exit 1
+fi
+install -o root -g root -m 0755 bitacora-agent-linux-amd64-journald /usr/bin/bitacora-agent
+```
+
+For a pre-existing installation, migrate the token directory and token before
+starting the service:
+
+```sh
+install -d -o root -g bitacora -m 0750 /etc/bitacora
+chown root:bitacora /etc/bitacora/token
+chmod 0640 /etc/bitacora/token
+```
+
+Then install and start the service:
 
 1. Run `packaging/scripts/provision-user.sh`. It creates the `bitacora` system
    user and `/var/lib/bitacora/spool` as `root:bitacora` with mode `0750`.

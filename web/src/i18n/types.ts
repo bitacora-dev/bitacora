@@ -67,6 +67,16 @@ export interface Dictionary {
   disksEmpty: string;
   updatesEmpty: string;
   inventoryAttribute: (attribute: string) => string;
+  disksUsageSummary: string;
+  diskUsagePercentage: (disk: string, percentage: string) => string;
+  diskUsageUnavailable: string;
+  diskUsedLabel: string;
+  diskCapacityLabel: (capacity: string) => string;
+  diskAvailableLabel: (available: string) => string;
+  diskNearlyFull: string;
+  diskArrayType: (type: string) => string;
+  diskArrayMembership: (type: string, level: string, members: string) => string;
+  diskArrayHealth: Record<"healthy" | "degraded" | "unknown", string>;
   eventsHeading: (minutes: number) => string;
   eventsEmptyHeading: string;
   eventsEmptyBody: string;

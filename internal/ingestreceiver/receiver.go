@@ -6,12 +6,18 @@ package ingestreceiver
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
+
+const validationRejectionInterval = 5 * time.Minute
 
 // MetricAppender is the write side of a metricstore.Store that Receiver
 // needs, narrowed the same way hubapi.MetricQuerier narrows the read side:
@@ -60,15 +66,39 @@ type Receiver struct {
 	Inventories InventoryUpserter
 	Logs        LogAppender
 	Processor   LogProcessor
+
+	now        func() time.Time
+	rejections validationRejectionLimiter
 }
 
 // New returns a Receiver writing to the given backends.
 func New(metrics MetricAppender, events EventInserter, logs LogAppender, options ...Option) *Receiver {
-	r := &Receiver{Metrics: metrics, Events: events, Logs: logs}
+	r := &Receiver{Metrics: metrics, Events: events, Logs: logs, now: func() time.Time { return time.Now().UTC() }}
 	for _, option := range options {
 		option(r)
 	}
 	return r
+}
+
+// validationRejectionLimiter bounds diagnostic events by host, data name, and
+// stable reason. Rejected input must stay observable without allowing a broken
+// agent to turn one malformed sample per batch into an event flood.
+type validationRejectionLimiter struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func (l *validationRejectionLimiter) allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if last, ok := l.last[key]; ok && now.Sub(last) < validationRejectionInterval {
+		return false
+	}
+	if l.last == nil {
+		l.last = make(map[string]time.Time)
+	}
+	l.last[key] = now
+	return true
 }
 
 // Option configures an optional hub-side receive behavior.
@@ -109,6 +139,10 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 
 	for _, m := range batch.GetMetrics() {
 		metric := protoToMetric(m)
+		if err := metric.Validate(); err != nil {
+			r.recordValidationRejection(ctx, hostID, "metric", m.GetName(), err)
+			continue
+		}
 		if err := r.Metrics.Append(ctx, metric); err != nil {
 			slog.Error("ingestreceiver: dropping metric", "host_id", hostID, "batch_id", batchID, "name", m.GetName(), "err", err)
 		}
@@ -116,6 +150,10 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 
 	for _, e := range batch.GetEvents() {
 		event := protoToEvent(e)
+		if err := event.Validate(); err != nil {
+			r.recordValidationRejection(ctx, hostID, "event", e.GetId(), err)
+			continue
+		}
 		if err := r.Events.InsertEvent(ctx, event); err != nil {
 			slog.Error("ingestreceiver: dropping event", "host_id", hostID, "batch_id", batchID, "event_id", e.GetId(), "err", err)
 		}
@@ -123,6 +161,10 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 
 	for _, l := range batch.GetLogLines() {
 		line := protoToLogLine(l)
+		if err := line.Validate(); err != nil {
+			r.recordValidationRejection(ctx, hostID, "log", l.GetSource(), err)
+			continue
+		}
 		if _, err := r.Logs.Append(line); err != nil {
 			slog.Error("ingestreceiver: dropping log line", "host_id", hostID, "batch_id", batchID, "source", l.GetSource(), "err", err)
 			continue
@@ -140,6 +182,10 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 			continue
 		}
 		inventory := protoToInventory(i)
+		if err := inventory.Validate(); err != nil {
+			r.recordValidationRejection(ctx, hostID, "inventory", i.GetKind(), err)
+			continue
+		}
 		if err := r.Inventories.UpsertInventory(ctx, inventory); err != nil {
 			slog.Error("ingestreceiver: dropping inventory", "host_id", hostID, "batch_id", batchID, "kind", i.GetKind(), "err", err)
 		}
@@ -149,10 +195,47 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 			slog.Error("ingestreceiver: dropping job because no job store is configured", "host_id", hostID, "batch_id", batchID, "job_id", j.GetId())
 			continue
 		}
-		if err := r.Jobs.InsertJob(ctx, protoToJob(j)); err != nil {
+		job := protoToJob(j)
+		if err := job.Validate(); err != nil {
+			r.recordValidationRejection(ctx, hostID, "job", j.GetId(), err)
+			continue
+		}
+		if err := r.Jobs.InsertJob(ctx, job); err != nil {
 			slog.Error("ingestreceiver: dropping job", "host_id", hostID, "batch_id", batchID, "job_id", j.GetId(), "err", err)
 		}
 	}
 
 	return nil
+}
+
+func (r *Receiver) recordValidationRejection(ctx context.Context, hostID, dataKind, name string, validationErr error) {
+	reason := validationErr.Error()
+	key := fmt.Sprintf("%s\x00%s\x00%s\x00%s", hostID, dataKind, name, reason)
+	now := r.now()
+	if !r.rejections.allow(key, now) {
+		return
+	}
+
+	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
+	window := now.Truncate(validationRejectionInterval).Unix()
+	event := schema.Event{
+		ID:         fmt.Sprintf("validation-rejection-%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", key, window)))),
+		TS:         now,
+		TSReceived: now,
+		HostID:     hostID,
+		Source:     "ingestreceiver",
+		Type:       "ingest.validation_rejected",
+		Severity:   schema.SeverityWarn,
+		Title:      fmt.Sprintf("Rejected invalid %s during ingest", dataKind),
+		Attrs: schema.Labels{
+			"data_kind": dataKind,
+			"data_name": name,
+			"reason":    reason,
+		},
+		Fingerprint: fingerprint,
+		Schema:      schema.CurrentSchemaVersion,
+	}
+	if err := r.Events.InsertEvent(ctx, event); err != nil {
+		slog.Error("ingestreceiver: recording validation rejection", "host_id", hostID, "data_kind", dataKind, "name", name, "err", err)
+	}
 }

@@ -26,6 +26,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/bitacora-dev/bitacora/internal/actionconfirm"
 	"github.com/bitacora-dev/bitacora/internal/hubapi"
 	"github.com/bitacora-dev/bitacora/internal/hubauth"
 	"github.com/bitacora-dev/bitacora/internal/hubpipeline"
@@ -202,6 +203,12 @@ func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) 
 	// leave it non-nil and gate the UI behind a login that does not exist.
 	if auth != nil {
 		readSrv.Humans = auth
+		// ADR-0022 stays disabled until a configured human identity exists.
+		// The persistent store is also the ingest pull source, so confirmed
+		// orders travel only in the established response channel.
+		actions := actionconfirm.NewStore(relStore)
+		readSrv.Actions = actions
+		ingestSrv.Orders = actions
 	}
 
 	mux := http.NewServeMux()

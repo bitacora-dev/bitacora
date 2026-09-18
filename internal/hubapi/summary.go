@@ -43,6 +43,14 @@ type JobLister interface {
 	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
 }
 
+// JobPoller supplies a consistent job snapshot and cursor-based output pages.
+// It is kept separate from JobLister so existing summary-only callers remain
+// source-compatible.
+type JobPoller interface {
+	GetJob(ctx context.Context, hostID, jobID string) (schema.Job, bool, error)
+	ListJobOutput(ctx context.Context, hostID, jobID string, afterSequence int64, limit int) ([]schema.JobOutputLine, int64, error)
+}
+
 type LogQuerier interface {
 	Query(ctx context.Context, query logstore.Query) (logstore.Page, error)
 }
@@ -62,10 +70,11 @@ type InventoryGetter interface {
 
 // Server serves the hub's read API and the embedded web UI.
 type Server struct {
-	Metrics MetricQuerier
-	Events  EventLister
-	Jobs    JobLister
-	Logs    LogQuerier
+	Metrics   MetricQuerier
+	Events    EventLister
+	Jobs      JobLister
+	JobPoller JobPoller
+	Logs      LogQuerier
 	// Inventories serves GET /v1/inventory (ADR-0015). Nil means that
 	// route always answers 404 — same "not wired everywhere yet" state
 	// as Metrics/Events had before real storage existed.
@@ -102,6 +111,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/summary", s.requireDeviceToken(s.handleSummary))
 	mux.HandleFunc("/v1/events", s.requireDeviceToken(s.handleEvents))
 	mux.HandleFunc("/v1/logs", s.requireDeviceToken(s.handleLogs))
+	mux.HandleFunc("/v1/jobs/", s.requireDeviceToken(s.handleJobPoll))
 	mux.HandleFunc("/v1/inventory", s.requireDeviceToken(s.handleInventory))
 	mux.HandleFunc("/v1/hosts", s.handleHosts)
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
@@ -328,6 +338,72 @@ type LogHistory struct {
 	Offset  int              `json:"offset"`
 	Total   int              `json:"total"`
 	Entries []logstore.Entry `json:"entries"`
+}
+
+// JobPoll is one polling response. Clients advance after to next_after only
+// after processing lines, so reconnects neither lose nor repeat output.
+type JobPoll struct {
+	Job       schema.Job             `json:"job"`
+	Lines     []schema.JobOutputLine `json:"lines"`
+	NextAfter int64                  `json:"next_after"`
+	Complete  bool                   `json:"complete"`
+}
+
+func (s *Server) handleJobPoll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.JobPoller == nil {
+		http.Error(w, "job polling is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	jobID := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
+	if jobID == "" || strings.Contains(jobID, "/") {
+		http.Error(w, "job id is required", http.StatusBadRequest)
+		return
+	}
+	hostID := r.URL.Query().Get("host_id")
+	if hostID == "" {
+		http.Error(w, "host_id is required", http.StatusBadRequest)
+		return
+	}
+	after := int64(0)
+	var err error
+	if raw := r.URL.Query().Get("after"); raw != "" {
+		after, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || after < 0 {
+			http.Error(w, "after must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+	}
+	limit := defaultEventHistoryLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > maxEventHistoryLimit {
+			http.Error(w, "limit must be between 1 and 500", http.StatusBadRequest)
+			return
+		}
+	}
+	job, ok, err := s.JobPoller.GetJob(r.Context(), hostID, jobID)
+	if err != nil {
+		http.Error(w, "querying job", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+	lines, next, err := s.JobPoller.ListJobOutput(r.Context(), hostID, jobID, after, limit)
+	if err != nil {
+		http.Error(w, "querying job output", http.StatusInternalServerError)
+		return
+	}
+	if lines == nil {
+		lines = []schema.JobOutputLine{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(JobPoll{Job: job, Lines: lines, NextAfter: next, Complete: job.Status.Terminal()})
 }
 
 // handleLogs implements GET /v1/logs over durable log blocks. Ranges are

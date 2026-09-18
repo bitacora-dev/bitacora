@@ -10,10 +10,15 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
+
+// ErrJobTransition is returned when an operation would mutate a terminal
+// Job, or otherwise violates the only allowed lifecycle: running -> terminal.
+var ErrJobTransition = errors.New("invalid job state transition")
 
 // Relational is the storage interface every backend implements. The
 // interface must stay backend-agnostic so a PostgreSQL implementation can
@@ -26,7 +31,13 @@ type Relational interface {
 	// ListEvents returns every event in [from, to] for hostID, or for every
 	// host if hostID is empty, ordered by ts ascending.
 	ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error)
+	// InsertJob remains for producers that only report historical terminal jobs.
 	InsertJob(ctx context.Context, job schema.Job) error
+	CreateJob(ctx context.Context, job schema.Job) error
+	FinishJob(ctx context.Context, job schema.Job) error
+	GetJob(ctx context.Context, hostID, jobID string) (schema.Job, bool, error)
+	AppendJobOutput(ctx context.Context, hostID string, line schema.JobOutputLine) error
+	ListJobOutput(ctx context.Context, hostID, jobID string, afterSequence int64, limit int) ([]schema.JobOutputLine, int64, error)
 	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
 
 	// ListEventPage returns one newest-first, filtered page plus the total

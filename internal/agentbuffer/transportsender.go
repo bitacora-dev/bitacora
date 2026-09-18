@@ -27,6 +27,19 @@ func TransportSender(client *transport.Client, hostID string) Sender {
 	}
 }
 
+// TransportPoller sends an empty, valid ingest batch to receive an
+// IngestResponse when no telemetry is buffered. It keeps the existing
+// agent-initiated channel and cannot execute a received operation.
+func TransportPoller(client *transport.Client, hostID string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		_, err := client.Send(ctx, ItemsToBatch(hostID, nil))
+		if err != nil {
+			return fmt.Errorf("polling ingest response: %w", err)
+		}
+		return nil
+	}
+}
+
 func ItemsToBatch(hostID string, items []Item) *bitacorapb.Batch {
 	batch := &bitacorapb.Batch{
 		BatchId: ulid.Make().String(),

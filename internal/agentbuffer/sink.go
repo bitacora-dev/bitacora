@@ -151,7 +151,14 @@ func (s *Sink) TriggerFlush() {
 }
 
 type FlushOptions struct {
-	Interval   time.Duration
+	Interval time.Duration
+	// PollInterval returns the delay to the next ingest poll. Nil preserves the
+	// configured interval. The action channel uses it only after locally
+	// accepting a pending order.
+	PollInterval func(time.Duration) time.Duration
+	// Poll runs when there is no buffered telemetry. Nil preserves the old
+	// behaviour of doing no network work for an empty buffer.
+	Poll       func(context.Context) error
 	BatchSize  int
 	MinBackoff time.Duration
 	MaxBackoff time.Duration
@@ -174,19 +181,33 @@ func (s *Sink) Run(ctx context.Context, sender Sender, opts FlushOptions) {
 		maxBackoff = MaxFlushBackoff
 	}
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
 	backoff := minBackoff
 	for {
+		pollInterval := interval
+		if opts.PollInterval != nil {
+			pollInterval = opts.PollInterval(interval)
+		}
+		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		case <-s.flushCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
 
 		if s.Buffer == nil || s.Buffer.Len() == 0 {
+			if opts.Poll != nil {
+				if err := opts.Poll(ctx); err != nil {
+					s.Logf("bitacora-agent: polling ingest response failed: %v", err)
+				}
+			}
 			backoff = minBackoff
 			continue
 		}

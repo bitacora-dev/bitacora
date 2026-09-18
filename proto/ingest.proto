@@ -106,9 +106,27 @@ message Batch {
 	 repeated Job jobs = 7;
 }
 
+// PackageOperation is deliberately a closed set. It is the entire action
+// vocabulary ADR-0022 permits the hub to request from an agent.
+enum PackageOperation {
+  PACKAGE_OPERATION_UNSPECIFIED = 0;
+  REFRESH_PACKAGE_CACHE = 1;
+  APPLY_PENDING_PACKAGE_UPDATES = 2;
+}
+
+// PendingPackageOperation carries no executable input. The operation is an
+// enum, while request_id identifies the human-confirmed request and expiry
+// lets the agent reject stale requests before they can reach a helper.
+message PendingPackageOperation {
+  PackageOperation operation = 1;
+  string request_id = 2;
+  int64 expires_at_ms = 3;
+}
+
 // IngestResponse is the hub's reply: the last confirmed offset, and
 // whether this specific batch was a duplicate the hub already had.
 message IngestResponse {
   string last_offset = 1;
   bool duplicate = 2;
+  PendingPackageOperation pending_package_operation = 3;
 }

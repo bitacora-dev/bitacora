@@ -28,6 +28,9 @@ type Client struct {
 	// built automatically: h2c for http://, standard (ALPN-negotiated
 	// HTTP/2) for https://.
 	HTTPClient *http.Client
+	// OnResponse observes the decoded hub response. It is intentionally
+	// best-effort: a local validation failure must not cause telemetry replay.
+	OnResponse func(*bitacorapb.IngestResponse)
 }
 
 // Send posts batch to BaseURL+"/v1/ingest" and returns the hub's response.
@@ -73,6 +76,9 @@ func (c *Client) Send(ctx context.Context, batch *bitacorapb.Batch) (*bitacorapb
 	var out bitacorapb.IngestResponse
 	if err := proto.Unmarshal(body, &out); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	if c.OnResponse != nil {
+		c.OnResponse(&out)
 	}
 	return &out, nil
 }

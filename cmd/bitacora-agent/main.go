@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bitacora-dev/bitacora/internal/agentactions"
 	"github.com/bitacora-dev/bitacora/internal/agentbuffer"
 	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
@@ -34,6 +35,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/collector/users"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/transport"
+	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
 
 // agentVersion is set at build time via -ldflags; "dev" outside a release build.
@@ -46,6 +48,12 @@ func main() {
 		logger.Printf("config: %v", err)
 		os.Exit(2)
 	}
+	allowlist, err := agentactions.LoadAllowlist(cfg.actionsFile)
+	if err != nil {
+		logger.Printf("action configuration: %v", err)
+		os.Exit(2)
+	}
+	actions := agentactions.NewManager(allowlist, logger.Printf)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -85,7 +93,20 @@ func main() {
 	sink := agentbuffer.NewSink(hostID, buffer, agentbuffer.WithLogger(logger.Printf))
 	if cfg.hubURL != "" {
 		client := &transport.Client{BaseURL: cfg.hubURL, Token: cfg.token}
-		go sink.Run(ctx, agentbuffer.TransportSender(client, hostID), agentbuffer.FlushOptions{})
+		client.OnResponse = func(response *bitacorapb.IngestResponse) {
+			if order := response.GetPendingPackageOperation(); order != nil {
+				actions.Handle(order)
+			}
+		}
+		flushOptions := agentbuffer.FlushOptions{
+			PollInterval: actions.PollInterval,
+		}
+		// Disabled hosts retain the pre-ADR-0022 behaviour: no empty ingest
+		// polls and therefore no added cadence or network cost.
+		if actions.Enabled() {
+			flushOptions.Poll = agentbuffer.TransportPoller(client, hostID)
+		}
+		go sink.Run(ctx, agentbuffer.TransportSender(client, hostID), flushOptions)
 	} else {
 		logger.Printf("hub URL is not configured; telemetry will remain buffered locally")
 	}
@@ -127,10 +148,11 @@ func buildRegistry() collector.Registry {
 }
 
 type config struct {
-	hubURL    string
-	token     string
-	tokenFile string
-	spoolDir  string
+	hubURL      string
+	token       string
+	tokenFile   string
+	spoolDir    string
+	actionsFile string
 }
 
 func parseConfig() (config, error) {
@@ -138,6 +160,7 @@ func parseConfig() (config, error) {
 	flag.StringVar(&cfg.hubURL, "hub-url", os.Getenv("BITACORA_HUB_URL"), "hub base URL")
 	flag.StringVar(&cfg.tokenFile, "token-file", os.Getenv("BITACORA_TOKEN_FILE"), "path to the ingestion bearer token")
 	flag.StringVar(&cfg.spoolDir, "spool-dir", agentbuffer.DefaultOutboundDir, "outbound buffer directory")
+	flag.StringVar(&cfg.actionsFile, "actions-file", os.Getenv("BITACORA_ACTIONS_FILE"), "path to local package action allowlist")
 	flag.Parse()
 
 	token, err := readToken(cfg.tokenFile, os.Getenv("BITACORA_TOKEN"))

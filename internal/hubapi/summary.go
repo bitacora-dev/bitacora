@@ -507,12 +507,12 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "querying memory swap free metrics", http.StatusInternalServerError)
 		return
 	}
-	networkRX, err := s.Metrics.Query(r.Context(), "bitacora_net_rx_bytes_per_second", from, now, hostMatcher, nonLoopbackInterfaceMatcher)
+	networkRX, err := s.Metrics.Query(r.Context(), "bitacora_net_rx_bytes_total", from, now, hostMatcher, nonLoopbackInterfaceMatcher)
 	if err != nil {
 		http.Error(w, "querying network receive metrics", http.StatusInternalServerError)
 		return
 	}
-	networkTX, err := s.Metrics.Query(r.Context(), "bitacora_net_tx_bytes_per_second", from, now, hostMatcher, nonLoopbackInterfaceMatcher)
+	networkTX, err := s.Metrics.Query(r.Context(), "bitacora_net_tx_bytes_total", from, now, hostMatcher, nonLoopbackInterfaceMatcher)
 	if err != nil {
 		http.Error(w, "querying network transmit metrics", http.StatusInternalServerError)
 		return
@@ -542,8 +542,8 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		MemoryUsedBytes:         memoryUsedSeries(memTotal, memAvailable),
 		MemorySwapTotalBytes:    toSeries(swapTotal),
 		MemorySwapFreeBytes:     toSeries(swapFree),
-		NetworkRXBytesPerSecond: aggregateSeries(networkRX),
-		NetworkTXBytesPerSecond: aggregateSeries(networkTX),
+		NetworkRXBytesPerSecond: rateSeries(networkRX),
+		NetworkTXBytesPerSecond: rateSeries(networkTX),
 		Events:                  events,
 		Jobs:                    jobs,
 	}
@@ -610,31 +610,79 @@ func toSeries(samples []metricstore.Sample) []SeriesPoint {
 	return points
 }
 
-// aggregateSeries sums per-interface samples into one host-level point per
-// timestamp. Network collector metrics retain their interface label in storage;
-// returning them through toSeries would flatten distinct series into duplicate
-// timestamps, which is not valid input for a single chart line.
-func aggregateSeries(samples []metricstore.Sample) []SeriesPoint {
+// rateSeries turns cumulative counter samples (e.g. the network collector's
+// bitacora_net_{rx,tx}_bytes_total, which retain an interface label in
+// storage) into one host-level per-second rate point per timestamp.
+//
+// The order of operations matters and is the entire point of this function:
+// each label-set's series (e.g. one series per interface) is differentiated
+// on its own, in timestamp order, and only the resulting per-series rates
+// are summed together by timestamp afterwards. Summing the raw cumulative
+// counters across interfaces FIRST and differentiating the sum afterwards
+// would be wrong: an interface appearing or disappearing mid-window (a NIC
+// coming up, a VPN interface going away) would produce a huge, spurious
+// jump in the summed counter, which differentiation would then report as
+// an equally spurious rate spike. Differentiating per-series before summing
+// avoids that entirely — a future "simplification" that flattens this back
+// into one sum-then-diff pass would reintroduce exactly that bug.
+func rateSeries(samples []metricstore.Sample) []SeriesPoint {
 	if len(samples) == 0 {
 		return []SeriesPoint{}
 	}
 
-	valuesByTS := make(map[time.Time]float64, len(samples))
+	bySeries := make(map[string][]metricstore.Sample)
 	for _, sample := range samples {
-		valuesByTS[sample.Timestamp] += sample.Value
+		key := labelSetKey(sample.Labels)
+		bySeries[key] = append(bySeries[key], sample)
 	}
 
-	timestamps := make([]time.Time, 0, len(valuesByTS))
-	for timestamp := range valuesByTS {
+	rateByTS := make(map[time.Time]float64)
+	for _, series := range bySeries {
+		sort.Slice(series, func(i, j int) bool { return series[i].Timestamp.Before(series[j].Timestamp) })
+		for i := 1; i < len(series); i++ {
+			prev, cur := series[i-1], series[i]
+			elapsed := cur.Timestamp.Sub(prev.Timestamp).Seconds()
+			if elapsed <= 0 {
+				continue // out-of-order or duplicate timestamp — not a valid interval
+			}
+			if cur.Value < prev.Value {
+				continue // counter reset (reboot, interface reset) — not an error, just not a valid rate point
+			}
+			rateByTS[cur.Timestamp] += (cur.Value - prev.Value) / elapsed
+		}
+	}
+
+	timestamps := make([]time.Time, 0, len(rateByTS))
+	for timestamp := range rateByTS {
 		timestamps = append(timestamps, timestamp)
 	}
 	sort.Slice(timestamps, func(i, j int) bool { return timestamps[i].Before(timestamps[j]) })
 
 	points := make([]SeriesPoint, 0, len(timestamps))
 	for _, timestamp := range timestamps {
-		points = append(points, SeriesPoint{TS: timestamp, Value: valuesByTS[timestamp]})
+		points = append(points, SeriesPoint{TS: timestamp, Value: rateByTS[timestamp]})
 	}
 	return points
+}
+
+// labelSetKey builds a stable, order-independent identity for a sample's
+// full label set, so rateSeries can group samples into the distinct series
+// (e.g. one per interface) they came from before differentiating.
+func labelSetKey(set map[string]string) string {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(set[k])
+		b.WriteByte(';')
+	}
+	return b.String()
 }
 
 func memoryUsedSeries(total, available []metricstore.Sample) []SeriesPoint {

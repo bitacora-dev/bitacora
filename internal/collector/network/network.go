@@ -5,6 +5,15 @@
 // project's agent deliberately doesn't have, so it comes from
 // bitacora-vpn's spool entry (ADR-0005), the same helper-writes/
 // agent-reads split bitacora-smart established.
+//
+// Traffic is reported as raw cumulative byte counters straight from
+// /proc/net/dev, not as a pre-computed rate: ADR-0006's allowedUnitSuffixes
+// only recognizes "_total" (and the other SI-derived suffixes) as a public
+// naming contract, and "_bytes_per_second" satisfies none of them, so a
+// gauge named that way is silently rejected by schema.Metric.Validate and
+// never reaches storage. A "_total" counter is also the Prometheus-idiomatic
+// shape for this kind of value; the rate is derived hub-side from
+// consecutive samples instead (see hubapi's rateSeries).
 package network
 
 import (
@@ -33,14 +42,14 @@ const (
 	staleAfter = 30 * time.Minute
 )
 
-// Collector emits net traffic gauges and a vpn_tunnel Inventory.
+// Collector emits net traffic counters and a vpn_tunnel Inventory. Traffic
+// collection is stateless: each cycle reads and reports the current
+// cumulative counters, with no previous-sample bookkeeping — the hub, not
+// the agent, turns consecutive counter samples into a rate.
 type Collector struct {
 	procNetDev string
 	spoolDir   string
 	hostID     string
-
-	prevAt   time.Time
-	prevInts map[string]ifaceCounters
 }
 
 type ifaceCounters struct {
@@ -78,7 +87,7 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 	}
 
 	now := time.Now()
-	c.collectTraffic(sink, now)
+	c.collectTraffic(sink)
 
 	items := c.readVPNTunnels()
 	sink.Inventory(schema.Inventory{
@@ -102,30 +111,22 @@ func configuredPath(cfg collector.Config, key, fallback string) string {
 	return fallback
 }
 
-func (c *Collector) collectTraffic(sink collector.Sink, now time.Time) {
+// collectTraffic reports each interface's current cumulative byte counters
+// as-is. There's no rate math and no previous-cycle state here: emitting
+// the raw counter means the very first cycle already produces a sample
+// (no warm-up cycle needed to establish a delta), and a counter reset from
+// a reboot or NIC reset is simply a lower next value — it's the hub's job
+// to notice that when it differentiates, not this collector's.
+func (c *Collector) collectTraffic(sink collector.Sink) {
 	counters, err := readProcNetDev(c.procNetDev)
 	if err != nil {
 		return
 	}
 
-	if !c.prevAt.IsZero() {
-		elapsed := now.Sub(c.prevAt).Seconds()
-		if elapsed > 0 {
-			for iface, cur := range counters {
-				prev, ok := c.prevInts[iface]
-				if !ok || cur.rxBytes < prev.rxBytes || cur.txBytes < prev.txBytes {
-					continue // new interface, or a counter reset — skip this cycle, not an error
-				}
-				rxRate := float64(cur.rxBytes-prev.rxBytes) / elapsed
-				txRate := float64(cur.txBytes-prev.txBytes) / elapsed
-				sink.Gauge("bitacora_net_rx_bytes_per_second", rxRate, collector.Labels{"interface": iface})
-				sink.Gauge("bitacora_net_tx_bytes_per_second", txRate, collector.Labels{"interface": iface})
-			}
-		}
+	for iface, cur := range counters {
+		sink.Counter("bitacora_net_rx_bytes_total", float64(cur.rxBytes), collector.Labels{"interface": iface})
+		sink.Counter("bitacora_net_tx_bytes_total", float64(cur.txBytes), collector.Labels{"interface": iface})
 	}
-
-	c.prevInts = counters
-	c.prevAt = now
 }
 
 // readProcNetDev parses /proc/net/dev's fixed column format: two header

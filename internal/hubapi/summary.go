@@ -18,6 +18,8 @@ import (
 
 	"github.com/prometheus/prometheus/model/labels"
 
+	"github.com/bitacora-dev/bitacora/internal/actionconfirm"
+	"github.com/bitacora-dev/bitacora/internal/hubauth"
 	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
 	"github.com/bitacora-dev/bitacora/internal/schema"
@@ -47,11 +49,20 @@ type LogQuerier interface {
 	Query(ctx context.Context, query logstore.Query) (logstore.Page, error)
 }
 
-// HumanSessions reports whether a request carries an authenticated human
-// session (ADR-0019). It is deliberately one method: hubapi must not depend
-// on how identity is established, only on whether it was.
-type HumanSessions interface {
+// HumanIdentityProvider is the human authentication boundary. Action
+// confirmation needs a verified identity, not merely a truthy session bit, so
+// audit records can bind the action to a real authenticated subject.
+type HumanIdentityProvider interface {
 	HasSession(r *http.Request) bool
+	Identity(r *http.Request) (hubauth.Identity, bool)
+}
+
+// ActionConfirmationService is the only route that can create a pending
+// package operation. It accepts no observed agent data and exposes no generic
+// command mechanism.
+type ActionConfirmationService interface {
+	Issue(ctx context.Context, input actionconfirm.IssueInput) (actionconfirm.IssuedToken, error)
+	Confirm(ctx context.Context, input actionconfirm.ConfirmInput) error
 }
 
 // InventoryGetter is the read side of storage.Relational that
@@ -90,7 +101,10 @@ type Server struct {
 	// Humans is the human authentication boundary of ADR-0019. Nil keeps the
 	// pre-OIDC behaviour exactly: the UI is served to anyone who reaches the
 	// origin and data routes rely on device tokens alone.
-	Humans HumanSessions
+	Humans HumanIdentityProvider
+	// Actions is nil by default, leaving package actions disabled. Production
+	// wires it only when human authentication is configured.
+	Actions ActionConfirmationService
 }
 
 // Handler returns the http.Handler serving /v1/summary (device-token
@@ -106,6 +120,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/hosts", s.handleHosts)
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/v1/devices/claim", s.handleDeviceClaim)
+	mux.HandleFunc("/v1/actions/package-operations/token", s.handleActionToken)
+	mux.HandleFunc("/v1/actions/package-operations/confirm", s.handleActionConfirmation)
 	if s.WebUI != nil {
 		// The UI is the surface ADR-0019 calls out: reaching the origin
 		// directly used to be enough to receive it. With OIDC configured it

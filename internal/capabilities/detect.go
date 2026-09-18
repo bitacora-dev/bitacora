@@ -388,16 +388,10 @@ func mdstatDevices(cfg Config) ([]string, bool) {
 		return nil, false
 	}
 
-	var devices []string
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "md") {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				devices = append(devices, fields[0])
-			}
-		}
+	arrays := ParseMDStat(data)
+	devices := make([]string, 0, len(arrays))
+	for _, array := range arrays {
+		devices = append(devices, array.Name)
 	}
 	return devices, len(devices) > 0
 }

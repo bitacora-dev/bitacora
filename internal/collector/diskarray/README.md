@@ -17,19 +17,22 @@ information UnRaid-style panels show.
   `/sys/block` and bitacora-smart's `DeviceLister` use) — leniently
   parsing only the couple of fields this needs out of smartctl's much
   larger real JSON schema.
-
-It doesn't try to know which disks belong to which named array (mdraid,
-SnapRAID, UnRaid array) — each disk is reported independently, identified
-by its own mountpoint and device.
+- Array membership is read from `/proc/mdstat` for mdraid and from
+  `snapraid.conf` for SnapRAID. Matching disk items gain `array_type`,
+  `array_level`, `array_member_count`, and `array_health`; disks outside an
+  array gain none of these attributes. mdraid health is `healthy` or
+  `degraded` from the kernel status. SnapRAID health is `unknown`, because
+  determining it would require running SnapRAID, which ADR-0012 forbids.
 
 `Requires()` returns nil: every real host has at least a root filesystem
 to report, so no capability gate is needed.
 
 ## What's NOT here
 
-- Array/pool membership (mdraid, ZFS pools, UnRaid's own array concept) —
-  deliberately out of scope; this reports individual mounted filesystems,
-  not how they're combined.
+- ZFS pools and UnRaid's own array concept. UnRaid remains out of scope until
+  its read-only `/proc/mdcmd` format is documented and can be mapped to the
+  mounted devices without invoking `mdcmd`; its capability is still detected
+  by `internal/capabilities`.
 - SMART health/temperature data itself — that already lives in
   bitacora-smart's own metrics; this only borrows its spool for
   model/serial identity.

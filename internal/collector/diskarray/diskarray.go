@@ -2,9 +2,9 @@
 // asks for: instead of one global percentage, one Inventory item per real
 // mounted filesystem — capacity/used/available via statfs, plus model and
 // serial number when a matching entry exists in bitacora-smart's spool
-// (ADR-0005). It doesn't try to know which disks belong to which named
-// array (mdraid, SnapRAID, UnRaid) — each disk is reported independently,
-// identified by its own mountpoint and device.
+// (ADR-0005). It also annotates mounted mdraid and SnapRAID members with
+// their read-only array topology, while continuing to report standalone
+// disks without synthetic array attributes.
 package diskarray
 
 import (
@@ -12,20 +12,24 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/spool"
 )
 
 const (
-	defaultMountsFile = "/proc/mounts"
-	defaultSpoolDir   = "/var/lib/bitacora/spool"
+	defaultMountsFile   = "/proc/mounts"
+	defaultSpoolDir     = "/var/lib/bitacora/spool"
+	defaultMDStatFile   = "/proc/mdstat"
+	defaultSnapraidConf = "/etc/snapraid.conf"
 )
 
 // pseudoFSTypes are never real disks worth reporting.
@@ -40,9 +44,11 @@ var pseudoFSTypes = map[string]bool{
 
 // Collector emits an Inventory of kind disk (ADR-0016).
 type Collector struct {
-	mountsFile string
-	spoolDir   string
-	hostID     string
+	mountsFile   string
+	spoolDir     string
+	mdstatFile   string
+	snapraidConf string
+	hostID       string
 }
 
 // New returns a collector with production defaults.
@@ -59,6 +65,8 @@ func (c *Collector) Requires() []collector.Capability { return nil }
 func (c *Collector) Init(ctx context.Context, cfg collector.Config, host *collector.HostInfo) error {
 	c.mountsFile = configuredPath(cfg, "mounts_file", defaultMountsFile)
 	c.spoolDir = configuredPath(cfg, "spool_dir", defaultSpoolDir)
+	c.mdstatFile = configuredPath(cfg, "mdstat_file", defaultMDStatFile)
+	c.snapraidConf = configuredPath(cfg, "snapraid_conf", defaultSnapraidConf)
 	if host != nil {
 		c.hostID = host.ID
 	}
@@ -78,6 +86,7 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 		mounts = nil
 	}
 	smart := c.readSMARTIdentities()
+	arrays := c.readArrayMembership(mounts)
 
 	items := make([]schema.InventoryItem, 0, len(mounts))
 	for _, m := range mounts {
@@ -97,6 +106,9 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 				attrs["serial"] = id.serial
 			}
 		}
+		for key, value := range arrays[m.device] {
+			attrs[key] = value
+		}
 
 		items = append(items, schema.InventoryItem{ID: m.mountpoint, Name: m.mountpoint, Attrs: attrs})
 	}
@@ -109,6 +121,52 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 		Items:      items,
 	})
 	return nil
+}
+
+func (c *Collector) readArrayMembership(mounts []mountEntry) map[string]schema.Labels {
+	membership := make(map[string]schema.Labels)
+	if data, err := os.ReadFile(c.mdstatFile); err == nil {
+		for _, array := range capabilities.ParseMDStat(data) {
+			membership["/dev/"+array.Name] = schema.Labels{
+				"array_type":         string(capabilities.StorageMdraid),
+				"array_level":        array.Level,
+				"array_member_count": strconv.Itoa(array.MemberCount),
+				"array_health":       map[bool]string{true: "degraded", false: "healthy"}[array.Degraded],
+			}
+		}
+	}
+
+	data, err := os.ReadFile(c.snapraidConf)
+	if err != nil {
+		return membership
+	}
+	snapraid := capabilities.ParseSnapraidConfig(data)
+	if len(snapraid.Locations) == 0 {
+		return membership
+	}
+	level := strconv.Itoa(snapraid.ParityDisks) + " parity disks"
+	for _, mount := range mounts {
+		if snapraidMountsAt(mount.mountpoint, snapraid.Locations) {
+			membership[mount.device] = schema.Labels{
+				"array_type":         string(capabilities.StorageSnapraid),
+				"array_level":        level,
+				"array_member_count": strconv.Itoa(len(snapraid.Locations)),
+				"array_health":       "unknown",
+			}
+		}
+	}
+	return membership
+}
+
+func snapraidMountsAt(mountpoint string, locations []string) bool {
+	mountpoint = filepath.Clean(mountpoint)
+	for _, location := range locations {
+		location = filepath.Clean(location)
+		if location == mountpoint || strings.HasPrefix(location, mountpoint+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Close implements collector.Collector.

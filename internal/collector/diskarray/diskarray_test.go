@@ -171,6 +171,98 @@ func TestCollector_NoSMARTSpoolStillReportsMounts(t *testing.T) {
 	}
 }
 
+func TestCollector_AnnotatesMDRAIDAndSnapRAIDMembers(t *testing.T) {
+	dir := t.TempDir()
+	rootMount := t.TempDir()
+	degradedMount := t.TempDir()
+	dataMount := t.TempDir()
+	parityMount := t.TempDir()
+	standaloneMount := t.TempDir()
+	mountsFile := filepath.Join(dir, "mounts")
+	mdstatFile := filepath.Join(dir, "mdstat")
+	snapraidConf := filepath.Join(dir, "snapraid.conf")
+	writeFile(t, mountsFile,
+		"/dev/md0 "+rootMount+" ext4 rw 0 0\n"+
+			"/dev/sdb1 "+dataMount+" ext4 rw 0 0\n"+
+			"/dev/sdc1 "+parityMount+" ext4 rw 0 0\n"+
+			"/dev/sdd1 "+standaloneMount+" ext4 rw 0 0\n"+
+			"/dev/md1 "+degradedMount+" ext4 rw 0 0\n")
+	writeFile(t, mdstatFile, `Personalities : [raid1] [raid5]
+md0 : active raid1 nvme0n1p2[0] nvme1n1p2[1]
+      976630336 blocks super 1.2 [2/2] [UU]
+md1 : active raid5 sda1[0] sdb1[1] sdc1[2](F)
+      3906762752 blocks super 1.2 level 5, 512k chunk, algorithm 2 [3/2] [UU_]
+unused devices: <none>
+`)
+	writeFile(t, snapraidConf, "# representative SnapRAID configuration\n"+
+		"parity "+parityMount+"/snapraid.parity\n"+
+		"parity 2 /mnt/second-parity/snapraid.parity\n"+
+		"data disk-a "+dataMount+"/\n"+
+		"data disk-b /mnt/second-data/\n")
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"mounts_file":   mountsFile,
+		"spool_dir":     filepath.Join(dir, "spool"),
+		"mdstat_file":   mdstatFile,
+		"snapraid_conf": snapraidConf,
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	items := sink.inventories[0].Items
+	byDevice := make(map[string]schema.Labels, len(items))
+	for _, item := range items {
+		byDevice[item.Attrs["device"]] = item.Attrs
+	}
+	if got := byDevice["/dev/md0"]; got["array_type"] != "storage.mdraid" || got["array_level"] != "raid1" || got["array_member_count"] != "2" || got["array_health"] != "healthy" {
+		t.Fatalf("unexpected healthy mdraid attrs: %+v", got)
+	}
+	if got := byDevice["/dev/md1"]; got["array_type"] != "storage.mdraid" || got["array_level"] != "raid5" || got["array_member_count"] != "3" || got["array_health"] != "degraded" {
+		t.Fatalf("unexpected degraded mdraid attrs: %+v", got)
+	}
+	for _, device := range []string{"/dev/sdb1", "/dev/sdc1"} {
+		got := byDevice[device]
+		if got["array_type"] != "storage.snapraid" || got["array_level"] != "2 parity disks" || got["array_member_count"] != "4" || got["array_health"] != "unknown" {
+			t.Fatalf("unexpected SnapRAID attrs for %s: %+v", device, got)
+		}
+	}
+	if got := byDevice["/dev/sdd1"]; got["array_type"] != "" || got["array_level"] != "" || got["array_member_count"] != "" || got["array_health"] != "" {
+		t.Fatalf("standalone disk gained array attrs: %+v", got)
+	}
+}
+
+func TestCollector_MissingArraySourcesStillReportsMounts(t *testing.T) {
+	dir := t.TempDir()
+	mount := t.TempDir()
+	mountsFile := filepath.Join(dir, "mounts")
+	writeFile(t, mountsFile, "/dev/sdz1 "+mount+" ext4 rw 0 0\n")
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"mounts_file":   mountsFile,
+		"spool_dir":     filepath.Join(dir, "spool"),
+		"mdstat_file":   filepath.Join(dir, "missing-mdstat"),
+		"snapraid_conf": filepath.Join(dir, "missing-snapraid.conf"),
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sink.inventories) != 1 || len(sink.inventories[0].Items) != 1 {
+		t.Fatalf("expected disk inventory despite missing array sources, got %+v", sink.inventories)
+	}
+	if attrs := sink.inventories[0].Items[0].Attrs; attrs["array_type"] != "" {
+		t.Fatalf("missing sources must not add array attrs: %+v", attrs)
+	}
+}
+
 func TestCollector_MissingMountsFileYieldsEmptySnapshotNotError(t *testing.T) {
 	dir := t.TempDir()
 	c := New()

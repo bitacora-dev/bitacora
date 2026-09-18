@@ -1,7 +1,8 @@
 # ADR-0012: Sistema de solo lectura
 
-- **Estado:** Aceptado
+- **Estado:** Aceptado parcialmente sustituido por ADR-0022
 - **Fecha:** 2026-08-28
+- **Sustituido parcialmente por:** [ADR-0022: Actualizaciones de paquetes con confirmación humana](0022-actualizaciones-con-confirmacion-humana.md), solo para `refresh-package-cache` y `apply-pending-package-updates` con sus salvaguardas.
 
 ## Contexto
 

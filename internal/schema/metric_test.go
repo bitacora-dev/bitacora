@@ -114,3 +114,19 @@ func TestMetric_ValidateRejectsMissingTimestamp(t *testing.T) {
 		t.Fatal("expected error for missing timestamp")
 	}
 }
+
+// TestMetric_ValidateAcceptsNetworkBytesTotalName guards against the class
+// of bug that shipped the network collector's traffic metrics under names
+// like "bitacora_net_rx_bytes_per_second": that suffix matches none of
+// allowedUnitSuffixes, so every sample was silently rejected by Validate
+// and never reached storage. The collector's own tests never caught it
+// because they use a fake sink that never calls Validate — this test
+// exercises the real naming contract directly, against the exact name the
+// network collector now emits.
+func TestMetric_ValidateAcceptsNetworkBytesTotalName(t *testing.T) {
+	m := validMetric()
+	m.Name = "bitacora_net_rx_bytes_total"
+	if err := m.Validate(); err != nil {
+		t.Fatalf("expected bitacora_net_rx_bytes_total to satisfy the naming contract, got %v", err)
+	}
+}

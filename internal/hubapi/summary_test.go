@@ -181,23 +181,27 @@ func TestHandleSummary_FiltersCPUToTotalSeries(t *testing.T) {
 	}
 }
 
-func TestHandleSummary_AggregatesNetworkInterfacesAndExcludesLoopback(t *testing.T) {
+// TestHandleSummary_DerivesNetworkRateFromCumulativeCounters feeds the
+// endpoint raw cumulative counters (what the network collector now emits)
+// and asserts it returns a per-second rate: one host-level point per
+// timestamp, summed across interfaces, with loopback excluded.
+func TestHandleSummary_DerivesNetworkRateFromCumulativeCounters(t *testing.T) {
 	first := time.Now().Add(-time.Second).UTC()
 	second := first.Add(time.Second)
 	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
-		"bitacora_net_rx_bytes_per_second": {
-			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: first, Value: 100},
-			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: first, Value: 25},
-			{Labels: map[string]string{"host_id": "host-a", "interface": "lo"}, Timestamp: first, Value: 999},
-			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: second, Value: 140},
-			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: second, Value: 30},
+		"bitacora_net_rx_bytes_total": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: first, Value: 1000},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: first, Value: 500},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "lo"}, Timestamp: first, Value: 999999},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: second, Value: 1100},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: second, Value: 530},
 		},
-		"bitacora_net_tx_bytes_per_second": {
-			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: first, Value: 50},
-			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: first, Value: 10},
-			{Labels: map[string]string{"host_id": "host-a", "interface": "lo"}, Timestamp: first, Value: 999},
-			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: second, Value: 70},
-			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: second, Value: 15},
+		"bitacora_net_tx_bytes_total": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: first, Value: 200},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: first, Value: 100},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "lo"}, Timestamp: first, Value: 999999},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: second, Value: 270},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: second, Value: 115},
 		},
 	}}
 	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
@@ -211,11 +215,99 @@ func TestHandleSummary_AggregatesNetworkInterfacesAndExcludesLoopback(t *testing
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decoding response: %v", err)
 	}
-	if len(got.NetworkRXBytesPerSecond) != 2 || got.NetworkRXBytesPerSecond[0].Value != 125 || got.NetworkRXBytesPerSecond[1].Value != 170 {
-		t.Fatalf("expected two aggregated receive points without loopback, got %+v", got.NetworkRXBytesPerSecond)
+	// Only the second point yields a rate: rateSeries needs a predecessor
+	// to differentiate against, so the first sample of each interface's
+	// series produces no point at all (not a zero point).
+	if len(got.NetworkRXBytesPerSecond) != 1 || got.NetworkRXBytesPerSecond[0].Value != 130 {
+		t.Fatalf("expected one rx rate point summing both interfaces (100+30=130), got %+v", got.NetworkRXBytesPerSecond)
 	}
-	if len(got.NetworkTXBytesPerSecond) != 2 || got.NetworkTXBytesPerSecond[0].Value != 60 || got.NetworkTXBytesPerSecond[1].Value != 85 {
-		t.Fatalf("expected two aggregated transmit points without loopback, got %+v", got.NetworkTXBytesPerSecond)
+	if len(got.NetworkTXBytesPerSecond) != 1 || got.NetworkTXBytesPerSecond[0].Value != 85 {
+		t.Fatalf("expected one tx rate point summing both interfaces (70+15=85), got %+v", got.NetworkTXBytesPerSecond)
+	}
+}
+
+// TestHandleSummary_NetworkRateSumsMultipleActiveInterfaces asserts the
+// returned rate for a timestamp with several active interfaces is the sum
+// of each interface's own rate, not a rate computed over their summed
+// counters (that ordering is exactly what rateSeries's doc comment warns
+// against).
+func TestHandleSummary_NetworkRateSumsMultipleActiveInterfaces(t *testing.T) {
+	t0 := time.Now().Add(-2 * time.Second).UTC()
+	t1 := t0.Add(time.Second)
+	t2 := t1.Add(time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_net_rx_bytes_total": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t0, Value: 0},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t1, Value: 100},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t2, Value: 200},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: t0, Value: 0},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: t1, Value: 40},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: t2, Value: 90},
+		},
+		"bitacora_net_tx_bytes_total": {},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.NetworkRXBytesPerSecond) != 2 {
+		t.Fatalf("expected two rate points (t1, t2), got %+v", got.NetworkRXBytesPerSecond)
+	}
+	// t1: eth0 (0->100)/1s=100, wlan0 (0->40)/1s=40 => 140
+	if got.NetworkRXBytesPerSecond[0].Value != 140 {
+		t.Fatalf("expected first point to sum both interfaces' rates (100+40=140), got %v", got.NetworkRXBytesPerSecond[0].Value)
+	}
+	// t2: eth0 (100->200)/1s=100, wlan0 (40->90)/1s=50 => 150
+	if got.NetworkRXBytesPerSecond[1].Value != 150 {
+		t.Fatalf("expected second point to sum both interfaces' rates (100+50=150), got %v", got.NetworkRXBytesPerSecond[1].Value)
+	}
+}
+
+// TestHandleSummary_NetworkRateSkipsCounterReset asserts a sample lower
+// than its predecessor (a counter reset from a reboot or interface reset)
+// is skipped rather than producing a negative or absurdly large rate.
+func TestHandleSummary_NetworkRateSkipsCounterReset(t *testing.T) {
+	t0 := time.Now().Add(-2 * time.Second).UTC()
+	t1 := t0.Add(time.Second)
+	t2 := t1.Add(time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_net_rx_bytes_total": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t0, Value: 5000},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t1, Value: 100}, // reset
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t2, Value: 300},
+		},
+		"bitacora_net_tx_bytes_total": {},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	// The t0->t1 pair is a reset and must be skipped entirely; only the
+	// t1->t2 pair (100->300, 1s) survives, as a normal +200 B/s rate.
+	if len(got.NetworkRXBytesPerSecond) != 1 {
+		t.Fatalf("expected only the post-reset pair to produce a point, got %+v", got.NetworkRXBytesPerSecond)
+	}
+	if got.NetworkRXBytesPerSecond[0].Value != 200 {
+		t.Fatalf("expected the surviving point to be a normal +200 B/s rate, got %v", got.NetworkRXBytesPerSecond[0].Value)
+	}
+	for _, p := range got.NetworkRXBytesPerSecond {
+		if p.Value < 0 {
+			t.Fatalf("expected no negative rate from a counter reset, got %+v", got.NetworkRXBytesPerSecond)
+		}
 	}
 }
 

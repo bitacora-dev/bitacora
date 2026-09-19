@@ -34,12 +34,93 @@ func sampleEvent(id string, ts time.Time, hostID string) schema.Event {
 	}
 }
 
+func sampleRunningJob(id string, startedAt time.Time, hostID string) schema.Job {
+	return schema.Job{
+		ID:        id,
+		JobName:   "nightly-backup",
+		HostID:    hostID,
+		StartedAt: startedAt,
+		Status:    schema.JobRunning,
+		Schema:    schema.CurrentSchemaVersion,
+	}
+}
+
 // runConformanceTests exercises the Relational contract itself, so every
 // backend is held to exactly the same behavior (ADR-0003: "misma
 // interfaz... cobertura en CI equivalente"). newStore must return a fresh,
 // empty store — sqlite_test.go and postgres_test.go each supply their own
 // way of getting one.
 func runConformanceTests(t *testing.T, newStore func(t *testing.T) Relational) {
+	t.Run("JobLifecycleAndIncrementalOutput", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		startedAt := time.Date(2026, 9, 19, 1, 5, 12, 0, time.UTC)
+		running := sampleRunningJob("job-live", startedAt, "host-a")
+		if err := s.CreateJob(ctx, running); err != nil {
+			t.Fatalf("creating running job: %v", err)
+		}
+
+		got, ok, err := s.GetJob(ctx, "host-a", running.ID)
+		if err != nil || !ok {
+			t.Fatalf("getting running job: job=%+v ok=%t err=%v", got, ok, err)
+		}
+		if got.Status != schema.JobRunning || !got.FinishedAt.IsZero() {
+			t.Fatalf("unexpected running job: %+v", got)
+		}
+
+		for _, line := range []schema.JobOutputLine{
+			{JobID: running.ID, Sequence: 1, TS: startedAt, Stream: "stdout", Message: "started"},
+			{JobID: running.ID, Sequence: 2, TS: startedAt.Add(time.Second), Stream: "stderr", Message: "progress"},
+		} {
+			if err := s.AppendJobOutput(ctx, "host-a", line); err != nil {
+				t.Fatalf("appending output: %v", err)
+			}
+		}
+
+		first, next, err := s.ListJobOutput(ctx, "host-a", running.ID, 0, 1)
+		if err != nil || len(first) != 1 || first[0].Sequence != 1 || next != 1 {
+			t.Fatalf("first output page=%+v next=%d err=%v", first, next, err)
+		}
+		second, next, err := s.ListJobOutput(ctx, "host-a", running.ID, next, 10)
+		if err != nil || len(second) != 1 || second[0].Sequence != 2 || next != 2 {
+			t.Fatalf("incremental output page=%+v next=%d err=%v", second, next, err)
+		}
+
+		finished := running
+		finished.Status = schema.JobSuccess
+		finished.FinishedAt = startedAt.Add(2 * time.Minute)
+		finished.DurationSecond = 120
+		if err := s.FinishJob(ctx, finished); err != nil {
+			t.Fatalf("finishing job: %v", err)
+		}
+		if err := s.AppendJobOutput(ctx, "host-a", schema.JobOutputLine{JobID: running.ID, Sequence: 3, TS: finished.FinishedAt, Stream: "stdout", Message: "late"}); err == nil {
+			t.Fatal("expected output after terminal transition to be rejected")
+		}
+		if err := s.FinishJob(ctx, finished); err != nil {
+			t.Fatalf("replaying same terminal result must be idempotent: %v", err)
+		}
+		changed := finished
+		changed.Status = schema.JobFailed
+		if err := s.FinishJob(ctx, changed); err == nil {
+			t.Fatal("expected a different terminal result to be rejected")
+		}
+	})
+
+	t.Run("InsertJobKeepsHistoricalTerminalCompatibility", func(t *testing.T) {
+		s := newStore(t)
+		startedAt := time.Date(2026, 9, 19, 2, 0, 0, 0, time.UTC)
+		job := sampleRunningJob("historical-job", startedAt, "host-a")
+		job.Status = schema.JobSuccess
+		job.FinishedAt = startedAt.Add(time.Minute)
+		job.DurationSecond = 60
+		if err := s.InsertJob(context.Background(), job); err != nil {
+			t.Fatalf("inserting historical terminal job: %v", err)
+		}
+		got, ok, err := s.GetJob(context.Background(), "host-a", job.ID)
+		if err != nil || !ok || got.Status != schema.JobSuccess {
+			t.Fatalf("historical job was not persisted: job=%+v ok=%t err=%v", got, ok, err)
+		}
+	})
 	t.Run("InsertAndListEvents", func(t *testing.T) {
 		s := newStore(t)
 		ctx := context.Background()

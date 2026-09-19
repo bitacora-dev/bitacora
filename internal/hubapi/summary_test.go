@@ -50,6 +50,27 @@ type fakeEvents struct {
 
 type fakeLogs struct{ entries []logstore.Entry }
 
+type fakeJobPoller struct {
+	job   schema.Job
+	lines []schema.JobOutputLine
+}
+
+func (f *fakeJobPoller) GetJob(_ context.Context, hostID, jobID string) (schema.Job, bool, error) {
+	return f.job, f.job.ID == jobID && f.job.HostID == hostID, nil
+}
+
+func (f *fakeJobPoller) ListJobOutput(_ context.Context, hostID, jobID string, after int64, limit int) ([]schema.JobOutputLine, int64, error) {
+	var out []schema.JobOutputLine
+	next := after
+	for _, line := range f.lines {
+		if f.job.HostID == hostID && line.JobID == jobID && line.Sequence > after && len(out) < limit {
+			out = append(out, line)
+			next = line.Sequence
+		}
+	}
+	return out, next, nil
+}
+
 func (f *fakeLogs) Query(_ context.Context, q logstore.Query) (logstore.Page, error) {
 	var matches []logstore.Entry
 	for _, entry := range f.entries {
@@ -506,6 +527,24 @@ func TestHandleLogs_EmptyAndInvalidRequests(t *testing.T) {
 				t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandleJobPoll_ReturnsSnapshotAndIncrementalOutput(t *testing.T) {
+	started := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	poller := &fakeJobPoller{job: schema.Job{ID: "job-1", JobName: "backup", HostID: "host-a", StartedAt: started, Status: schema.JobRunning, Schema: 1}, lines: []schema.JobOutputLine{{JobID: "job-1", Sequence: 1, TS: started, Stream: "stdout", Message: "one"}, {JobID: "job-1", Sequence: 2, TS: started.Add(time.Second), Stream: "stderr", Message: "two"}}}
+	srv := &Server{JobPoller: poller}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1?host_id=host-a&after=1&limit=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got JobPoll
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Job.ID != "job-1" || got.NextAfter != 2 || len(got.Lines) != 1 || got.Lines[0].Message != "two" || got.Complete {
+		t.Fatalf("unexpected poll result: %+v", got)
 	}
 }
 

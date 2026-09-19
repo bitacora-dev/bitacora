@@ -118,6 +118,7 @@ export const es: Dictionary = {
   eventsEmptyHeading: "Sin eventos recientes",
   eventsEmptyBody:
     "En esta instalación lo normal es que el panel permanezca vacío hasta que un colector emita un hecho relevante. La ausencia de filas aquí significa que no se han recibido eventos en la ventana actual.",
+  eventDetails: "Detalles",
   eventsHistoryButton: "Ver historial",
   dashboardButton: "Volver al resumen",
   eventsHistoryHeading: "Historial de eventos",

@@ -105,6 +105,7 @@ export interface Dictionary {
   eventsHeading: (minutes: number) => string;
   eventsEmptyHeading: string;
   eventsEmptyBody: string;
+  eventDetails: string;
   eventsHistoryButton: string;
   dashboardButton: string;
   eventsHistoryHeading: string;

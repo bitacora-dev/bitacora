@@ -118,6 +118,7 @@ export const en: Dictionary = {
   eventsEmptyHeading: "No recent events",
   eventsEmptyBody:
     "On this installation the panel normally stays empty until a collector emits a relevant fact. No rows here means no events were received in the current window.",
+  eventDetails: "Details",
   eventsHistoryButton: "View history",
   dashboardButton: "Back to summary",
   eventsHistoryHeading: "Event history",

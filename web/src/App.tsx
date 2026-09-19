@@ -119,6 +119,7 @@ export default function App() {
     ]);
     setDisks(nextDisks);
     setUpdates(nextUpdates);
+    return nextUpdates;
   }, [hostID]);
 
   const copyHostID = async () => {

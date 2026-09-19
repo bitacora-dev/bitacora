@@ -36,6 +36,8 @@ import (
 const (
 	defaultDpkgStatus       = "/var/lib/dpkg/status"
 	defaultAptListsDir      = "/var/lib/apt/lists"
+	defaultAptSourcesList   = "/etc/apt/sources.list"
+	defaultAptSourcesDir    = "/etc/apt/sources.list.d"
 	defaultSpoolDir         = "/var/lib/bitacora/spool"
 	defaultUnraidPluginsDir = "/boot/config/plugins"
 )
@@ -44,6 +46,8 @@ const (
 type Collector struct {
 	dpkgStatus        string
 	aptListsDir       string
+	aptSourcesList    string
+	aptSourcesDir     string
 	spoolDir          string
 	unraidPluginsDir  string
 	dockerMetadataURL string
@@ -87,6 +91,19 @@ func (c *Collector) Requires() []collector.Capability { return nil }
 func (c *Collector) Init(ctx context.Context, cfg collector.Config, host *collector.HostInfo) error {
 	c.dpkgStatus = configuredPath(cfg, "dpkg_status", defaultDpkgStatus)
 	c.aptListsDir = configuredPath(cfg, "apt_lists_dir", defaultAptListsDir)
+	c.aptSourcesList = configuredPath(cfg, "apt_sources_list", defaultAptSourcesList)
+	c.aptSourcesDir = configuredPath(cfg, "apt_sources_dir", defaultAptSourcesDir)
+	// A caller overriding only the lists directory (the existing test and
+	// embedding contract) has not supplied a matching APT root. Keep the
+	// cache-only behavior in that case rather than accidentally reading the
+	// machine's /etc/apt configuration against a synthetic cache directory.
+	if _, listsOverridden := cfg["apt_lists_dir"]; listsOverridden {
+		_, sourcesListOverridden := cfg["apt_sources_list"]
+		_, sourcesDirOverridden := cfg["apt_sources_dir"]
+		if !sourcesListOverridden && !sourcesDirOverridden {
+			c.aptSourcesList, c.aptSourcesDir = "", ""
+		}
+	}
 	c.spoolDir = configuredPath(cfg, "spool_dir", defaultSpoolDir)
 	c.unraidPluginsDir = configuredPath(cfg, "unraid_plugins_dir", defaultUnraidPluginsDir)
 	if v, ok := cfg["docker_socket_proxy_url"].(string); ok {
@@ -108,7 +125,7 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 
 	now := time.Now()
 	var items []schema.InventoryItem
-	items = append(items, aptItems(c.dpkgStatus, c.aptListsDir, now)...)
+	items = append(items, aptItemsForSources(c.dpkgStatus, c.aptListsDir, c.aptSourcesList, c.aptSourcesDir, now)...)
 	items = append(items, dnfItems(c.spoolDir)...)
 	items = append(items, unraidItems(ctx, c.unraidPluginsDir, c.httpClient)...)
 	items = append(items, dockerItems(ctx, c.dockerMetadataURL, c.registry)...)

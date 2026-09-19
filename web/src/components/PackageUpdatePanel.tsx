@@ -5,13 +5,13 @@ import { useTranslation } from "../i18n";
 const POLL_INTERVAL_MS = 3_000;
 const DEFAULT_MAX_CACHE_AGE_SECONDS = 24 * 60 * 60;
 
-type Phase = "idle" | "confirming" | "pending" | "running" | "failed" | "refreshed" | "complete";
+type Phase = "idle" | "confirming" | "pending" | "running" | "failed" | "refreshed" | "refresh_still_stale" | "complete";
 
 interface Props {
   hostID: string;
   inventory: Inventory | null;
   secondFactorAvailable: boolean;
-  onRefreshInventory: () => Promise<void>;
+  onRefreshInventory: () => Promise<Inventory | null>;
 }
 
 function actionMetadata(inventory: Inventory | null) {
@@ -22,6 +22,22 @@ function cacheAge(inventory: Inventory | null) {
   const value = inventory?.items.find((item) => item.attrs.cache_age_seconds !== undefined)?.attrs.cache_age_seconds;
   const age = Number(value);
   return Number.isFinite(age) && age >= 0 ? age : null;
+}
+
+// A successful apt update can still leave one active source stale (for
+// example, a repository that failed during a partial update). Return to the
+// recoverable state so the stale explanation and refresh action remain
+// available; never silently strand the operator in a success notice.
+export function phaseAfterSuccessfulCacheRefresh(inventory: Inventory | null, maxAge: number): Phase {
+  const age = cacheAge(inventory);
+  return age !== null && age > maxAge ? "refresh_still_stale" : "refreshed";
+}
+
+export function packageActionVisibility(canRefresh: boolean, canApply: boolean, stale: boolean, phase: Phase) {
+  return {
+    showApply: canApply && !stale && (phase === "idle" || phase === "refreshed"),
+    showRefresh: canRefresh && stale && (phase === "idle" || phase === "refresh_still_stale"),
+  };
 }
 
 export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvailable, onRefreshInventory }: Props) {
@@ -55,8 +71,8 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
         }
         if (result.job.status === "success") {
           if (operation === "REFRESH_PACKAGE_CACHE") {
-            await onRefreshInventory();
-            if (!cancelled) setPhase("refreshed");
+            const refreshedInventory = await onRefreshInventory();
+            if (!cancelled) setPhase(phaseAfterSuccessfulCacheRefresh(refreshedInventory, maxAge));
           } else if (!cancelled) {
             setPhase("complete");
           }
@@ -73,7 +89,7 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
     poll();
     const id = window.setInterval(poll, POLL_INTERVAL_MS);
     return () => { cancelled = true; window.clearInterval(id); };
-  }, [hostID, issued, operation, onRefreshInventory, phase, t.packageActionFailed]);
+  }, [hostID, issued, maxAge, operation, onRefreshInventory, phase, t.packageActionFailed]);
 
   const begin = async (next: PackageOperation) => {
     setError(null);
@@ -100,8 +116,7 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
     }
   };
 
-  const showApply = canApply && !stale && (phase === "idle" || phase === "refreshed");
-  const showRefresh = canRefresh && stale && phase === "idle";
+  const { showApply, showRefresh } = packageActionVisibility(canRefresh, canApply, stale, phase);
 
   return (
     <article className="control-panel package-update-panel">
@@ -115,6 +130,7 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
       {phase === "confirming" && operation && <section className="action-confirmation" aria-labelledby="action-confirmation-heading"><h3 id="action-confirmation-heading">{t.actionConfirmHeading}</h3><dl><div><dt>{t.actionHost}</dt><dd>{hostID}</dd></div><div><dt>{t.actionOperation}</dt><dd>{t.packageOperation(operation)}</dd></div><div><dt>{t.actionReason}</dt><dd>{stale ? t.actionReasonStaleCache : t.actionReasonApply}</dd></div><div><dt>{t.actionSnapshot}</dt><dd>{t.actionSnapshotCount(packageItems.length)}</dd></div><div><dt>{t.actionConsequences}</dt><dd>{operation === "REFRESH_PACKAGE_CACHE" ? t.refreshConsequences : t.applyConsequences}</dd></div></dl><div className="action-confirmation-controls"><button type="button" className="link-button" onClick={() => setPhase("idle")}>{t.actionCancel}</button><button type="button" className="primary-button package-action-button" onClick={confirm}>{t.actionConfirm}</button></div></section>}
       {(phase === "pending" || phase === "running") && <section className="action-progress" aria-live="polite"><strong>{phase === "pending" ? t.actionPending : t.actionRunning}</strong><p>{phase === "pending" ? t.actionPendingBody : t.actionRunningBody}</p>{lines.length > 0 && <pre>{lines.map((line) => line.message).join("\n")}</pre>}</section>}
       {phase === "refreshed" && <p className="action-notice">{t.refreshCompletedReviewPlan}</p>}
+      {phase === "refresh_still_stale" && <section className="action-notice" aria-live="polite">{t.refreshCompletedStillStale}</section>}
       {phase === "complete" && <p className="action-notice">{t.packageActionComplete}</p>}
       {phase === "failed" && <section className="error-panel" aria-live="assertive"><strong>{t.packageActionFailed}</strong>{error && <pre>{error}</pre>}{lines.length > 0 && <pre>{lines.map((line) => line.message).join("\n")}</pre>}</section>}
     </article>

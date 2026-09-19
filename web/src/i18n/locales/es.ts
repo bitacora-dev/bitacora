@@ -83,6 +83,7 @@ export const es: Dictionary = {
   actionRunning: "Operación en curso",
   actionRunningBody: "El host ha informado de que la operación está en curso.",
   refreshCompletedReviewPlan: "Caché refrescada. Revisa el plan actualizado y confírmalo de nuevo para aplicar.",
+  refreshCompletedStillStale: "El refresco terminó, pero al menos una fuente APT configurada sigue desactualizada (por ejemplo, por un refresco parcial o un fallo del servidor de la fuente). Aplicar actualizaciones continúa bloqueado. Reintenta el refresco después de resolver esa fuente.",
   packageActionComplete: "Operación completada correctamente.",
   packageActionFailed: "La operación falló",
   packageOperation: (operation) => operation === "REFRESH_PACKAGE_CACHE" ? "Refrescar caché de paquetes" : "Aplicar actualizaciones pendientes",

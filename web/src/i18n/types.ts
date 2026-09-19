@@ -87,6 +87,7 @@ export interface Dictionary {
   actionRunning: string;
   actionRunningBody: string;
   refreshCompletedReviewPlan: string;
+  refreshCompletedStillStale: string;
   packageActionComplete: string;
   packageActionFailed: string;
   packageOperation: (operation: "REFRESH_PACKAGE_CACHE" | "APPLY_PENDING_PACKAGE_UPDATES") => string;

@@ -3,6 +3,7 @@ package pkgupdates
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -127,6 +128,83 @@ func TestAptItems_ReportsCacheAge(t *testing.T) {
 	ageStr := items[0].Attrs["cache_age_seconds"]
 	if ageStr == "" {
 		t.Fatal("expected cache_age_seconds to be set")
+	}
+}
+
+func TestAptItemsForSources_IgnoresOldOrphanedListAlongsideFreshActiveList(t *testing.T) {
+	dir := t.TempDir()
+	dpkgStatus := filepath.Join(dir, "status")
+	listsDir := filepath.Join(dir, "lists")
+	sourcesList := filepath.Join(dir, "sources.list")
+	writeFile(t, dpkgStatus, "Package: bash\nStatus: install ok installed\nVersion: 1.0\n\n")
+	writeFile(t, sourcesList, "deb http://active.example/apt stable main\n")
+	active := filepath.Join(listsDir, "active.example_apt_dists_stable_main_binary-amd64_Packages")
+	writeFile(t, active, "Package: bash\nVersion: 2.0\n")
+	orphan := filepath.Join(listsDir, "old.example_apt_dists_stable_main_binary-amd64_Packages")
+	writeFile(t, orphan, "Package: bash\nVersion: 99.0\n")
+
+	now := time.Now()
+	fresh := now.Add(-time.Hour)
+	old := now.Add(-72 * time.Hour)
+	if err := os.Chtimes(active, fresh, fresh); err != nil {
+		t.Fatalf("setting active list time: %v", err)
+	}
+	if err := os.Chtimes(orphan, old, old); err != nil {
+		t.Fatalf("setting orphan list time: %v", err)
+	}
+
+	items := aptItemsForSources(dpkgStatus, listsDir, sourcesList, filepath.Join(dir, "sources.list.d"), now)
+	if len(items) != 1 {
+		t.Fatalf("expected one active-source update, got %+v", items)
+	}
+	if got := items[0].Attrs["candidate_version"]; got != "2.0" {
+		t.Fatalf("candidate included orphaned list: got %q, want 2.0", got)
+	}
+	age, err := strconv.ParseFloat(items[0].Attrs["cache_age_seconds"], 64)
+	if err != nil {
+		t.Fatalf("parsing cache age: %v", err)
+	}
+	if age > 2*60*60 {
+		t.Fatalf("orphaned list made active cache stale: got %.0f seconds", age)
+	}
+}
+
+func TestAptItemsForSources_ActiveOldSourceKeepsCacheAgeStale(t *testing.T) {
+	dir := t.TempDir()
+	dpkgStatus := filepath.Join(dir, "status")
+	listsDir := filepath.Join(dir, "lists")
+	sourcesList := filepath.Join(dir, "sources.list")
+	sourcesDir := filepath.Join(dir, "sources.list.d")
+	writeFile(t, dpkgStatus, "Package: bash\nStatus: install ok installed\nVersion: 1.0\n\n")
+	writeFile(t, sourcesList, "# old source is intentionally still enabled\ndeb http://fresh.example/apt stable main\n")
+	writeFile(t, filepath.Join(sourcesDir, "old.sources"), "Types: deb deb-src\nURIs: http://old.example/apt\nSuites: stable\nComponents: main\nEnabled: yes\n\n")
+	writeFile(t, filepath.Join(sourcesDir, "disabled.sources"), "Types: deb\nURIs: http://disabled.example/apt\nSuites: stable\nComponents: main\nEnabled: no\n\n")
+	fresh := filepath.Join(listsDir, "fresh.example_apt_dists_stable_main_binary-amd64_Packages")
+	old := filepath.Join(listsDir, "old.example_apt_dists_stable_main_binary-amd64_Packages")
+	disabled := filepath.Join(listsDir, "disabled.example_apt_dists_stable_main_binary-amd64_Packages")
+	writeFile(t, fresh, "Package: bash\nVersion: 2.0\n")
+	writeFile(t, old, "Package: ignored-package\nVersion: 2.0\n")
+	writeFile(t, disabled, "Package: bash\nVersion: 99.0\n")
+
+	now := time.Now()
+	freshTime := now.Add(-time.Hour)
+	oldTime := now.Add(-48 * time.Hour)
+	for path, timestamp := range map[string]time.Time{fresh: freshTime, old: oldTime, disabled: now.Add(-96 * time.Hour)} {
+		if err := os.Chtimes(path, timestamp, timestamp); err != nil {
+			t.Fatalf("setting list time for %s: %v", path, err)
+		}
+	}
+
+	items := aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir, now)
+	if len(items) != 1 || items[0].Attrs["candidate_version"] != "2.0" {
+		t.Fatalf("expected only fresh source candidate, got %+v", items)
+	}
+	age, err := strconv.ParseFloat(items[0].Attrs["cache_age_seconds"], 64)
+	if err != nil {
+		t.Fatalf("parsing cache age: %v", err)
+	}
+	if age < 47*60*60 {
+		t.Fatalf("active old source was not retained in cache age: got %.0f seconds", age)
 	}
 }
 

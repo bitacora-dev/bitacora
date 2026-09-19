@@ -148,7 +148,17 @@ func buildRegistry(actionLists ...agentactions.Allowlist) collector.Registry {
 	}
 	reg.Register(cpu.New(), 10*time.Second, 5*time.Second)
 	reg.Register(memory.New(), 10*time.Second, 5*time.Second)
-	reg.Register(network.New(), 30*time.Second, 10*time.Second)
+	// network runs at the same 10s cadence as cpu and memory, not the 30s
+	// it used to: the traffic panel derives a rate from consecutive
+	// samples, so a third of the resolution meant a third of the detail
+	// and, over a 15-minute window, fewer samples than the frontend chart
+	// needs to draw a line instead of loose dots. The extra cost is a
+	// second /proc/net/dev read, and it is more than paid back by only
+	// reporting device-backed interfaces now (two on a typical Docker
+	// host, not nineteen): fewer metrics per cycle than before even at
+	// three times the frequency. The VPN inventory in the same collector
+	// keeps its own 30s cadence — see vpnReportInterval.
+	reg.Register(network.New(), 10*time.Second, 5*time.Second)
 	reg.Register(docker.New(), 30*time.Second, 10*time.Second)
 	reg.Register(journald.New(), 10*time.Second, 5*time.Second)
 	reg.Register(publicsurface.New(), 5*time.Minute, 30*time.Second)

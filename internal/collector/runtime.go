@@ -141,6 +141,11 @@ func (r *Runtime) collectOnce(ctx context.Context, c Collector, timeout time.Dur
 	collectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// The cycle's instant is taken here, once, before the collector runs, so
+	// everything it emits shares it — see CycleSink. It comes from the
+	// injected Clock (ADR-0007), never time.Now().
+	sink := r.cycleSink()
+
 	done := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -148,7 +153,7 @@ func (r *Runtime) collectOnce(ctx context.Context, c Collector, timeout time.Dur
 				done <- fmt.Errorf("panic in collector: %v", p)
 			}
 		}()
-		done <- c.Collect(collectCtx, r.Sink)
+		done <- c.Collect(collectCtx, sink)
 	}()
 
 	select {
@@ -157,6 +162,21 @@ func (r *Runtime) collectOnce(ctx context.Context, c Collector, timeout time.Dur
 	case <-collectCtx.Done():
 		return collectCtx.Err(), true
 	}
+}
+
+// cycleSink resolves the Sink handed to one Collect call. A Sink that
+// implements CycleSink gets a fresh per-cycle view stamped with a single
+// instant; any other Sink (test fakes, simple recorders) is passed through
+// untouched, so this stays a capability rather than a contract change.
+func (r *Runtime) cycleSink() Sink {
+	cycle, ok := r.Sink.(CycleSink)
+	if !ok || r.Clock == nil {
+		return r.Sink
+	}
+	if scoped := cycle.BeginCycle(r.Clock.Now()); scoped != nil {
+		return scoped
+	}
+	return r.Sink
 }
 
 func (r *Runtime) reportError(name string, err error) {

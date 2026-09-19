@@ -1,13 +1,12 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
-	"github.com/bitacora-dev/bitacora/internal/collector"
 	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
@@ -103,22 +102,8 @@ func TestParseConfig_RejectsHubURLWithoutTokenSource(t *testing.T) {
 
 func TestBuildRegistryIncludesProductionCollectors(t *testing.T) {
 	reg := buildRegistry()
-	regs, disabled := reg.Resolve(context.Background(), collector.Config{}, &collector.HostInfo{}, map[collector.Capability]bool{})
-
-	names := map[string]bool{}
-	for _, reg := range regs {
-		names[reg.Collector.Name()] = true
-	}
-	for _, disabled := range disabled {
-		names[disabled.Name] = true
-	}
-
-	for _, name := range []string{"cpu", "memory", "docker", "journald"} {
-		if !names[name] {
-			t.Fatalf("expected production collector %q to be assembled in bitacora-agent registry; got %v", name, names)
-		}
-	}
-	if names["example"] {
-		t.Fatal("example collector must not be assembled in the production agent registry by default")
+	want := []string{"cpu", "diskarray", "docker", "hwidentity", "journald", "memory", "network", "operations", "package-actions", "pkgupdates", "public_surface", "shares", "shareusage", "ups", "users"}
+	if got := reg.Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected production collector catalog: got %v, want %v", got, want)
 	}
 }

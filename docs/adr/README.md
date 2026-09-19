@@ -42,6 +42,8 @@ consecuencias, incluidas las malas.
 | [0019](0019-autenticacion-humana.md) | Autenticación humana del hub | Aceptado |
 | [0020](0020-distribucion-agente-journald-cgo.md) | Distribución del agente Linux con soporte de journald | Aceptado |
 | [0021](0021-artefactos-web-generados-y-merge.md) | Artefactos web generados y resolución de merges | Aceptado |
+| [0022](0022-actualizaciones-con-confirmacion-humana.md) | Actualizaciones con confirmación humana | Aceptado |
+| [0023](0023-evidencia-presupuesto-recursos-agente.md) | Evidencia reproducible del presupuesto de recursos del agente | Aceptado |
 
 ## Estado del proyecto
 

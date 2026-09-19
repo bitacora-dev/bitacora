@@ -35,6 +35,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/collector/ups"
 	"github.com/bitacora-dev/bitacora/internal/collector/users"
 	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
+	"github.com/bitacora-dev/bitacora/internal/resourcebudget"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
@@ -60,7 +61,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	hostID, err := schema.LoadOrCreateHostID(schema.DefaultHostIDPath)
+	hostID, err := schema.LoadOrCreateHostID(cfg.hostIDPath)
 	if err != nil {
 		logger.Printf("loading host_id: %v", err)
 		os.Exit(1)
@@ -129,6 +130,12 @@ func main() {
 	rt := collector.Runtime{Sink: sink}
 	rt.Start(ctx, regs)
 	defer rt.Close()
+	go func() {
+		monitor := resourcebudget.Monitor{HostID: hostID, Sink: sink}
+		if err := monitor.Run(ctx, os.Getpid(), 10*time.Second); err != nil {
+			logger.Printf("resource budget monitor: %v", err)
+		}
+	}()
 
 	<-ctx.Done()
 }
@@ -189,6 +196,7 @@ type config struct {
 	token       string
 	tokenFile   string
 	spoolDir    string
+	hostIDPath  string
 	actionsFile string
 }
 
@@ -197,6 +205,7 @@ func parseConfig() (config, error) {
 	flag.StringVar(&cfg.hubURL, "hub-url", os.Getenv("BITACORA_HUB_URL"), "hub base URL")
 	flag.StringVar(&cfg.tokenFile, "token-file", os.Getenv("BITACORA_TOKEN_FILE"), "path to the ingestion bearer token")
 	flag.StringVar(&cfg.spoolDir, "spool-dir", agentbuffer.DefaultOutboundDir, "outbound buffer directory")
+	flag.StringVar(&cfg.hostIDPath, "host-id-path", schema.DefaultHostIDPath, "path to the persistent host ID")
 	flag.StringVar(&cfg.actionsFile, "actions-file", os.Getenv("BITACORA_ACTIONS_FILE"), "path to local package action allowlist")
 	flag.Parse()
 

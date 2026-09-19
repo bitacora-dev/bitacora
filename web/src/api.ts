@@ -21,6 +21,7 @@ export interface BitacoraEvent {
   severity: "debug" | "info" | "notice" | "warn" | "error" | "critical";
   title: string;
   subject?: EventSubject;
+  attrs?: Record<string, unknown>;
 }
 
 export interface Summary {

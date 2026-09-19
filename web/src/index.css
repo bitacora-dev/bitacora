@@ -701,6 +701,53 @@ body {
   overflow-wrap: anywhere;
 }
 
+.event-details {
+  max-width: 72ch;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.event-details summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+
+.event-details summary span {
+  flex: 1 1 18rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-details dl {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.6rem 0 0;
+}
+
+.event-details dl > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
+  gap: 0.65rem;
+}
+
+.event-details dt {
+  color: var(--gold);
+  overflow-wrap: anywhere;
+}
+
+.event-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .log-list { display: grid; gap: 0; margin: 0.75rem 0 0; padding: 0; list-style: none; }
 .log-list li { min-width: 0; border-top: 1px solid var(--line-soft); padding: 0.8rem 0; }
 .log-list li > div { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; color: var(--dim); font-size: 0.78rem; }

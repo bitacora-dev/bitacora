@@ -279,6 +279,13 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+/* The network chart is the third metric: give it a complete row instead of
+   leaving an unfillable second grid cell beside it. */
+.metrics-grid > :last-child,
+.lower-grid > .signal-panel {
+  grid-column: 1 / -1;
+}
+
 .chart-panel {
   min-width: 0;
   overflow: hidden;
@@ -934,15 +941,11 @@ body {
 }
 
 @media (orientation: portrait) and (min-width: 900px) and (min-height: 1500px) {
-  .dashboard-shell--tall-portrait {
-    min-height: 1920px;
-  }
-
   .dashboard-shell--tall-portrait .metrics-grid {
     grid-template-columns: 1fr;
   }
 
   .dashboard-shell--tall-portrait .chart-canvas {
-    height: clamp(28rem, 31vh, 36rem);
+    height: clamp(16rem, 18vh, 20rem);
   }
 }

@@ -718,6 +718,14 @@ func toSeries(samples []metricstore.Sample) []SeriesPoint {
 // an equally spurious rate spike. Differentiating per-series before summing
 // avoids that entirely — a future "simplification" that flattens this back
 // into one sum-then-diff pass would reintroduce exactly that bug.
+//
+// Summing by exact timestamp relies on an agent-side invariant: every
+// metric of one collection cycle carries the same instant
+// (collector.CycleSink). When it didn't, each interface landed on its own
+// millisecond and this function returned one point per interface per cycle
+// — each holding a single interface's rate — instead of one point holding
+// their sum, which read as loose dots on the chart and as the idlest
+// interface's 0 B/s on the current-value readout.
 func rateSeries(samples []metricstore.Sample) []SeriesPoint {
 	if len(samples) == 0 {
 		return []SeriesPoint{}

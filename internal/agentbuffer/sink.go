@@ -59,6 +59,25 @@ func WithLogger(logf Logger) SinkOption {
 	}
 }
 
+// BeginCycle implements collector.CycleSink: it returns a Sink that stamps
+// every emission with `now` instead of reading the clock again per
+// emission. The returned value is a shallow copy with a frozen clock — it
+// shares the same Buffer and flush channel, so buffering and flushing are
+// unchanged, and the receiver itself is untouched and still usable
+// concurrently by other collectors.
+//
+// Collectors that set a timestamp explicitly (journald's log lines carry
+// the journal's own instant, an Inventory its ReportedAt) keep it: the
+// frozen clock only fills in what would otherwise have been time.Now().
+func (s *Sink) BeginCycle(now time.Time) collector.Sink {
+	if s == nil {
+		return s
+	}
+	frozen := *s
+	frozen.Now = func() time.Time { return now }
+	return &frozen
+}
+
 func (s *Sink) Gauge(name string, value float64, labels collector.Labels) {
 	now := s.Now()
 	s.append(Item{
@@ -250,4 +269,7 @@ func jitter(d time.Duration) time.Duration {
 	return spread + time.Duration(rand.Int63n(int64(spread)+1))
 }
 
-var _ collector.Sink = (*Sink)(nil)
+var (
+	_ collector.Sink      = (*Sink)(nil)
+	_ collector.CycleSink = (*Sink)(nil)
+)

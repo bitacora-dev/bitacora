@@ -18,6 +18,9 @@ const MaxPendingPollInterval = 5 * time.Second
 type Allowlist struct {
 	RefreshPackageCache        bool `json:"refresh_package_cache"`
 	ApplyPendingPackageUpdates bool `json:"apply_pending_package_updates"`
+	// PackageCacheMaxAgeSeconds is enforced independently by the root helper
+	// before apply-pending-package-updates can run. It is not an operation flag.
+	PackageCacheMaxAgeSeconds int `json:"package_cache_max_age_seconds"`
 }
 
 func (a Allowlist) Allows(operation bitacorapb.PackageOperation) bool {

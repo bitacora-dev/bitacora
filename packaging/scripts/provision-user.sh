@@ -41,4 +41,10 @@ install -d -o root -g bitacora -m 0750 /var/lib/bitacora/spool
 # being able to write the root-owned inbound spool directory.
 install -d -o bitacora -g bitacora -m 0750 /var/lib/bitacora/spool/outbound
 
-echo "provisioned agent state, inbound spool, and outbound WAL directories"
+# The agent can stage only closed action identifiers. It cannot write the
+# root-owned result directory, so it cannot forge completion or output.
+install -d -o root -g bitacora -m 0750 /var/lib/bitacora/package-actions
+install -d -o root -g bitacora -m 0770 /var/lib/bitacora/package-actions/requests
+install -d -o root -g bitacora -m 0750 /var/lib/bitacora/package-actions/results
+
+echo "provisioned agent state, spool, outbound WAL, and package action directories"

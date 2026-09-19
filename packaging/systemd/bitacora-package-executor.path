@@ -1,0 +1,9 @@
+[Unit]
+Description=Start Bitácora package executor when a validated request is staged
+
+[Path]
+PathChanged=/var/lib/bitacora/package-actions/requests
+Unit=bitacora-package-executor.service
+
+[Install]
+WantedBy=multi-user.target

@@ -27,12 +27,14 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/collector/memory"
 	"github.com/bitacora-dev/bitacora/internal/collector/network"
 	"github.com/bitacora-dev/bitacora/internal/collector/operations"
+	"github.com/bitacora-dev/bitacora/internal/collector/packageactions"
 	"github.com/bitacora-dev/bitacora/internal/collector/pkgupdates"
 	"github.com/bitacora-dev/bitacora/internal/collector/publicsurface"
 	"github.com/bitacora-dev/bitacora/internal/collector/shares"
 	"github.com/bitacora-dev/bitacora/internal/collector/shareusage"
 	"github.com/bitacora-dev/bitacora/internal/collector/ups"
 	"github.com/bitacora-dev/bitacora/internal/collector/users"
+	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
@@ -95,7 +97,19 @@ func main() {
 		client := &transport.Client{BaseURL: cfg.hubURL, Token: cfg.token}
 		client.OnResponse = func(response *bitacorapb.IngestResponse) {
 			if order := response.GetPendingPackageOperation(); order != nil {
-				actions.Handle(order)
+				if actions.Handle(order) != agentactions.DecisionAccepted {
+					return
+				}
+				request, ok := packageActionRequest(order, hostID)
+				if !ok {
+					logger.Printf("rejected unsupported package operation after validation")
+					return
+				}
+				if err := packageexecutor.Enqueue(packageexecutor.DefaultRequestDir, request); err != nil {
+					logger.Printf("queueing package operation %s: %v", request.Operation, err)
+					return
+				}
+				sink.Job(schema.Job{ID: request.ID, JobName: string(request.Operation), HostID: hostID, StartedAt: time.Now().UTC(), Status: schema.JobRunning, Trigger: "systemd-path", Schema: schema.CurrentSchemaVersion})
 			}
 		}
 		flushOptions := agentbuffer.FlushOptions{
@@ -141,10 +155,29 @@ func buildRegistry() collector.Registry {
 	// third-party plugin sources and container registries on every cycle,
 	// same reasoning as shareusage's cadence above.
 	reg.Register(pkgupdates.New(), 6*time.Hour, 2*time.Minute)
+	// The privileged helper writes terminal results here; this collector only
+	// reads them and turns them into the job update and output log lines.
+	reg.Register(packageactions.New(), 5*time.Second, time.Second)
 	// The operations outbox is producer-owned and append-only; importing it is
 	// cheap and gives scheduled backups a real end-to-end path to the hub.
 	reg.Register(operations.New(), 15*time.Second, 5*time.Second)
 	return reg
+}
+
+func packageActionRequest(order *bitacorapb.PendingPackageOperation, hostID string) (packageexecutor.Request, bool) {
+	if order == nil || order.GetRequestId() == "" || hostID == "" {
+		return packageexecutor.Request{}, false
+	}
+	var operation packageexecutor.Operation
+	switch order.GetOperation() {
+	case bitacorapb.PackageOperation_REFRESH_PACKAGE_CACHE:
+		operation = packageexecutor.RefreshPackageCache
+	case bitacorapb.PackageOperation_APPLY_PENDING_PACKAGE_UPDATES:
+		operation = packageexecutor.ApplyPendingPackageUpdates
+	default:
+		return packageexecutor.Request{}, false
+	}
+	return packageexecutor.Request{ID: order.GetRequestId(), Operation: operation, HostID: hostID}, true
 }
 
 type config struct {

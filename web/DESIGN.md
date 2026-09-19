@@ -72,13 +72,14 @@ space while text-heavy blocks keep readable line lengths.
 | Tablet/small laptop, below `980px` | Header actions stack; metrics and lower grids become one column. | Preserve order: header metadata, charts, events, signal coverage. |
 | Laptop/default | CPU and memory charts sit side by side; events and signal coverage share the lower row. | Keep the current state visible without scrolling on ordinary laptop sizes when data is present. |
 | Wide desktop, `1920px+` | Charts use wider tracks, lower grid grows, and text blocks remain capped. | Widen plots and data grids; do not turn prose into long horizontal ribbons. |
-| Tall portrait, `900px+` wide and `1500px+` high in portrait orientation (including `1080×1920`) | CPU and memory charts stack and each chart uses more vertical room. | Preserve long-form signal reading without forcing two narrow landscape charts onto an operational portrait display. |
+| Tall portrait, `900px+` wide and `1500px+` high in portrait orientation (including `1080×1920`) | Charts stack and each canvas uses `clamp(16rem, 18vh, 20rem)`: more than the default height, but capped at 320 px. | Preserve long-form signal reading without forcing narrow landscape charts or using a full screen to render low-variance series. |
 
 Use stable dimensions for fixed-format UI: the default chart height is `220px`,
 panel radius is `8px`, panel borders are `1px`, and normal dashboard gaps are
 `1rem` to `1.25rem`. Tall portrait is the intentional exception: its charts use
-the available vertical space. Changing these values is a design change, not
-incidental cleanup.
+more vertical space, bounded to 256–320 px so three stacked canvases remain
+scanable before the event and coverage panels. Changing these values is a design
+change, not incidental cleanup.
 
 ## Density And Information Order
 

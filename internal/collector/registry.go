@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/schema"
@@ -48,6 +49,19 @@ type Registry struct {
 // call Init — that happens in Resolve, once capabilities are known.
 func (reg *Registry) Register(c Collector, interval, timeout time.Duration) {
 	reg.items = append(reg.items, registryItem{collector: c, interval: interval, timeout: timeout})
+}
+
+// Names returns the stable identities of every collector assembled in this
+// registry. The result is sorted so diagnostic output and budget tests do not
+// depend on registration order. It deliberately reports registered collectors,
+// rather than only the subset enabled on this host.
+func (reg *Registry) Names() []string {
+	names := make([]string, 0, len(reg.items))
+	for _, item := range reg.items {
+		names = append(names, item.collector.Name())
+	}
+	sort.Strings(names)
+	return names
 }
 
 // Disabled describes a collector that was not registered at runtime,

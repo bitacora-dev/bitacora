@@ -27,6 +27,9 @@ func TestProvisionUserScript_SeparatesAgentAndHelperWritePaths(t *testing.T) {
 		"/var/lib/bitacora":                {owner: "bitacora", group: "bitacora", mode: "0750"},
 		"/var/lib/bitacora/spool":          {owner: "root", group: "bitacora", mode: "0750"},
 		"/var/lib/bitacora/spool/outbound": {owner: "bitacora", group: "bitacora", mode: "0750"},
+		"/var/lib/bitacora/package-actions":          {owner: "root", group: "bitacora", mode: "0750"},
+		"/var/lib/bitacora/package-actions/requests": {owner: "root", group: "bitacora", mode: "0770"},
+		"/var/lib/bitacora/package-actions/results":  {owner: "root", group: "bitacora", mode: "0750"},
 	}
 
 	for path, expected := range want {

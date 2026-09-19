@@ -8,7 +8,30 @@ import (
 	"testing"
 
 	"github.com/bitacora-dev/bitacora/internal/collector"
+	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
+	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
+
+func TestPackageActionRequestHasOnlyFixedOperations(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation bitacorapb.PackageOperation
+		want      packageexecutor.Operation
+		ok        bool
+	}{
+		{name: "refresh", operation: bitacorapb.PackageOperation_REFRESH_PACKAGE_CACHE, want: packageexecutor.RefreshPackageCache, ok: true},
+		{name: "apply", operation: bitacorapb.PackageOperation_APPLY_PENDING_PACKAGE_UPDATES, want: packageexecutor.ApplyPendingPackageUpdates, ok: true},
+		{name: "unknown", operation: bitacorapb.PackageOperation_PACKAGE_OPERATION_UNSPECIFIED},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, ok := packageActionRequest(&bitacorapb.PendingPackageOperation{RequestId: "request-1", Operation: test.operation}, "host-a")
+			if ok != test.ok || request.Operation != test.want {
+				t.Fatalf("request = %+v, ok = %t", request, ok)
+			}
+		})
+	}
+}
 
 func TestReadToken_PrefersTokenFile(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "token")

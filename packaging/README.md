@@ -74,6 +74,8 @@ persist its own telemetry without gaining write access to helper output.
 | `/var/lib/bitacora` | Agent state | `bitacora:bitacora 0750` | Persists `host_id`, the journald cursor, and collector cursors. |
 | `/var/lib/bitacora/spool` | Inbound: privileged helpers → agent | `root:bitacora 0750` | Root helpers atomically publish data; the agent can read it. |
 | `/var/lib/bitacora/spool/outbound` | Outbound: agent → hub | `bitacora:bitacora 0750` | The agent creates and appends its durable WAL segments. |
+| `/var/lib/bitacora/package-actions/requests` | Agent → systemd path helper | `root:bitacora 0770` | The agent atomically stages a validated, closed operation request. |
+| `/var/lib/bitacora/package-actions/results` | Privileged helper → agent | `root:bitacora 0750` | Root publishes terminal job state and output; the agent cannot forge it. |
 
 - `scripts/provision-user.sh` — creates the non-root `bitacora` system user,
   grants it `systemd-journal` membership, and provisions its persistent state,

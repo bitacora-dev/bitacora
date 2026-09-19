@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { claimPairing, fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type LogEntry, type SeriesPoint, type Summary } from "./api";
+import { claimPairing, fetchActionAvailability, fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type LogEntry, type SeriesPoint, type Summary } from "./api";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
 import LogsList from "./components/LogsList";
 import AddServerPanel from "./components/AddServerPanel";
 import InventoryPanel from "./components/InventoryPanel";
+import PackageUpdatePanel from "./components/PackageUpdatePanel";
 import JobsList from "./components/JobsList";
 import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
@@ -57,6 +58,7 @@ export default function App() {
   const [hosts, setHosts] = useState<Host[]>([]);
   const [disks, setDisks] = useState<Inventory | null>(null);
   const [updates, setUpdates] = useState<Inventory | null>(null);
+  const [secondFactorAvailable, setSecondFactorAvailable] = useState(false);
 
   const [token, setToken] = useState<string | null>(getDeviceToken);
   const [claimingFromURL, setClaimingFromURL] = useState(() => pairCodeFromURL() !== null);
@@ -109,6 +111,15 @@ export default function App() {
   const bytesPerSecond = useCallback((value: number) => t.bytesPerSecond(formatBytes(value, intlTag)), [intlTag, t]);
   const selectedHost = hosts.find((host) => host.id === hostID);
   const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
+
+  const refreshInventories = useCallback(async () => {
+    const [nextDisks, nextUpdates] = await Promise.all([
+      fetchInventory(hostID, "disk"),
+      fetchInventory(hostID, "package_update"),
+    ]);
+    setDisks(nextDisks);
+    setUpdates(nextUpdates);
+  }, [hostID]);
 
   const copyHostID = async () => {
     try {
@@ -196,17 +207,9 @@ export default function App() {
   useEffect(() => {
     if (!hostID || !token) return;
 
-    let cancelled = false;
     const poll = async () => {
       try {
-        const [nextDisks, nextUpdates] = await Promise.all([
-          fetchInventory(hostID, "disk"),
-          fetchInventory(hostID, "package_update"),
-        ]);
-        if (!cancelled) {
-          setDisks(nextDisks);
-          setUpdates(nextUpdates);
-        }
+        await refreshInventories();
       } catch {
         // Inventory is optional. Keep the latest readable snapshot while a
         // collector or its dedicated endpoint is temporarily unavailable.
@@ -215,10 +218,14 @@ export default function App() {
 
     poll();
     const id = setInterval(poll, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+    return () => clearInterval(id);
+  }, [hostID, token, refreshInventories]);
+
+  useEffect(() => {
+    if (!hostID || !token) return;
+    let cancelled = false;
+    fetchActionAvailability(hostID).then((available) => { if (!cancelled) setSecondFactorAvailable(available); });
+    return () => { cancelled = true; };
   }, [hostID, token]);
 
   useEffect(() => {
@@ -489,7 +496,7 @@ export default function App() {
 
           <section className="inventory-grid" aria-label={t.inventorySectionLabel}>
             <InventoryPanel inventory={disks} kind="disk" />
-            <InventoryPanel inventory={updates} kind="package_update" />
+            <PackageUpdatePanel hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
           </section>
         </>
       )}

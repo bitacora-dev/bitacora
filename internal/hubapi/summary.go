@@ -130,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/hosts", s.handleHosts)
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/v1/devices/claim", s.handleDeviceClaim)
+	mux.HandleFunc("/v1/actions/package-operations", s.handleActionToken)
 	mux.HandleFunc("/v1/actions/package-operations/token", s.handleActionToken)
 	mux.HandleFunc("/v1/actions/package-operations/confirm", s.handleActionConfirmation)
 	if s.WebUI != nil {

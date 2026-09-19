@@ -76,7 +76,7 @@ func main() {
 	manifest := capabilities.Detect(detectCfg, hostID, hostname, agentVersion, time.Now())
 	reportManifest(ctx, manifest, cfg, logger)
 
-	reg := buildRegistry()
+	reg := buildRegistry(allowlist)
 
 	buffer, err := agentbuffer.Open(cfg.spoolDir)
 	if err != nil {
@@ -133,8 +133,12 @@ func main() {
 	<-ctx.Done()
 }
 
-func buildRegistry() collector.Registry {
+func buildRegistry(actionLists ...agentactions.Allowlist) collector.Registry {
 	reg := collector.Registry{}
+	actions := agentactions.Allowlist{}
+	if len(actionLists) > 0 {
+		actions = actionLists[0]
+	}
 	reg.Register(cpu.New(), 10*time.Second, 5*time.Second)
 	reg.Register(memory.New(), 10*time.Second, 5*time.Second)
 	reg.Register(network.New(), 30*time.Second, 10*time.Second)
@@ -154,7 +158,7 @@ func buildRegistry() collector.Registry {
 	// network round-trip per item — a long interval avoids hammering
 	// third-party plugin sources and container registries on every cycle,
 	// same reasoning as shareusage's cadence above.
-	reg.Register(pkgupdates.New(), 6*time.Hour, 2*time.Minute)
+	reg.Register(pkgupdates.New(pkgupdates.ActionAvailability{RefreshPackageCache: actions.RefreshPackageCache, ApplyPendingPackageUpdates: actions.ApplyPendingPackageUpdates, PackageCacheMaxAgeSeconds: actions.PackageCacheMaxAgeSeconds}), 6*time.Hour, 2*time.Minute)
 	// The privileged helper writes terminal results here; this collector only
 	// reads them and turns them into the job update and output log lines.
 	reg.Register(packageactions.New(), 5*time.Second, time.Second)

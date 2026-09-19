@@ -370,6 +370,56 @@ body {
   padding: 1rem;
 }
 
+.package-update-panel {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.package-update-panel .inventory-list { margin: 0; }
+
+.cache-age,
+.action-notice {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.cache-age--stale { color: var(--gold); font-weight: 650; }
+
+.package-action-controls,
+.action-confirmation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.package-action-button { min-width: min(100%, 18rem); padding: 0.7rem 1rem; }
+
+.action-confirmation,
+.action-progress {
+  display: grid;
+  gap: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 1rem;
+}
+
+.action-confirmation h3,
+.action-progress p { margin: 0; }
+.action-confirmation h3 { font-size: 1rem; }
+.action-confirmation dl { display: grid; gap: 0.65rem; margin: 0; }
+.action-confirmation dl > div { display: grid; gap: 0.2rem; border-top: 1px solid var(--line-soft); padding-top: 0.55rem; }
+.action-confirmation dt { color: var(--dim); font-size: 0.72rem; text-transform: uppercase; }
+.action-confirmation dd { margin: 0; color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
+.action-progress p { color: var(--muted); }
+.action-progress pre,
+.error-panel pre { max-height: 16rem; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 0.78rem/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
 .inventory-reported,
 .inventory-empty {
   margin: 0.25rem 0 0;

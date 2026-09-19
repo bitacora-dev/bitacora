@@ -114,6 +114,28 @@ export interface Inventory {
   items: InventoryItem[];
 }
 
+export type PackageOperation = "REFRESH_PACKAGE_CACHE" | "APPLY_PENDING_PACKAGE_UPDATES";
+
+export interface ActionToken {
+  request_id: string;
+  action_token: string;
+  expires_at: string;
+}
+
+export interface JobOutputLine {
+  sequence: number;
+  ts: string;
+  stream: string;
+  message: string;
+}
+
+export interface JobPoll {
+  job: Job;
+  lines: JobOutputLine[];
+  next_after: number;
+  complete: boolean;
+}
+
 const TOKEN_KEY = "bitacora_device_token";
 
 export function getDeviceToken(): string | null {
@@ -182,6 +204,46 @@ export async function fetchInventory(hostID: string, kind: string): Promise<Inve
     throw new Error(`GET ${url} -> ${res.status}: ${body}`);
   }
   return res.json();
+}
+
+async function actionRequest<T>(path: string, body?: Record<string, string>): Promise<T> {
+  const token = getDeviceToken();
+  const res = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export async function fetchActionAvailability(hostID: string): Promise<boolean> {
+  try {
+    await actionRequest(`/v1/actions/package-operations?host_id=${encodeURIComponent(hostID)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function issueActionToken(hostID: string, operation: PackageOperation): Promise<ActionToken> {
+  return actionRequest("/v1/actions/package-operations/token", { host_id: hostID, operation });
+}
+
+export function confirmAction(hostID: string, operation: PackageOperation, issued: ActionToken): Promise<{ status: string }> {
+  return actionRequest("/v1/actions/package-operations/confirm", {
+    host_id: hostID,
+    operation,
+    request_id: issued.request_id,
+    action_token: issued.action_token,
+  });
+}
+
+export function fetchJob(hostID: string, jobID: string, after: number): Promise<JobPoll> {
+  return actionRequest(`/v1/jobs/${encodeURIComponent(jobID)}?host_id=${encodeURIComponent(hostID)}&after=${after}`);
 }
 
 export interface CreateHostResponse {

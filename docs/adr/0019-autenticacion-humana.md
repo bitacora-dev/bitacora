@@ -1,6 +1,6 @@
 # ADR-0019: Autenticación humana del hub
 
-- **Estado:** Aceptado
+- **Estado:** Sustituido parcialmente por ADR-0023
 - **Fecha:** 2026-09-06
 
 ## Contexto
@@ -13,16 +13,17 @@ Hacer de Cloudflare un requisito contradice el principio de no depender de terce
 
 ## Decisión
 
-La recomendación es integrar **OIDC nativo opcional** en el hub y que el operador lo conecte a un proveedor que controle (por ejemplo, Authentik) o a Google o GitHub cuando acepte esa dependencia. El hub debe mantener una frontera de autenticación propia, pero no convertirse en un proveedor de identidad ni administrar contraseñas.
+Se integra **OIDC nativo opcional** en el hub y el operador puede conectarlo a un proveedor que controle (por ejemplo, Authentik) o a Google o GitHub cuando acepte esa dependencia. El hub mantiene una frontera de autenticación propia, pero no administra el ciclo de vida de las cuentas OIDC.
 
 El despliegue debe blindar siempre el origen por separado. Para instalaciones con Cloudflare, [la guía de blindaje](../setup/blindaje-origen-cloudflare.md) describe firewall limitado a rangos oficiales o Cloudflare Tunnel. Sin Cloudflare, el operador debe usar su propio proxy de identidad, VPN y firewall restrictivo; ocultar el origen no sustituye la autenticación humana.
 
-Este ADR no autoriza implementar autenticación. Su estado **Propuesto** reserva la decisión final al mantenedor.
+Este ADR autorizó e introdujo OIDC nativo opcional. La decisión de descartar una
+credencial local propia queda sustituida por [ADR-0023](0023-autenticacion-local-y-alcance-por-servidor.md): conserva OIDC como fuente de identidad y añade una fuente local deliberadamente limitada para conservar disponibilidad durante una caída del IdP o de Cloudflare.
 
 ## Alternativas consideradas
 
 - **OIDC nativo contra un proveedor externo.** Recomendado: reutiliza MFA, recuperación y ciclo de vida de cuentas del proveedor, y permite que cada instalación elija uno. A cambio, incorpora OIDC al hub y el operador debe mantener un proveedor disponible; Google o GitHub añaden dependencia de terceros.
-- **Usuario y contraseña propios con TOTP.** Descartado: evita depender de un IdP externo y funciona aislado, pero obliga a custodiar hashes, restablecimientos, MFA, sesiones y defensas ante ataques. Para un solo mantenedor es una forma fiable de publicar y luego sostener una vulnerabilidad.
+- **Usuario y contraseña propios con TOTP.** Esta alternativa queda reconsiderada y decidida en ADR-0023 con un alcance mucho menor: una sola credencial creada y rotada por CLI, sin registro ni recuperación por correo, sobre las sesiones existentes. El hub asume explícitamente la custodia y la superficie de ataque restante.
 - **Delegar toda la identidad a un proxy.** Válido como patrón de despliegue y útil para Cloudflare Access, Authelia o un proxy corporativo. Se descarta como única garantía: es fácil dejar el origen expuesto, no ofrece un camino uniforme sin terceros y traslada seguridad crítica a una configuración que el hub no puede verificar.
 
 ## Consecuencias
@@ -37,10 +38,10 @@ Este ADR no autoriza implementar autenticación. Su estado **Propuesto** reserva
 
 - OIDC añade configuración, claves de cliente, redirecciones y compatibilidad que el único mantenedor tendrá que mantener.
 - No usar Cloudflare no elimina el trabajo del operador: deberá proteger la red y disponer de un IdP o proxy bajo su control.
-- Mientras este ADR siga Propuesto no existe autenticación humana nativa; los despliegues expuestos deben mantener proxy de identidad y origen blindado.
+- OIDC requiere un proveedor disponible; las instalaciones que dependan solo de él deben seguir planificando esa dependencia.
 
 ## Notas de implementación
 
-- Una futura implementación debe separar tokens de agentes y dispositivos de sesiones humanas; no reutilizar credenciales de ingesta como login.
+- OIDC ya separa tokens de agentes y dispositivos de sesiones humanas; ADR-0023 extiende esa misma separación a la identidad local y al alcance por host.
 - No aceptar tráfico público directo al origen cuando se use un proxy de identidad: aplicar firewall por rangos de Cloudflare o Cloudflare Tunnel, o el equivalente operado por la instalación.
 - Documentar una ruta autoalojada sin Cloudflare antes de aceptar el ADR.

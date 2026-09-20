@@ -6,6 +6,11 @@ export interface SeriesPoint {
   value: number;
 }
 
+export interface CPUSeries {
+  cpu: string;
+  points: SeriesPoint[];
+}
+
 export interface EventSubject {
   kind: string;
   name: string;
@@ -29,6 +34,7 @@ export interface Summary {
   generated_at: string;
   window_secs: number;
   cpu: SeriesPoint[];
+  cpu_cores: CPUSeries[];
   memory: SeriesPoint[];
   memory_total_bytes: SeriesPoint[];
   memory_available_bytes: SeriesPoint[];

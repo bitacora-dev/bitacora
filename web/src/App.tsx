@@ -8,6 +8,7 @@ import AddServerPanel from "./components/AddServerPanel";
 import InventoryPanel from "./components/InventoryPanel";
 import PackageUpdatePanel from "./components/PackageUpdatePanel";
 import JobsList from "./components/JobsList";
+import CPUCorePanel from "./components/CPUCorePanel";
 import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
 
@@ -67,6 +68,8 @@ export default function App() {
   const [hosts, setHosts] = useState<Host[]>([]);
   const [disks, setDisks] = useState<Inventory | null>(null);
   const [updates, setUpdates] = useState<Inventory | null>(null);
+  const [hardwareIdentity, setHardwareIdentity] = useState<Inventory | null>(null);
+  const [cpuTopology, setCPUTopology] = useState<Inventory | null>(null);
   const [secondFactorAvailable, setSecondFactorAvailable] = useState(false);
 
   const [token, setToken] = useState<string | null>(getDeviceToken);
@@ -122,12 +125,16 @@ export default function App() {
   const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
 
   const refreshInventories = useCallback(async () => {
-    const [nextDisks, nextUpdates] = await Promise.all([
+    const [nextDisks, nextUpdates, nextHardwareIdentity, nextCPUTopology] = await Promise.all([
       fetchInventory(hostID, "disk"),
       fetchInventory(hostID, "package_update"),
+      fetchInventory(hostID, "hardware_identity"),
+      fetchInventory(hostID, "cpu_topology"),
     ]);
     setDisks(nextDisks);
     setUpdates(nextUpdates);
+    setHardwareIdentity(nextHardwareIdentity);
+    setCPUTopology(nextCPUTopology);
     return nextUpdates;
   }, [hostID]);
 
@@ -434,38 +441,23 @@ export default function App() {
         </article>
       ) : summary && (
         <>
-          <section className="metrics-grid">
-            <TimeSeriesChart
-              title={t.cpuUsageTitle}
-              points={summary.cpu}
-              color="#38bdf8"
-              yRange={CPU_Y_RANGE}
-              formatAxisValue={ratio}
-              describePoint={(point) => ({ primary: ratio(point.value) })}
-            />
-            <TimeSeriesChart
-              title={t.memoryUsedTitle}
-              points={summary.memory_used_bytes.length > 0 ? summary.memory_used_bytes : summary.memory}
-              color="#f8d66d"
-              formatAxisValue={(value) => (summary.memory_used_bytes.length > 0 ? bytes(value) : ratio(value))}
-              describePoint={(point) => {
+          <section className="processor-layout">
+            <CPUCorePanel cores={summary.cpu_cores} topology={cpuTopology} identity={hardwareIdentity} />
+            <div className="processor-summary">
+              <TimeSeriesChart title={t.cpuUsageTitle} points={summary.cpu} color="#38bdf8" yRange={CPU_Y_RANGE} formatAxisValue={ratio} describePoint={(point) => ({ primary: ratio(point.value) })} />
+              <TimeSeriesChart title={t.memoryUsedTitle} points={summary.memory_used_bytes.length > 0 ? summary.memory_used_bytes : summary.memory} color="#f8d66d" formatAxisValue={(value) => (summary.memory_used_bytes.length > 0 ? bytes(value) : ratio(value))} describePoint={(point) => {
                 if (summary.memory_used_bytes.length === 0) return { primary: ratio(point.value) };
                 const total = memoryTotalByTS.get(point.ts) ?? latest(summary.memory_total_bytes)?.value;
                 const available = memoryAvailableByTS.get(point.ts) ?? memoryAvailable?.value;
-                return {
-                  primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value),
-                  secondary: available ? t.memoryAvailable(bytes(available)) : undefined,
-                };
-              }}
-            />
-            <TimeSeriesChart
-              title={t.networkTrafficTitle}
-              series={[
-                { name: t.networkReceiveLabel, points: summary.network_rx_bytes_per_second, color: "#38bdf8", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
-                { name: t.networkTransmitLabel, points: summary.network_tx_bytes_per_second, color: "#4ade80", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
-              ]}
-              formatAxisValue={bytesPerSecond}
-            />
+                return { primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value), secondary: available ? t.memoryAvailable(bytes(available)) : undefined };
+              }} />
+            </div>
+          </section>
+          <section className="metrics-grid">
+            <TimeSeriesChart title={t.networkTrafficTitle} series={[
+              { name: t.networkReceiveLabel, points: summary.network_rx_bytes_per_second, color: "#38bdf8", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
+              { name: t.networkTransmitLabel, points: summary.network_tx_bytes_per_second, color: "#4ade80", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
+            ]} formatAxisValue={bytesPerSecond} />
           </section>
 
           <section className="lower-grid">

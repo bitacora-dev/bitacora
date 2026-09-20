@@ -306,6 +306,14 @@ type SeriesPoint struct {
 	Value float64   `json:"value"`
 }
 
+// CPUSeries keeps one logical CPU's samples together. It deliberately does
+// not reuse []SeriesPoint: flattening logical CPU series makes a chart join
+// unrelated cores into an unreadable line.
+type CPUSeries struct {
+	CPU    string        `json:"cpu"`
+	Points []SeriesPoint `json:"points"`
+}
+
 // Summary is GET /v1/summary's response: everything the single-page
 // timeline view needs to render, in one call (ADR-0014: "el endpoint
 // GET /v1/summary?host_id=... debe devolver todo lo necesario para
@@ -315,6 +323,7 @@ type Summary struct {
 	GeneratedAt             time.Time      `json:"generated_at"`
 	WindowSecs              float64        `json:"window_secs"`
 	CPU                     []SeriesPoint  `json:"cpu"`
+	CPUCores                []CPUSeries    `json:"cpu_cores"`
 	Memory                  []SeriesPoint  `json:"memory"`
 	MemoryTotalBytes        []SeriesPoint  `json:"memory_total_bytes"`
 	MemoryAvailableBytes    []SeriesPoint  `json:"memory_available_bytes"`
@@ -568,11 +577,17 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	from := now.Add(-window)
 	hostMatcher := labels.MustNewMatcher(labels.MatchEqual, "host_id", hostID)
 	totalCPUMatcher := labels.MustNewMatcher(labels.MatchEqual, "cpu", "total")
+	coreCPUMatcher := labels.MustNewMatcher(labels.MatchNotEqual, "cpu", "total")
 	nonLoopbackInterfaceMatcher := labels.MustNewMatcher(labels.MatchNotEqual, "interface", "lo")
 
 	cpu, err := s.Metrics.Query(r.Context(), "bitacora_cpu_usage_ratio", from, now, hostMatcher, totalCPUMatcher)
 	if err != nil {
 		http.Error(w, "querying cpu metrics", http.StatusInternalServerError)
+		return
+	}
+	cpuCores, err := s.Metrics.Query(r.Context(), "bitacora_cpu_usage_ratio", from, now, hostMatcher, coreCPUMatcher)
+	if err != nil {
+		http.Error(w, "querying cpu core metrics", http.StatusInternalServerError)
 		return
 	}
 	mem, err := s.Metrics.Query(r.Context(), "bitacora_memory_used_ratio", from, now, hostMatcher)
@@ -629,6 +644,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt:             now,
 		WindowSecs:              window.Seconds(),
 		CPU:                     toSeries(cpu),
+		CPUCores:                cpuCoreSeries(cpuCores),
 		Memory:                  toSeries(mem),
 		MemoryTotalBytes:        toSeries(memTotal),
 		MemoryAvailableBytes:    toSeries(memAvailable),
@@ -701,6 +717,32 @@ func toSeries(samples []metricstore.Sample) []SeriesPoint {
 		points[i] = SeriesPoint{TS: s.Timestamp, Value: s.Value}
 	}
 	return points
+}
+
+func cpuCoreSeries(samples []metricstore.Sample) []CPUSeries {
+	byCPU := make(map[string][]metricstore.Sample)
+	for _, sample := range samples {
+		cpu := sample.Labels["cpu"]
+		if cpu == "" {
+			continue
+		}
+		byCPU[cpu] = append(byCPU[cpu], sample)
+	}
+
+	cores := make([]CPUSeries, 0, len(byCPU))
+	for cpu, points := range byCPU {
+		sort.Slice(points, func(i, j int) bool { return points[i].Timestamp.Before(points[j].Timestamp) })
+		cores = append(cores, CPUSeries{CPU: cpu, Points: toSeries(points)})
+	}
+	sort.Slice(cores, func(i, j int) bool {
+		left, leftErr := strconv.Atoi(cores[i].CPU)
+		right, rightErr := strconv.Atoi(cores[j].CPU)
+		if leftErr == nil && rightErr == nil {
+			return left < right
+		}
+		return cores[i].CPU < cores[j].CPU
+	})
+	return cores
 }
 
 // rateSeries turns cumulative counter samples (e.g. the network collector's

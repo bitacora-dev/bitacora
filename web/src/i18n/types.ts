@@ -38,6 +38,14 @@ export interface Dictionary {
   expiresAt: (time: string) => string;
   hubUnreachable: (error: string) => string;
   cpuUsageTitle: string;
+  cpuCoresTitle: string;
+  cpuCoresPending: string;
+  cpuCoreLabel: (cpus: string) => string;
+  cpuCoreType: (type: string) => string;
+  cpuThreadLabel: (cpu: string) => string;
+  cpuThreadUsage: (cpu: string, usage: string) => string;
+  cpuOffline: string;
+  cpuPowerWatts: (watts: string) => string;
   memoryUsedTitle: string;
   networkTrafficTitle: string;
   networkReceiveLabel: string;

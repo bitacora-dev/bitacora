@@ -1,13 +1,16 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
+	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
 
@@ -29,6 +32,35 @@ func TestPackageActionRequestHasOnlyFixedOperations(t *testing.T) {
 				t.Fatalf("request = %+v, ok = %t", request, ok)
 			}
 		})
+	}
+}
+
+func TestActionConfigurationDisabledEvent(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "unreadable file", err: errors.New("opening action configuration: permission denied")},
+		{name: "malformed JSON", err: errors.New("decoding action configuration: unexpected end of JSON input")},
+		{name: "unknown field", err: errors.New("decoding action configuration: json: unknown field \"unexpected\"")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event, ok := actionConfigurationDisabledEvent("host-a", "/etc/bitacora/actions.json", test.err, time.Unix(100, 0))
+			if !ok {
+				t.Fatal("failed action configuration must emit an event")
+			}
+			if event.Type != "agent.action_configuration_disabled" || event.Severity != schema.SeverityWarn {
+				t.Fatalf("unexpected event identity: %+v", event)
+			}
+			if event.Attrs["path"] != "/etc/bitacora/actions.json" || event.Attrs["reason"] != test.err.Error() {
+				t.Fatalf("event did not preserve diagnostic context: %+v", event.Attrs)
+			}
+		})
+	}
+
+	if _, ok := actionConfigurationDisabledEvent("host-a", "/etc/bitacora/actions.json", nil, time.Unix(100, 0)); ok {
+		t.Fatal("missing action configuration is normal and must not emit an event")
 	}
 }
 

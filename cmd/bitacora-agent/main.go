@@ -39,6 +39,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
+	"github.com/oklog/ulid/v2"
 )
 
 // agentVersion is set at build time via -ldflags; "dev" outside a release build.
@@ -51,10 +52,12 @@ func main() {
 		logger.Printf("config: %v", err)
 		os.Exit(2)
 	}
-	allowlist, err := agentactions.LoadAllowlist(cfg.actionsFile)
-	if err != nil {
-		logger.Printf("action configuration: %v", err)
-		os.Exit(2)
+	allowlist, actionConfigErr := agentactions.LoadAllowlist(cfg.actionsFile)
+	if actionConfigErr != nil {
+		logger.Printf("action configuration: %v", actionConfigErr)
+		// Actions are an optional, default-disabled capability. Keep the agent
+		// running with an empty allowlist so telemetry remains available.
+		allowlist = agentactions.Allowlist{}
 	}
 	actions := agentactions.NewManager(allowlist, logger.Printf)
 
@@ -125,6 +128,9 @@ func main() {
 	} else {
 		logger.Printf("hub URL is not configured; telemetry will remain buffered locally")
 	}
+	if event, ok := actionConfigurationDisabledEvent(hostID, cfg.actionsFile, actionConfigErr, time.Now()); ok {
+		sink.Event(event)
+	}
 	collector.EmitDisabledEvents(sink, hostID, disabled, time.Now())
 
 	rt := collector.Runtime{Sink: sink}
@@ -138,6 +144,26 @@ func main() {
 	}()
 
 	<-ctx.Done()
+}
+
+// actionConfigurationDisabledEvent makes a failed optional action configuration
+// visible once during startup. The configuration is loaded only at startup, so
+// emitting here avoids repeating the same event during normal collection cycles.
+func actionConfigurationDisabledEvent(hostID, path string, loadErr error, now time.Time) (schema.Event, bool) {
+	if loadErr == nil {
+		return schema.Event{}, false
+	}
+	return schema.Event{
+		ID:       ulid.Make().String(),
+		TS:       now,
+		HostID:   hostID,
+		Source:   "agent",
+		Type:     "agent.action_configuration_disabled",
+		Severity: schema.SeverityWarn,
+		Title:    fmt.Sprintf("action configuration %q disabled: %v", path, loadErr),
+		Attrs:    schema.Labels{"path": path, "reason": loadErr.Error()},
+		Schema:   schema.CurrentSchemaVersion,
+	}, true
 }
 
 func buildRegistry(actionLists ...agentactions.Allowlist) collector.Registry {

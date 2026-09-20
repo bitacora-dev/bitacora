@@ -11,10 +11,16 @@ import (
 // equivalent to an empty allowlist so fresh installations are disabled by
 // default.
 func LoadAllowlist(path string) (Allowlist, error) {
+	return loadAllowlist(path, func(path string) (io.ReadCloser, error) {
+		return os.Open(path)
+	})
+}
+
+func loadAllowlist(path string, openFile func(string) (io.ReadCloser, error)) (Allowlist, error) {
 	if path == "" {
 		return Allowlist{}, nil
 	}
-	f, err := os.Open(path)
+	f, err := openFile(path)
 	if os.IsNotExist(err) {
 		return Allowlist{}, nil
 	}

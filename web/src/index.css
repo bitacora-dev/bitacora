@@ -103,6 +103,24 @@ body {
   font-weight: 780;
 }
 
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.brand-mark {
+  width: 2.7rem;
+  height: 2.7rem;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.auth-panel .brand-mark {
+  width: 3.25rem;
+  height: 3.25rem;
+}
+
 .auth-panel p,
 .muted-text,
 .loading-text {
@@ -915,6 +933,16 @@ body {
   .auth-panel h1,
   .dashboard-header h1 {
     font-size: 1.65rem;
+  }
+
+  .brand-mark {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .auth-panel .brand-mark {
+    width: 2.75rem;
+    height: 2.75rem;
   }
 
   .chart-value strong {

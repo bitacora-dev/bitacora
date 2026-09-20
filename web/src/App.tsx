@@ -50,6 +50,15 @@ interface PairPanelData {
   expiresAt: string;
 }
 
+function Brand() {
+  return (
+    <div className="brand-lockup">
+      <img className="brand-mark" src="/bitacora-logo.png" alt="" aria-hidden="true" />
+      <h1>Bitácora</h1>
+    </div>
+  );
+}
+
 export default function App() {
   const { t, intlTag } = useTranslation();
   const [hostID, setHostID] = useState(hostIDFromURL);
@@ -275,7 +284,7 @@ export default function App() {
     return (
       <main className="auth-shell">
         <section className="auth-panel">
-          <h1>{t.brand}</h1>
+          <Brand />
           <p>{t.notPaired}</p>
           {pairError && <div className="error-panel">{pairError}</div>}
           <button type="button" onClick={bootstrapPairing} disabled={bootstrapping} className="primary-button">
@@ -290,7 +299,7 @@ export default function App() {
     return (
       <main className="auth-shell">
         <section className="auth-panel auth-panel-wide">
-          <h1>{t.brand}</h1>
+          <Brand />
           {hosts.length > 1 && (
             <select aria-label={t.hostSelectorLabel} value="" onChange={(event) => event.target.value && goToHost(event.target.value)}>
               <option value="">{t.hostSelectorLabel}</option>
@@ -329,7 +338,7 @@ export default function App() {
     <main className="dashboard-shell dashboard-shell--tall-portrait">
       <header className="dashboard-header">
         <div>
-          <h1>{t.brand}</h1>
+          <Brand />
           <p>{t.dashboardSubtitle}</p>
           <div className="host-identity">
             <strong>{hostName}</strong>

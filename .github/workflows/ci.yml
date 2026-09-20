@@ -69,6 +69,9 @@ jobs:
       - name: Build both binaries
         run: go build ./...
 
+      - name: Build for macOS arm64
+        run: GOOS=darwin GOARCH=arm64 go build ./...
+
       - name: Build Linux amd64 agent with journald
         run: >-
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64

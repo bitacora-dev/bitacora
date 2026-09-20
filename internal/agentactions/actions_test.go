@@ -1,8 +1,11 @@
 package agentactions
 
 import (
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,7 +91,7 @@ func TestManagerCadenceOnlyAcceleratesForEnabledPendingOrder(t *testing.T) {
 	}
 }
 
-func TestLoadAllowlistDefaultsToEmptyAndRejectsUnknownFields(t *testing.T) {
+func TestLoadAllowlistDefaultsToEmptyAndFailsClosed(t *testing.T) {
 	allowlist, err := LoadAllowlist(filepath.Join(t.TempDir(), "missing.json"))
 	if err != nil || allowlist.Enabled() {
 		t.Fatalf("missing configuration must be disabled by default, got %+v, %v", allowlist, err)
@@ -101,10 +104,38 @@ func TestLoadAllowlistDefaultsToEmptyAndRejectsUnknownFields(t *testing.T) {
 	if err != nil || !allowlist.RefreshPackageCache || allowlist.ApplyPendingPackageUpdates {
 		t.Fatalf("unexpected local allowlist %+v, %v", allowlist, err)
 	}
-	if err := os.WriteFile(path, []byte(`{"hub_can_enable_anything":true}`), 0o600); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name string
+		open func(string) (io.ReadCloser, error)
+	}{
+		{
+			name: "unreadable file",
+			open: func(string) (io.ReadCloser, error) {
+				return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrPermission}
+			},
+		},
+		{
+			name: "malformed JSON",
+			open: func(string) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader(`{"refresh_package_cache":`)), nil
+			},
+		},
+		{
+			name: "unknown field",
+			open: func(string) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader(`{"hub_can_enable_anything":true}`)), nil
+			},
+		},
 	}
-	if _, err := LoadAllowlist(path); err == nil {
-		t.Fatal("expected unknown configuration field to be rejected")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			allowlist, err := loadAllowlist(path, test.open)
+			if err == nil {
+				t.Fatal("expected action configuration to fail")
+			}
+			if allowlist.Enabled() || allowlist.RefreshPackageCache || allowlist.ApplyPendingPackageUpdates {
+				t.Fatalf("failed configuration enabled actions: %+v", allowlist)
+			}
+		})
 	}
 }

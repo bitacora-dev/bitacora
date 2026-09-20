@@ -9,6 +9,7 @@ import InventoryPanel from "./components/InventoryPanel";
 import PackageUpdatePanel from "./components/PackageUpdatePanel";
 import JobsList from "./components/JobsList";
 import CPUCorePanel from "./components/CPUCorePanel";
+import MotherboardPanel from "./components/MotherboardPanel";
 import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
 import LoginPanel from "./components/LoginPanel";
@@ -454,7 +455,10 @@ export default function App() {
       ) : summary && (
         <>
           <section className="processor-layout">
-            <CPUCorePanel cores={summary.cpu_cores} topology={cpuTopology} identity={hardwareIdentity} />
+            <div className="processor-identity">
+              <CPUCorePanel cores={summary.cpu_cores} topology={cpuTopology} identity={hardwareIdentity} />
+              <MotherboardPanel identity={hardwareIdentity} temperatures={summary.temperatures} />
+            </div>
             <div className="processor-summary">
               <TimeSeriesChart title={t.cpuUsageTitle} points={summary.cpu} color="#38bdf8" yRange={CPU_Y_RANGE} formatAxisValue={ratio} describePoint={(point) => ({ primary: ratio(point.value) })} />
               <TimeSeriesChart title={t.memoryUsedTitle} points={summary.memory_used_bytes.length > 0 ? summary.memory_used_bytes : summary.memory} color="#f8d66d" formatAxisValue={(value) => (summary.memory_used_bytes.length > 0 ? bytes(value) : ratio(value))} describePoint={(point) => {

@@ -67,6 +67,16 @@ export interface Dictionary {
   cpuDetailsShow: string;
   cpuDetailsHide: string;
   cpuPeakLabel: (peak: string) => string;
+  motherboardTitle: string;
+  motherboardLabel: string;
+  motherboardVersionLabel: string;
+  biosVendorLabel: string;
+  biosVersionLabel: string;
+  biosDateLabel: string;
+  biosStale: string;
+  cpuTemperaturesLabel: string;
+  cpuTemperatureLabel: (chip: string, sensor: string) => string;
+  temperatureCelsius: (temperature: string) => string;
   memoryUsedTitle: string;
   networkTrafficTitle: string;
   networkReceiveLabel: string;

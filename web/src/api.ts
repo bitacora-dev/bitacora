@@ -11,6 +11,12 @@ export interface CPUSeries {
   points: SeriesPoint[];
 }
 
+export interface TemperatureSeries {
+  chip: string;
+  sensor: string;
+  points: SeriesPoint[];
+}
+
 export interface EventSubject {
   kind: string;
   name: string;
@@ -35,6 +41,7 @@ export interface Summary {
   window_secs: number;
   cpu: SeriesPoint[];
   cpu_cores: CPUSeries[];
+  temperatures: TemperatureSeries[];
   memory: SeriesPoint[];
   memory_total_bytes: SeriesPoint[];
   memory_available_bytes: SeriesPoint[];

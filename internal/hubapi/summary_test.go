@@ -248,6 +248,60 @@ func TestHandleSummary_KeepsCPUCoresAsSeparateSeries(t *testing.T) {
 	}
 }
 
+func TestHandleSummary_KeepsTemperatureSensorsAsSeparateSeries(t *testing.T) {
+	first := time.Now().Add(-time.Minute).UTC()
+	second := first.Add(time.Minute)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_cpu_temperature_celsius": {
+			{Labels: map[string]string{"host_id": "host-a", "chip": "coretemp", "sensor": "package_id_0"}, Timestamp: second, Value: 34},
+			{Labels: map[string]string{"host_id": "host-a", "chip": "coretemp", "sensor": "core_0"}, Timestamp: first, Value: 31},
+			{Labels: map[string]string{"host_id": "host-a", "chip": "coretemp", "sensor": "package_id_0"}, Timestamp: first, Value: 33},
+			{Labels: map[string]string{"host_id": "host-a", "chip": "k10temp", "sensor": "tdie"}, Timestamp: first, Value: 42},
+			{Labels: map[string]string{"host_id": "host-b", "chip": "coretemp", "sensor": "package_id_0"}, Timestamp: first, Value: 99},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Temperatures) != 3 {
+		t.Fatalf("expected three identified temperature series, got %+v", got.Temperatures)
+	}
+	if got.Temperatures[0].Chip != "coretemp" || got.Temperatures[0].Sensor != "core_0" || len(got.Temperatures[0].Points) != 1 || got.Temperatures[0].Points[0].Value != 31 {
+		t.Fatalf("expected coretemp core_0 to remain its own series, got %+v", got.Temperatures[0])
+	}
+	if got.Temperatures[1].Chip != "coretemp" || got.Temperatures[1].Sensor != "package_id_0" || len(got.Temperatures[1].Points) != 2 || got.Temperatures[1].Points[0].Value != 33 || got.Temperatures[1].Points[1].Value != 34 {
+		t.Fatalf("expected coretemp package_id_0 to retain both ordered samples, got %+v", got.Temperatures[1])
+	}
+	if got.Temperatures[2].Chip != "k10temp" || got.Temperatures[2].Sensor != "tdie" || len(got.Temperatures[2].Points) != 1 || got.Temperatures[2].Points[0].Value != 42 {
+		t.Fatalf("expected k10temp tdie to remain its own series, got %+v", got.Temperatures[2])
+	}
+}
+
+func TestHandleSummary_OmitsTemperatureReadingsWhenNoSensorsExist(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{samples: map[string][]metricstore.Sample{}}, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Temperatures) != 0 {
+		t.Fatalf("expected no fabricated temperature reading without sensors, got %+v", got.Temperatures)
+	}
+}
+
 // TestHandleSummary_DerivesNetworkRateFromCumulativeCounters feeds the
 // endpoint raw cumulative counters (what the network collector now emits)
 // and asserts it returns a per-second rate: one host-level point per

@@ -4,6 +4,22 @@ type Severity = BitacoraEvent["severity"];
 
 export interface Dictionary {
   brand: string;
+  signInHeading: string;
+  signInIntro: string;
+  passwordLabel: string;
+  authenticationCodeLabel: string;
+  authenticationCodeHint: string;
+  recoveryCodeLabel: string;
+  useRecoveryCode: string;
+  useAuthenticatorCode: string;
+  recoveryCodeHint: string;
+  signInButton: string;
+  signingIn: string;
+  signInWithOIDC: string;
+  sessionExpired: string;
+  invalidCredentials: string;
+  accountLockedUntil: (time: string) => string;
+  loginUnavailable: string;
   pairingDevice: string;
   notPaired: string;
   pairButton: string;

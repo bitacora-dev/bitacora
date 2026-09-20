@@ -8,6 +8,7 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -175,6 +176,41 @@ func TestLocalLoginUsesSharedSessionAndRotationRevokesIt(t *testing.T) {
 	auth.Handler().ServeHTTP(registration, httptest.NewRequest(http.MethodGet, "/auth/local/register", nil))
 	if registration.Code != http.StatusNotFound {
 		t.Fatalf("registration route status = %d, want 404", registration.Code)
+	}
+}
+
+func TestLocalLoginReportsLockoutUntilWithoutCredentialDetail(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	if _, _, err := store.Initialize("password"); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	auth, err := NewWithLocal(context.Background(), Config{InsecureCookies: true}, store)
+	if err != nil {
+		t.Fatalf("NewWithLocal: %v", err)
+	}
+	for range localAuthMaxFailures {
+		req := httptest.NewRequest(http.MethodPost, "/auth/local/login", strings.NewReader(`{"password":"wrong","totp":"000000"}`))
+		req.Header.Set("Content-Type", "application/json")
+		auth.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/local/login", strings.NewReader(`{"password":"password","totp":"000000"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	auth.Handler().ServeHTTP(resp, req)
+	if resp.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked login status = %d, want %d", resp.Code, http.StatusTooManyRequests)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding lockout response: %v", err)
+	}
+	if body["locked_until"] != now.Add(localAuthLockout).Format(time.RFC3339) {
+		t.Fatalf("locked_until = %q", body["locked_until"])
+	}
+	if body["error"] == "invalid local credentials" {
+		t.Fatal("lockout response hid the actionable lockout state")
 	}
 }
 

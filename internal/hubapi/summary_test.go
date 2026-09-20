@@ -8,14 +8,24 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/prometheus/prometheus/model/labels"
 
+	"github.com/bitacora-dev/bitacora/internal/hubauth"
 	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
+
+type expiredHuman struct{}
+
+func (expiredHuman) HasSession(*http.Request) bool { return false }
+func (expiredHuman) Identity(*http.Request) (hubauth.Identity, bool) {
+	return hubauth.Identity{}, false
+}
+func (expiredHuman) SessionExpired(*http.Request) bool { return true }
 
 type fakeMetrics struct {
 	samples map[string][]metricstore.Sample // metric name -> samples, filtered by matchers
@@ -83,6 +93,30 @@ func (f *fakeLogs) Query(_ context.Context, q logstore.Query) (logstore.Page, er
 	}
 	end := min(q.Offset+q.Limit, len(matches))
 	return logstore.Page{Entries: matches[q.Offset:end], Total: len(matches)}, nil
+}
+
+func TestLoginHandlerServesEmbeddedShellWithoutSession(t *testing.T) {
+	srv := &Server{WebUI: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Bitácora</title>")}}, Humans: expiredHuman{}}
+	rec := httptest.NewRecorder()
+	srv.LoginHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login shell status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Bitácora") {
+		t.Fatalf("login shell did not return embedded UI: %q", rec.Body.String())
+	}
+}
+
+func TestRequireHumanMarksAnExpiredSessionForTheLoginScreen(t *testing.T) {
+	srv := &Server{Humans: expiredHuman{}}
+	rec := httptest.NewRecorder()
+	srv.requireHuman(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("expired session reached protected UI") })).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expired session status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	if location := rec.Header().Get("Location"); !strings.Contains(location, "expired=1") {
+		t.Fatalf("login redirect = %q, want expiration marker", location)
+	}
 }
 
 func (f *fakeEvents) ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error) {

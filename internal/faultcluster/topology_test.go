@@ -111,6 +111,64 @@ func TestReadTopology_NoHybridPMUMeansUnknownCoreType(t *testing.T) {
 	}
 }
 
+func TestReadTopology_UsesAuthoritativeIsolatedCPUList(t *testing.T) {
+	root := fourCPUTopology(t)
+	cpuRoot := filepath.Join(root, "devices", "system", "cpu")
+	writeSysFile(t, filepath.Join(cpuRoot, "isolated"), "1-2, 4\n")
+	// These kernel tuning lists are corroborating context only. cpu3 must not
+	// be marked isolated unless it appears in the authoritative isolated list.
+	writeSysFile(t, filepath.Join(cpuRoot, "nohz_full"), "3\n")
+	writeSysFile(t, filepath.Join(cpuRoot, "rcu_nocbs"), "3\n")
+
+	topo, err := ReadTopology(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !topo.IsolatedAvailable {
+		t.Fatal("expected authoritative isolated CPU list to be available")
+	}
+	if !topo.Isolated[1] || !topo.Isolated[2] {
+		t.Fatalf("expected CPUs 1 and 2 isolated, got %v", topo.Isolated)
+	}
+	if topo.Isolated[0] || topo.Isolated[3] || topo.Isolated[4] {
+		t.Fatalf("expected only topology CPUs 1 and 2 isolated, got %v", topo.Isolated)
+	}
+}
+
+func TestReadTopology_MissingIsolatedCPUListIsUnavailable(t *testing.T) {
+	root := fourCPUTopology(t)
+	cpuRoot := filepath.Join(root, "devices", "system", "cpu")
+	writeSysFile(t, filepath.Join(cpuRoot, "nohz_full"), "1\n")
+	writeSysFile(t, filepath.Join(cpuRoot, "rcu_nocbs"), "2\n")
+
+	topo, err := ReadTopology(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if topo.IsolatedAvailable {
+		t.Fatal("expected missing isolated CPU list to be unavailable")
+	}
+	if len(topo.Isolated) != 0 {
+		t.Fatalf("expected no isolated CPU values without the authoritative list, got %v", topo.Isolated)
+	}
+}
+
+func TestReadTopology_EmptyIsolatedCPUListIsAvailable(t *testing.T) {
+	root := fourCPUTopology(t)
+	writeSysFile(t, filepath.Join(root, "devices", "system", "cpu", "isolated"), "\n")
+
+	topo, err := ReadTopology(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !topo.IsolatedAvailable {
+		t.Fatal("expected an empty isolated CPU list to be available")
+	}
+	if len(topo.Isolated) != 0 {
+		t.Fatalf("expected an empty isolated CPU list, got %v", topo.Isolated)
+	}
+}
+
 func TestParseCPUList(t *testing.T) {
 	cases := map[string][]int{
 		"0-3":     {0, 1, 2, 3},

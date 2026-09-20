@@ -114,6 +114,7 @@ func TestCollector_ReadsHardwareIdentity(t *testing.T) {
 
 func TestCollector_ReadsCPUTopology(t *testing.T) {
 	sysRoot, procRoot := setupFixtureRoot(t)
+	writeFile(t, filepath.Join(sysRoot, "devices", "system", "cpu", "isolated"), "1\n")
 
 	c := New()
 	if err := c.Init(context.Background(), collector.Config{
@@ -151,6 +152,9 @@ func TestCollector_ReadsCPUTopology(t *testing.T) {
 	// cpu0 has no "online" file (always on); cpu1 explicitly online=1.
 	if byID["cpu0"].Attrs["online"] != "true" || byID["cpu1"].Attrs["online"] != "true" {
 		t.Fatalf("expected both online, got %+v", byID)
+	}
+	if byID["cpu0"].Attrs["isolated"] != "false" || byID["cpu1"].Attrs["isolated"] != "true" {
+		t.Fatalf("expected only cpu1 isolated, got %+v", byID)
 	}
 }
 
@@ -215,6 +219,65 @@ func TestCollector_MissingDataYieldsNoItemsNotError(t *testing.T) {
 			t.Fatalf("expected no items without any source data, got %+v", inv)
 		}
 	}
+}
+
+func TestCollector_MissingIsolatedListOmitsIsolationAttribute(t *testing.T) {
+	sysRoot, procRoot := setupFixtureRoot(t)
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"sys_root":  sysRoot,
+		"proc_root": procRoot,
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, inv := range sink.inventories {
+		if inv.Kind != schema.InventoryCPUTopology {
+			continue
+		}
+		for _, item := range inv.Items {
+			if _, ok := item.Attrs["isolated"]; ok {
+				t.Fatalf("expected no isolation datum without isolated sysfs file, got %+v", item.Attrs)
+			}
+		}
+		return
+	}
+	t.Fatal("expected a cpu_topology inventory")
+}
+
+func TestCollector_EmptyIsolatedListMarksCPUsNotIsolated(t *testing.T) {
+	sysRoot, procRoot := setupFixtureRoot(t)
+	writeFile(t, filepath.Join(sysRoot, "devices", "system", "cpu", "isolated"), "\n")
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"sys_root":  sysRoot,
+		"proc_root": procRoot,
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, inv := range sink.inventories {
+		if inv.Kind != schema.InventoryCPUTopology {
+			continue
+		}
+		for _, item := range inv.Items {
+			if item.Attrs["isolated"] != "false" {
+				t.Fatalf("expected %s not isolated with an empty isolated CPU list, got %+v", item.ID, item.Attrs)
+			}
+		}
+		return
+	}
+	t.Fatal("expected a cpu_topology inventory")
 }
 
 func TestCollector_RespectsContextCancellation(t *testing.T) {

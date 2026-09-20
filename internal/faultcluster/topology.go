@@ -24,12 +24,16 @@ const (
 	CoreTypeUnknown CoreType = "unknown"
 )
 
-// Topology maps logical CPUs to their physical core, online state, and —
-// best-effort — hybrid core type.
+// Topology maps logical CPUs to their physical core, online state, isolation
+// state, and — best-effort — hybrid core type.
 type Topology struct {
 	LogicalToCore map[int]int
 	CoreType      map[int]CoreType
 	Online        map[int]bool
+	Isolated      map[int]bool
+	// IsolatedAvailable reports whether the authoritative isolated CPU list
+	// was readable. A missing list is not evidence that every CPU is shared.
+	IsolatedAvailable bool
 }
 
 // ReadTopology reads /sys/devices/system/cpu (physical core mapping and
@@ -49,6 +53,7 @@ func ReadTopology(sysRoot string) (Topology, error) {
 		LogicalToCore: map[int]int{},
 		CoreType:      map[int]CoreType{},
 		Online:        map[int]bool{},
+		Isolated:      map[int]bool{},
 	}
 
 	for _, e := range entries {
@@ -85,6 +90,13 @@ func ReadTopology(sysRoot string) (Topology, error) {
 			topo.CoreType[id] = CoreTypeE
 		}
 	}
+	isolated, isolatedAvailable := isolatedCPUSet(sysRoot)
+	topo.IsolatedAvailable = isolatedAvailable
+	for id := range isolated {
+		if _, ok := topo.LogicalToCore[id]; ok {
+			topo.Isolated[id] = true
+		}
+	}
 
 	return topo, nil
 }
@@ -109,6 +121,18 @@ func hybridCPUSet(sysRoot, pmuName string) map[int]bool {
 		return nil
 	}
 	return parseCPUList(strings.TrimSpace(string(raw)))
+}
+
+// isolatedCPUSet reads the kernel's authoritative isolated CPU list. Linux
+// also exposes nohz_full and rcu_nocbs lists, but neither is a declaration of
+// CPU isolation: they can overlap with isolated CPUs without defining it.
+// Their presence therefore must never classify a CPU as isolated.
+func isolatedCPUSet(sysRoot string) (map[int]bool, bool) {
+	raw, err := os.ReadFile(filepath.Join(sysRoot, "devices", "system", "cpu", "isolated"))
+	if err != nil {
+		return nil, false
+	}
+	return parseCPUList(strings.TrimSpace(string(raw))), true
 }
 
 // parseCPUList parses the kernel's cpu-list range syntax, e.g.

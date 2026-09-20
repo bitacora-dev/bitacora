@@ -204,6 +204,9 @@ func cpuTopologyItems(sysRoot string) []schema.InventoryItem {
 			"online":    strconv.FormatBool(topo.Online[cpu]),
 			"core_type": string(topo.CoreType[cpu]),
 		}
+		if topo.IsolatedAvailable {
+			attrs["isolated"] = strconv.FormatBool(topo.Isolated[cpu])
+		}
 		items = append(items, schema.InventoryItem{
 			ID:    fmt.Sprintf("cpu%d", cpu),
 			Name:  fmt.Sprintf("cpu%d", cpu),

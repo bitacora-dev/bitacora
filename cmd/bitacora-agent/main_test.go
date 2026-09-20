@@ -134,7 +134,7 @@ func TestParseConfig_RejectsHubURLWithoutTokenSource(t *testing.T) {
 
 func TestBuildRegistryIncludesProductionCollectors(t *testing.T) {
 	reg := buildRegistry()
-	want := []string{"cpu", "diskarray", "docker", "hwidentity", "journald", "memory", "network", "operations", "package-actions", "pkgupdates", "public_surface", "shares", "shareusage", "ups", "users"}
+	want := []string{"cpu", "diskarray", "docker", "hwidentity", "hwmon", "journald", "memory", "network", "operations", "package-actions", "pkgupdates", "public_surface", "shares", "shareusage", "ups", "users"}
 	if got := reg.Names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected production collector catalog: got %v, want %v", got, want)
 	}

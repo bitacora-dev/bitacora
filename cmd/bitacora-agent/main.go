@@ -23,6 +23,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/collector/diskarray"
 	"github.com/bitacora-dev/bitacora/internal/collector/docker"
 	"github.com/bitacora-dev/bitacora/internal/collector/hwidentity"
+	"github.com/bitacora-dev/bitacora/internal/collector/hwmon"
 	"github.com/bitacora-dev/bitacora/internal/collector/journald"
 	"github.com/bitacora-dev/bitacora/internal/collector/memory"
 	"github.com/bitacora-dev/bitacora/internal/collector/network"
@@ -192,6 +193,7 @@ func buildRegistry(actionLists ...agentactions.Allowlist) collector.Registry {
 	reg.Register(users.New(), 5*time.Minute, 10*time.Second)
 	reg.Register(ups.New(), time.Minute, 10*time.Second)
 	reg.Register(hwidentity.New(), 5*time.Minute, 10*time.Second)
+	reg.Register(hwmon.New(), 10*time.Second, 5*time.Second)
 	reg.Register(diskarray.New(), 5*time.Minute, 10*time.Second)
 	// shareusage walks share directories (like `du -sh`), which can take
 	// minutes on large media shares — ADR-0016 calls for a low-frequency

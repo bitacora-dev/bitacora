@@ -21,9 +21,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/collector"
@@ -33,8 +35,15 @@ import (
 )
 
 const (
-	defaultProcNetDev = "/proc/net/dev"
-	defaultSpoolDir   = "/var/lib/bitacora/spool"
+	defaultProcNetDev  = "/proc/net/dev"
+	defaultSpoolDir    = "/var/lib/bitacora/spool"
+	defaultSysClassNet = "/sys/class/net"
+	// vpnReportInterval keeps the VPN tunnel Inventory on the cadence it
+	// had when this collector ran every 30s. Traffic now runs at 10s (see
+	// cmd/bitacora-agent), and re-reporting an unchanged tunnel list three
+	// times as often would be pure write amplification: the helper that
+	// produces it only runs every few minutes (ADR-0005) anyway.
+	vpnReportInterval = 30 * time.Second
 	// staleAfter mirrors ADR-0005's "más de tres intervalos de antigüedad
 	// se descarta" — bitacora-vpn's timer interval is expected to be
 	// short (minutes), so a stale VPN spool entry means the helper itself
@@ -47,9 +56,18 @@ const (
 // cumulative counters, with no previous-sample bookkeeping — the hub, not
 // the agent, turns consecutive counter samples into a rate.
 type Collector struct {
-	procNetDev string
-	spoolDir   string
-	hostID     string
+	procNetDev  string
+	spoolDir    string
+	sysClassNet string
+	hostID      string
+
+	now func() time.Time
+
+	// The runtime abandons a Collect call that overruns its timeout but
+	// cannot stop the goroutine running it (ADR-0007), so two cycles can
+	// briefly overlap. mu guards the only state this collector keeps.
+	mu            sync.Mutex
+	lastVPNReport time.Time
 }
 
 type ifaceCounters struct {
@@ -57,7 +75,7 @@ type ifaceCounters struct {
 }
 
 // New returns a collector with production defaults.
-func New() *Collector { return &Collector{} }
+func New() *Collector { return &Collector{now: time.Now} }
 
 // Name implements collector.Collector.
 func (c *Collector) Name() string { return "network" }
@@ -72,6 +90,10 @@ func (c *Collector) Requires() []collector.Capability { return nil }
 func (c *Collector) Init(ctx context.Context, cfg collector.Config, host *collector.HostInfo) error {
 	c.procNetDev = configuredPath(cfg, "proc_net_dev", defaultProcNetDev)
 	c.spoolDir = configuredPath(cfg, "spool_dir", defaultSpoolDir)
+	c.sysClassNet = configuredPath(cfg, "sys_class_net", defaultSysClassNet)
+	if c.now == nil {
+		c.now = time.Now
+	}
 	if host != nil {
 		c.hostID = host.ID
 	}
@@ -86,19 +108,41 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 	default:
 	}
 
-	now := time.Now()
+	now := c.clock()
 	c.collectTraffic(sink)
 
-	items := c.readVPNTunnels()
-	sink.Inventory(schema.Inventory{
-		HostID:     c.hostID,
-		Kind:       schema.InventoryVPNTunnel,
-		ReportedAt: now.UTC(),
-		Schema:     schema.CurrentSchemaVersion,
-		Items:      items,
-	})
+	if c.shouldReportVPN(now) {
+		items := c.readVPNTunnels()
+		sink.Inventory(schema.Inventory{
+			HostID:     c.hostID,
+			Kind:       schema.InventoryVPNTunnel,
+			ReportedAt: now.UTC(),
+			Schema:     schema.CurrentSchemaVersion,
+			Items:      items,
+		})
+	}
 
 	return nil
+}
+
+func (c *Collector) clock() time.Time {
+	if c.now == nil {
+		return time.Now()
+	}
+	return c.now()
+}
+
+// shouldReportVPN throttles the tunnel Inventory to vpnReportInterval so
+// shortening the traffic cadence doesn't silently change how often the VPN
+// signal is written. The first cycle always reports.
+func (c *Collector) shouldReportVPN(now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.lastVPNReport.IsZero() && now.Sub(c.lastVPNReport) < vpnReportInterval {
+		return false
+	}
+	c.lastVPNReport = now
+	return true
 }
 
 // Close implements collector.Collector.
@@ -111,22 +155,127 @@ func configuredPath(cfg collector.Config, key, fallback string) string {
 	return fallback
 }
 
-// collectTraffic reports each interface's current cumulative byte counters
-// as-is. There's no rate math and no previous-cycle state here: emitting
-// the raw counter means the very first cycle already produces a sample
-// (no warm-up cycle needed to establish a delta), and a counter reset from
-// a reboot or NIC reset is simply a lower next value — it's the hub's job
-// to notice that when it differentiates, not this collector's.
+// collectTraffic reports the current cumulative byte counters of the
+// interfaces that count as host traffic (see selectHostInterfaces) as-is.
+// There's no rate math and no previous-cycle state here: emitting the raw
+// counter means the very first cycle already produces a sample (no warm-up
+// cycle needed to establish a delta), and a counter reset from a reboot or
+// NIC reset is simply a lower next value — it's the hub's job to notice
+// that when it differentiates, not this collector's.
 func (c *Collector) collectTraffic(sink collector.Sink) {
 	counters, err := readProcNetDev(c.procNetDev)
 	if err != nil {
 		return
 	}
 
-	for iface, cur := range counters {
+	names := make([]string, 0, len(counters))
+	for iface := range counters {
+		names = append(names, iface)
+	}
+	for _, iface := range selectHostInterfaces(names, c.sysClassNet) {
+		cur := counters[iface]
 		sink.Counter("bitacora_net_rx_bytes_total", float64(cur.rxBytes), collector.Labels{"interface": iface})
 		sink.Counter("bitacora_net_tx_bytes_total", float64(cur.txBytes), collector.Labels{"interface": iface})
 	}
+}
+
+// selectHostInterfaces decides which of the interfaces in /proc/net/dev
+// count as this host's traffic. Answering "all of them" is what made the
+// number false: on a Docker host the same byte is counted two and three
+// times, because a container's packet crosses its veth, then the bridge
+// (docker0, docker_gwbridge, br-*), then the physical NIC. Tunnels double
+// count the same way: a byte sent over tailscale0 or wg0 leaves the
+// machine encapsulated inside a physical NIC's counters too.
+//
+// The rule is therefore: count only the interfaces bytes actually cross to
+// enter or leave the machine — the device-backed ones. That is also the
+// only stable set. veth interfaces are created and destroyed with every
+// container start and stop, so including them churns series identities
+// (ADR-0006's cardinality concern) for numbers that were already counted
+// elsewhere.
+//
+// Two tiers, because sysfs is the authority but isn't always there:
+//
+//  1. If sysfs classifies at least one interface as device-backed, those
+//     are the host's interfaces. This is the production path: sysfs links
+//     every virtual netdev under .../devices/virtual/net/, so bridges,
+//     veths, tunnels, bonds and VLANs all fall out here by construction,
+//     including kinds that don't exist yet.
+//  2. Otherwise — sysfs absent, or every interface virtual, which is what
+//     an agent inside a container sees, where the container's own eth0 IS
+//     a veth end and dropping it would report nothing — fall back to
+//     excluding the well-known container and tunnel plumbing by name.
+//
+// Loopback is already filtered out while parsing /proc/net/dev.
+func selectHostInterfaces(names []string, sysClassNet string) []string {
+	sort.Strings(names)
+
+	deviceBacked := make([]string, 0, len(names))
+	for _, iface := range names {
+		if isDeviceBacked(sysClassNet, iface) {
+			deviceBacked = append(deviceBacked, iface)
+		}
+	}
+	if len(deviceBacked) > 0 {
+		return deviceBacked
+	}
+
+	selected := make([]string, 0, len(names))
+	for _, iface := range names {
+		if !looksLikeVirtualInterface(iface) {
+			selected = append(selected, iface)
+		}
+	}
+	return selected
+}
+
+// isDeviceBacked asks sysfs whether an interface is backed by a real
+// device. Linux symlinks /sys/class/net/<iface> into the device tree, and
+// every software netdev lands under .../devices/virtual/net/ — so the
+// check is a readlink, not a name pattern, and needs no exec (ADR-0012).
+// A missing or unreadable link answers "unknown", which reads as
+// not-device-backed and lets the name fallback decide.
+func isDeviceBacked(sysClassNet, iface string) bool {
+	if sysClassNet == "" {
+		return false
+	}
+	target, err := os.Readlink(filepath.Join(sysClassNet, iface))
+	if err != nil {
+		return false
+	}
+	return !strings.Contains(filepath.ToSlash(target), "/devices/virtual/")
+}
+
+// virtualInterfacePrefixes lists the interface name prefixes that are
+// never host traffic in their own right, used only when sysfs can't
+// answer. Each entry is either container/hypervisor plumbing whose bytes
+// are also counted on the NIC they exit through (veth, docker0,
+// docker_gwbridge, br-*, virbr*, lxcbr*, cni*, flannel*, vnet*, tap*), an
+// encapsulating tunnel whose payload leaves inside a physical NIC's
+// counters (tun*, wg*, tailscale*, zt*, vxlan*, gre*, sit*), or an
+// aggregate that would double count its own members (bond*, dummy*).
+var virtualInterfacePrefixes = []string{
+	"veth", "docker", "virbr", "lxcbr", "cni", "flannel", "vnet", "tap",
+	"tun", "wg", "tailscale", "zt", "vxlan", "gre", "sit",
+	"bond", "dummy",
+}
+
+func looksLikeVirtualInterface(iface string) bool {
+	for _, prefix := range virtualInterfacePrefixes {
+		if strings.HasPrefix(iface, prefix) {
+			return true
+		}
+	}
+	// Bridges: "br-<hash>" is Docker's user-defined network naming and
+	// "br0"/"br1" the conventional manual one. Plain "br" as a whole name
+	// is not a bridge convention, so a bare prefix match would be too
+	// eager — a separator or digit has to follow.
+	if rest, ok := strings.CutPrefix(iface, "br"); ok && rest != "" {
+		if rest[0] == '-' || (rest[0] >= '0' && rest[0] <= '9') {
+			return true
+		}
+	}
+	return false
 }
 
 // readProcNetDev parses /proc/net/dev's fixed column format: two header

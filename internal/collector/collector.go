@@ -5,6 +5,7 @@ package collector
 
 import (
 	"context"
+	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
@@ -48,6 +49,27 @@ type Sink interface {
 	Event(e Event)
 	LogLines(source string, lines []LogLine)
 	Inventory(inv Inventory)
+}
+
+// CycleSink is an optional capability a Sink may implement so the runtime
+// can give one collection cycle a single instant.
+//
+// Without it, a Sink that stamps each emission with its own time.Now()
+// splits one cycle across several timestamps: the network collector emits
+// two counters per interface, so a host with nineteen interfaces produced
+// thirty-eight metrics with thirty-eight distinct millisecond timestamps.
+// Anything that aggregates several series by timestamp (hubapi's
+// rateSeries sums the per-interface rates of a cycle into one host-level
+// point) then sees each interface alone at its own instant instead of the
+// cycle's total, which is how a busy host ended up reporting 0 B/s.
+//
+// BeginCycle returns a Sink whose emissions all carry `now`. It must not
+// mutate the receiver: the returned Sink is used for exactly one Collect
+// call and then discarded, while the original keeps serving other
+// collectors concurrently.
+type CycleSink interface {
+	Sink
+	BeginCycle(now time.Time) Sink
 }
 
 // HostInfo describes the machine the agent runs on.

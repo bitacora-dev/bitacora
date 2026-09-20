@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/user"
 	"strconv"
@@ -64,10 +65,10 @@ func runLocalAuthCommandWithDependencies(args []string, in *os.File, out io.Writ
 		if err != nil {
 			return err
 		}
+		printSecondFactor(out, secret, recovery)
 		if err := dependencies.ensureOwner(); err != nil {
 			return err
 		}
-		printSecondFactor(out, secret, recovery)
 	case "rotate-password":
 		if err := verifyCurrentPassword(store, in, out, dependencies.promptCurrent); err != nil {
 			return err
@@ -180,15 +181,47 @@ func printRecoveryCodes(out io.Writer, recovery []string) {
 	}
 }
 
-// Packaging creates the bitacora system user. Restrict ownership here, where
-// the fixed /etc paths are used, without making temp-directory unit tests need
-// a host-specific account.
+type localAuthOwnerDependencies struct {
+	euid        func() int
+	lookup      func(string) (*user.User, error)
+	chown       func(string, int, int) error
+	chmod       func(string, os.FileMode) error
+	isContainer func() bool
+	warn        func(string, ...any)
+}
+
+// Packaging creates the bitacora system user. The official container does not:
+// its root-owned volume needs private modes but has no service account to own
+// it. Systemd installations still require that account and retain the chown.
 func ensureLocalAuthOwner() error {
-	if os.Geteuid() != 0 {
+	return ensureLocalAuthOwnerForPaths([]string{hubauth.DefaultLocalAuthPath, hubauth.DefaultLocalAuthKeyPath}, localAuthOwnerDependencies{
+		euid:   os.Geteuid,
+		lookup: user.Lookup,
+		chown:  os.Chown,
+		chmod:  os.Chmod,
+		isContainer: func() bool {
+			_, err := os.Stat("/.dockerenv")
+			return err == nil
+		},
+		warn: log.Printf,
+	})
+}
+
+func ensureLocalAuthOwnerForPaths(paths []string, dependencies localAuthOwnerDependencies) error {
+	if dependencies.euid() != 0 {
 		return nil
 	}
-	account, err := user.Lookup("bitacora")
+	account, err := dependencies.lookup("bitacora")
 	if err != nil {
+		if dependencies.isContainer() {
+			for _, path := range paths {
+				if err := dependencies.chmod(path, 0o600); err != nil {
+					return fmt.Errorf("setting mode for %s: %w", path, err)
+				}
+			}
+			dependencies.warn("bitacora-hub: bitacora user is unavailable in a container; keeping local authentication files root-owned with mode 0600")
+			return nil
+		}
 		return fmt.Errorf("looking up bitacora owner: %w", err)
 	}
 	uid, err := strconv.Atoi(account.Uid)
@@ -199,11 +232,11 @@ func ensureLocalAuthOwner() error {
 	if err != nil {
 		return fmt.Errorf("parsing bitacora gid: %w", err)
 	}
-	for _, path := range []string{hubauth.DefaultLocalAuthPath, hubauth.DefaultLocalAuthKeyPath} {
-		if err := os.Chown(path, uid, gid); err != nil {
+	for _, path := range paths {
+		if err := dependencies.chown(path, uid, gid); err != nil {
 			return fmt.Errorf("setting owner for %s: %w", path, err)
 		}
-		if err := os.Chmod(path, 0o600); err != nil {
+		if err := dependencies.chmod(path, 0o600); err != nil {
 			return fmt.Errorf("setting mode for %s: %w", path, err)
 		}
 	}

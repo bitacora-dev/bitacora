@@ -119,7 +119,7 @@ func (s *LocalStore) IsEnabled() bool {
 
 // Initialize creates the encryption key and the credential. The returned
 // secret and recovery codes are the only plaintext copies this package emits.
-func (s *LocalStore) Initialize(password string) (string, []string, error) {
+func (s *LocalStore) Initialize(password string) (plaintextSecret string, recoveryCodes []string, err error) {
 	if s == nil {
 		return "", nil, errors.New("local authentication store is nil")
 	}
@@ -135,11 +135,27 @@ func (s *LocalStore) Initialize(password string) (string, []string, error) {
 			return "", nil, fmt.Errorf("checking local authentication files: %w", err)
 		}
 	}
+	var created []string
+	defer func() {
+		if err == nil {
+			return
+		}
+		var cleanupErrs []error
+		for _, path := range created {
+			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				cleanupErrs = append(cleanupErrs, removeErr)
+			}
+		}
+		if len(cleanupErrs) > 0 {
+			err = fmt.Errorf("%w; initialization may be incomplete; remove %q and %q before retrying: %w", err, s.path, s.keyPath, errors.Join(cleanupErrs...))
+		}
+	}()
 	key, err := randomBytes(localAuthKeyBytes)
 	if err != nil {
 		return "", nil, err
 	}
 	defer zero(key)
+	created = append(created, s.keyPath)
 	if err := writePrivateFile(s.keyPath, key); err != nil {
 		return "", nil, fmt.Errorf("writing local authentication key: %w", err)
 	}
@@ -152,6 +168,7 @@ func (s *LocalStore) Initialize(password string) (string, []string, error) {
 		return "", nil, err
 	}
 	state := localAuthState{Version: 1, Password: passwordRecord, TOTP: secret.encryptedSecret, Recovery: recovery.hashes, SessionGeneration: 1}
+	created = append(created, s.path)
 	if err := s.writeState(state); err != nil {
 		return "", nil, err
 	}

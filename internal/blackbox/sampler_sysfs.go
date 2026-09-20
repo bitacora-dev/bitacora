@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/bitacora-dev/bitacora/internal/hwmon"
 )
 
 // sampleCPUFreqAndThrottle reads each logical CPU's current scaling
@@ -44,50 +45,18 @@ func (s *Sampler) sampleCPUFreqAndThrottle(out *Sample) {
 // at least consistent sample to sample, which is what matters for the
 // black box's own trend data.
 func (s *Sampler) sampleSensors(out *Sample) {
-	hwmonRoot := filepath.Join(s.SysRoot, "class", "hwmon")
-	entries, err := os.ReadDir(hwmonRoot)
+	temperatures, err := hwmon.ReadTemperatures(filepath.Join(s.SysRoot, "class", "hwmon"))
 	if err != nil {
 		return
 	}
 
-	var dirs []string
-	for _, e := range entries {
-		dirs = append(dirs, e.Name())
-	}
-	sort.Strings(dirs)
-
-	n := 0
-	for _, dir := range dirs {
+	for n, temperature := range temperatures {
 		if n >= MaxSensors {
 			break
 		}
-		devicePath := filepath.Join(hwmonRoot, dir)
-		files, err := os.ReadDir(devicePath)
-		if err != nil {
-			continue
-		}
-
-		var inputs []string
-		for _, f := range files {
-			if strings.HasPrefix(f.Name(), "temp") && strings.HasSuffix(f.Name(), "_input") {
-				inputs = append(inputs, f.Name())
-			}
-		}
-		sort.Strings(inputs)
-
-		for _, in := range inputs {
-			if n >= MaxSensors {
-				break
-			}
-			milliC, err := readIntFile(filepath.Join(devicePath, in))
-			if err != nil {
-				continue
-			}
-			out.SensorTempMilliC[n] = int32(milliC)
-			n++
-		}
+		out.SensorTempMilliC[n] = int32(temperature.MilliC)
+		out.NumSensors++
 	}
-	out.NumSensors = uint16(n)
 }
 
 // sampleEDAC reads ECC error counters from every memory controller under

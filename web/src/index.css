@@ -302,7 +302,8 @@ body {
 
 .metrics-grid,
 .lower-grid,
-.inventory-grid {
+.inventory-grid,
+.processor-layout {
   display: grid;
   gap: 1rem;
 }
@@ -329,6 +330,128 @@ body {
 
 .metrics-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.processor-layout {
+  grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.75fr);
+  align-items: stretch;
+}
+
+.processor-summary {
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.processor-summary .chart-panel {
+  min-height: 0;
+}
+
+.processor-summary .chart-canvas {
+  height: clamp(10rem, 14vw, 13.75rem);
+}
+
+.cpu-core-panel {
+  display: grid;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.cpu-core-panel .panel-title-row {
+  margin-bottom: 0.85rem;
+}
+
+.cpu-core-model,
+.cpu-core-empty {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.cpu-core-power {
+  color: var(--gold);
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.cpu-core-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  align-content: start;
+  gap: 0.65rem;
+  max-height: 28.5rem;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.cpu-core {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 0.65rem;
+}
+
+.cpu-core-heading,
+.cpu-thread {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.cpu-core-heading {
+  justify-content: space-between;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.cpu-core-heading strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cpu-thread-list {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.65rem;
+}
+
+.cpu-thread {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.cpu-thread > span:first-child {
+  flex: 0 0 auto;
+}
+
+.cpu-thread-meter {
+  height: 0.42rem;
+  flex: 1 1 auto;
+  min-width: 1rem;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line-soft);
+}
+
+.cpu-thread-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--cyan);
+}
+
+.cpu-thread strong {
+  min-width: 3.6rem;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 /* The network chart is the third metric: give it a complete row instead of
@@ -919,6 +1042,10 @@ body {
     grid-template-columns: repeat(2, minmax(44rem, 1fr));
   }
 
+  .processor-layout {
+    grid-template-columns: minmax(0, 1.65fr) minmax(24rem, 0.75fr);
+  }
+
   .lower-grid {
     grid-template-columns: minmax(56rem, 1.25fr) minmax(30rem, 0.75fr);
   }
@@ -945,8 +1072,17 @@ body {
 
   .metrics-grid,
   .lower-grid,
-  .inventory-grid {
+  .inventory-grid,
+  .processor-layout {
     grid-template-columns: 1fr;
+  }
+
+  .processor-summary {
+    grid-template-rows: none;
+  }
+
+  .processor-summary .chart-canvas {
+    height: 220px;
   }
 
   .dashboard-metadata {

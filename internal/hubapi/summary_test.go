@@ -186,6 +186,9 @@ func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
 	if len(got.CPU) != 1 || got.CPU[0].Value != 0.42 {
 		t.Fatalf("expected only the total cpu point at 0.42, got %+v", got.CPU)
 	}
+	if len(got.CPUCores) != 2 || got.CPUCores[0].CPU != "0" || got.CPUCores[1].CPU != "1" {
+		t.Fatalf("expected two identified cpu core series, got %+v", got.CPUCores)
+	}
 	if len(got.Memory) != 1 || got.Memory[0].Value != 0.7 {
 		t.Fatalf("expected 1 memory point at 0.7, got %+v", got.Memory)
 	}
@@ -203,7 +206,7 @@ func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
 	}
 }
 
-func TestHandleSummary_FiltersCPUToTotalSeries(t *testing.T) {
+func TestHandleSummary_KeepsCPUCoresAsSeparateSeries(t *testing.T) {
 	now := time.Now()
 	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
 		"bitacora_cpu_usage_ratio": {
@@ -233,6 +236,15 @@ func TestHandleSummary_FiltersCPUToTotalSeries(t *testing.T) {
 	}
 	if got.CPU[0].Value != 0.42 || !got.CPU[0].TS.Equal(now.Add(time.Second)) {
 		t.Fatalf("expected only host-a cpu=total point, got %+v", got.CPU[0])
+	}
+	if len(got.CPUCores) != 2 {
+		t.Fatalf("expected two cpu core series, got %+v", got.CPUCores)
+	}
+	if got.CPUCores[0].CPU != "0" || len(got.CPUCores[0].Points) != 1 || got.CPUCores[0].Points[0].Value != 0.9 {
+		t.Fatalf("expected cpu 0 to remain its own series, got %+v", got.CPUCores[0])
+	}
+	if got.CPUCores[1].CPU != "1" || len(got.CPUCores[1].Points) != 1 || got.CPUCores[1].Points[0].Value != 0.2 {
+		t.Fatalf("expected cpu 1 to remain its own series, got %+v", got.CPUCores[1])
 	}
 }
 
@@ -386,7 +398,7 @@ func TestHandleSummary_EmptyDataReturnsEmptyArraysNotNull(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	for _, field := range []string{`"cpu":[]`, `"memory":[]`, `"memory_total_bytes":[]`, `"memory_available_bytes":[]`, `"memory_used_bytes":[]`, `"events":[]`} {
+	for _, field := range []string{`"cpu":[]`, `"cpu_cores":[]`, `"memory":[]`, `"memory_total_bytes":[]`, `"memory_available_bytes":[]`, `"memory_used_bytes":[]`, `"events":[]`} {
 		if !strings.Contains(body, field) {
 			t.Fatalf("expected %s in response (empty array, not null), got %s", field, body)
 		}

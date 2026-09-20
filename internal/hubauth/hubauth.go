@@ -171,6 +171,7 @@ func NewWithLocal(ctx context.Context, cfg Config, local *LocalStore) (*Authenti
 func (a *Authenticator) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/login", a.handleLogin)
+	mux.HandleFunc("/auth/oidc/login", a.handleLogin)
 	mux.HandleFunc("/auth/local/login", a.handleLocalLogin)
 	mux.HandleFunc("/auth/callback", a.handleCallback)
 	mux.HandleFunc("/auth/logout", a.handleLogout)
@@ -203,7 +204,6 @@ func (a *Authenticator) Identity(r *http.Request) (Identity, bool) {
 		return Identity{}, false
 	}
 	if a.now().After(s.expiresAt) {
-		delete(a.sessions, cookie.Value)
 		return Identity{}, false
 	}
 	if s.localGeneration != nil && !a.local.generationValid(*s.localGeneration) {
@@ -211,6 +211,34 @@ func (a *Authenticator) Identity(r *http.Request) (Identity, bool) {
 		return Identity{}, false
 	}
 	return s.identity, true
+}
+
+// SessionExpired reports whether this browser had a known session which has
+// reached its absolute lifetime. It consumes the stale entry so subsequent
+// requests are ordinary unauthenticated requests.
+func (a *Authenticator) SessionExpired(r *http.Request) bool {
+	if a == nil {
+		return false
+	}
+	cookie, err := r.Cookie(sessionCookie)
+	if err != nil || cookie.Value == "" {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s, ok := a.sessions[cookie.Value]
+	if !ok || !a.now().After(s.expiresAt) {
+		return false
+	}
+	delete(a.sessions, cookie.Value)
+	return true
+}
+
+// LoginSources is intentionally limited to source availability. It lets the
+// unauthenticated login screen show only viable routes, without exposing any
+// account or credential information.
+func (a *Authenticator) LoginSources() (local, oidc bool) {
+	return a != nil && a.local != nil && a.local.IsEnabled(), a != nil && a.provider != nil
 }
 
 // RequireSession guards a handler with the human boundary. A nil
@@ -275,8 +303,20 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, ErrLocalAuthLocked) {
 			status = http.StatusTooManyRequests
 		}
+		if errors.Is(err, ErrInvalidLocalCredentials) {
+			if lockedUntil, lockErr := a.local.LockedUntil(); lockErr == nil && !lockedUntil.IsZero() {
+				status = http.StatusTooManyRequests
+			}
+		}
 		if !errors.Is(err, ErrInvalidLocalCredentials) && !errors.Is(err, ErrLocalAuthLocked) && !errors.Is(err, ErrLocalAuthDisabled) {
 			status = http.StatusInternalServerError
+		}
+		if status == http.StatusTooManyRequests {
+			lockedUntil, lockErr := a.local.LockedUntil()
+			if lockErr == nil {
+				writeJSON(w, status, map[string]string{"error": "local account is locked", "locked_until": lockedUntil.Format(time.RFC3339)})
+				return
+			}
 		}
 		writeJSONError(w, status, "invalid local credentials")
 		return
@@ -468,7 +508,8 @@ func (a *Authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *Authenticator) handleMe(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.Identity(r)
 	if !ok {
-		writeJSONError(w, http.StatusUnauthorized, "no active session")
+		local, oidc := a.LoginSources()
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no active session", "local_enabled": local, "oidc_enabled": oidc})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -538,7 +579,11 @@ func randomToken() (string, error) {
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(body)
 }

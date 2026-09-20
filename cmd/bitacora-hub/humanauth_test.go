@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +161,30 @@ func TestLocalAuthEnablesActionStore(t *testing.T) {
 	h.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/actions/package-operations", nil))
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("action route status = %d, want %d (configured action store)", recorder.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestLocalAuthServesTheEmbeddedLoginShellWithoutASession(t *testing.T) {
+	store := hubauth.NewLocalStore(t.TempDir()+"/local-auth.json", t.TempDir()+"/local-auth.key")
+	if _, _, err := store.Initialize("password"); err != nil {
+		t.Fatalf("initializing local authentication: %v", err)
+	}
+	h, err := newHubWithLocalAuth(t.TempDir(), store)
+	if err != nil {
+		t.Fatalf("newHub with local authentication: %v", err)
+	}
+	defer h.Close()
+
+	response, err := http.Get(serveHub(t, h) + "/auth/login")
+	if err != nil {
+		t.Fatalf("requesting the login shell: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("reading the login shell: %v", err)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "assets/") {
+		t.Fatalf("login shell status = %d, body = %q", response.StatusCode, body)
 	}
 }

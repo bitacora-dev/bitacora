@@ -336,6 +336,26 @@ func (s *LocalStore) Authenticate(password, factor string) (uint64, error) {
 	return state.SessionGeneration, nil
 }
 
+// LockedUntil reports the current local lockout without revealing anything
+// about the supplied credentials. It exists so the login boundary can give a
+// legitimate operator a useful recovery message after the deliberate
+// five-attempt lockout.
+func (s *LocalStore) LockedUntil() (time.Time, error) {
+	if s == nil {
+		return time.Time{}, ErrLocalAuthNotConfigured
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, err := s.readState()
+	if err != nil {
+		return time.Time{}, err
+	}
+	if s.now().UTC().Before(state.LockedUntil) {
+		return state.LockedUntil.UTC(), nil
+	}
+	return time.Time{}, nil
+}
+
 func (s *LocalStore) generationValid(generation uint64) bool {
 	if s == nil {
 		return false

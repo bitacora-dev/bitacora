@@ -65,6 +65,10 @@ type HumanIdentityProvider interface {
 	Identity(r *http.Request) (hubauth.Identity, bool)
 }
 
+type sessionExpiryReporter interface {
+	SessionExpired(r *http.Request) bool
+}
+
 // ActionConfirmationService is the only route that can create a pending
 // package operation. It accepts no observed agent data and exposes no generic
 // command mechanism.
@@ -142,6 +146,25 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+// LoginHandler serves only the SPA shell at the public login route. Its
+// scripts and styles are embedded in the same binary as the dashboard, so the
+// local recovery path has no network or CDN dependency.
+func (s *Server) LoginHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.WebUI == nil {
+			http.NotFound(w, r)
+			return
+		}
+		index, err := fs.ReadFile(s.WebUI, "index.html")
+		if err != nil {
+			http.Error(w, "web interface is unavailable", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(index)
+	})
+}
+
 // requireDeviceToken guards a /v1/* data route with device-token auth.
 // The pairing endpoints below deliberately don't go through this: they're
 // the bootstrap path an unpaired device uses to get a token in the first
@@ -189,7 +212,11 @@ func (s *Server) requireHuman(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		http.Redirect(w, r, "/auth/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		query := "return_to=" + url.QueryEscape(r.URL.RequestURI())
+		if reporter, ok := s.Humans.(sessionExpiryReporter); ok && reporter.SessionExpired(r) {
+			query += "&expired=1"
+		}
+		http.Redirect(w, r, "/auth/login?"+query, http.StatusFound)
 	})
 }
 

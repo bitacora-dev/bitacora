@@ -341,26 +341,36 @@ type CPUSeries struct {
 	Points []SeriesPoint `json:"points"`
 }
 
+// TemperatureSeries keeps one physical sensor's samples together. A sensor is
+// identified by the hwmon chip and sensor labels, so temperatures from
+// different devices are never flattened into a misleading single line.
+type TemperatureSeries struct {
+	Chip   string        `json:"chip"`
+	Sensor string        `json:"sensor"`
+	Points []SeriesPoint `json:"points"`
+}
+
 // Summary is GET /v1/summary's response: everything the single-page
 // timeline view needs to render, in one call (ADR-0014: "el endpoint
 // GET /v1/summary?host_id=... debe devolver todo lo necesario para
 // pintar la pantalla principal en una sola petición").
 type Summary struct {
-	HostID                  string         `json:"host_id"`
-	GeneratedAt             time.Time      `json:"generated_at"`
-	WindowSecs              float64        `json:"window_secs"`
-	CPU                     []SeriesPoint  `json:"cpu"`
-	CPUCores                []CPUSeries    `json:"cpu_cores"`
-	Memory                  []SeriesPoint  `json:"memory"`
-	MemoryTotalBytes        []SeriesPoint  `json:"memory_total_bytes"`
-	MemoryAvailableBytes    []SeriesPoint  `json:"memory_available_bytes"`
-	MemoryUsedBytes         []SeriesPoint  `json:"memory_used_bytes"`
-	MemorySwapTotalBytes    []SeriesPoint  `json:"memory_swap_total_bytes"`
-	MemorySwapFreeBytes     []SeriesPoint  `json:"memory_swap_free_bytes"`
-	NetworkRXBytesPerSecond []SeriesPoint  `json:"network_rx_bytes_per_second"`
-	NetworkTXBytesPerSecond []SeriesPoint  `json:"network_tx_bytes_per_second"`
-	Events                  []schema.Event `json:"events"`
-	Jobs                    []schema.Job   `json:"jobs"`
+	HostID                  string              `json:"host_id"`
+	GeneratedAt             time.Time           `json:"generated_at"`
+	WindowSecs              float64             `json:"window_secs"`
+	CPU                     []SeriesPoint       `json:"cpu"`
+	CPUCores                []CPUSeries         `json:"cpu_cores"`
+	Temperatures            []TemperatureSeries `json:"temperatures"`
+	Memory                  []SeriesPoint       `json:"memory"`
+	MemoryTotalBytes        []SeriesPoint       `json:"memory_total_bytes"`
+	MemoryAvailableBytes    []SeriesPoint       `json:"memory_available_bytes"`
+	MemoryUsedBytes         []SeriesPoint       `json:"memory_used_bytes"`
+	MemorySwapTotalBytes    []SeriesPoint       `json:"memory_swap_total_bytes"`
+	MemorySwapFreeBytes     []SeriesPoint       `json:"memory_swap_free_bytes"`
+	NetworkRXBytesPerSecond []SeriesPoint       `json:"network_rx_bytes_per_second"`
+	NetworkTXBytesPerSecond []SeriesPoint       `json:"network_tx_bytes_per_second"`
+	Events                  []schema.Event      `json:"events"`
+	Jobs                    []schema.Job        `json:"jobs"`
 }
 
 // EventHistory is a bounded page of historical events. Events are not pruned
@@ -617,6 +627,11 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "querying cpu core metrics", http.StatusInternalServerError)
 		return
 	}
+	temperatures, err := s.Metrics.Query(r.Context(), "bitacora_cpu_temperature_celsius", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying temperature metrics", http.StatusInternalServerError)
+		return
+	}
 	mem, err := s.Metrics.Query(r.Context(), "bitacora_memory_used_ratio", from, now, hostMatcher)
 	if err != nil {
 		http.Error(w, "querying memory metrics", http.StatusInternalServerError)
@@ -672,6 +687,7 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		WindowSecs:              window.Seconds(),
 		CPU:                     toSeries(cpu),
 		CPUCores:                cpuCoreSeries(cpuCores),
+		Temperatures:            temperatureSeries(temperatures),
 		Memory:                  toSeries(mem),
 		MemoryTotalBytes:        toSeries(memTotal),
 		MemoryAvailableBytes:    toSeries(memAvailable),
@@ -770,6 +786,31 @@ func cpuCoreSeries(samples []metricstore.Sample) []CPUSeries {
 		return cores[i].CPU < cores[j].CPU
 	})
 	return cores
+}
+
+func temperatureSeries(samples []metricstore.Sample) []TemperatureSeries {
+	bySensor := make(map[string][]metricstore.Sample)
+	for _, sample := range samples {
+		chip, sensor := sample.Labels["chip"], sample.Labels["sensor"]
+		if chip == "" || sensor == "" {
+			continue
+		}
+		bySensor[chip+"\x00"+sensor] = append(bySensor[chip+"\x00"+sensor], sample)
+	}
+
+	temperatures := make([]TemperatureSeries, 0, len(bySensor))
+	for key, points := range bySensor {
+		chip, sensor, _ := strings.Cut(key, "\x00")
+		sort.Slice(points, func(i, j int) bool { return points[i].Timestamp.Before(points[j].Timestamp) })
+		temperatures = append(temperatures, TemperatureSeries{Chip: chip, Sensor: sensor, Points: toSeries(points)})
+	}
+	sort.Slice(temperatures, func(i, j int) bool {
+		if temperatures[i].Chip == temperatures[j].Chip {
+			return temperatures[i].Sensor < temperatures[j].Sensor
+		}
+		return temperatures[i].Chip < temperatures[j].Chip
+	})
+	return temperatures
 }
 
 // rateSeries turns cumulative counter samples (e.g. the network collector's

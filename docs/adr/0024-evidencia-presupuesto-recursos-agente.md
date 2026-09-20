@@ -1,4 +1,4 @@
-# ADR-0023: Evidencia reproducible del presupuesto de recursos del agente
+# ADR-0024: Evidencia reproducible del presupuesto de recursos del agente
 
 - **Estado:** Aceptado
 - **Fecha:** 2026-09-19

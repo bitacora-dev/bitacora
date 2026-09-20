@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -138,5 +139,25 @@ func TestUIStaysOpenWhenHumanAuthIsNotConfigured(t *testing.T) {
 
 	if resp.StatusCode == http.StatusFound {
 		t.Fatal("an unconfigured hub redirected to a login that does not exist")
+	}
+}
+
+// A configured local credential is a human identity source just like OIDC, so
+// the production wiring must also enable ADR-0022's action store. A 401 proves
+// the route is wired but still requires a real authenticated human.
+func TestLocalAuthEnablesActionStore(t *testing.T) {
+	store := hubauth.NewLocalStore(t.TempDir()+"/local-auth.json", t.TempDir()+"/local-auth.key")
+	if _, _, err := store.Initialize("password"); err != nil {
+		t.Fatalf("initializing local authentication: %v", err)
+	}
+	h, err := newHubWithLocalAuth(t.TempDir(), store)
+	if err != nil {
+		t.Fatalf("newHub with local authentication: %v", err)
+	}
+	defer h.Close()
+	recorder := httptest.NewRecorder()
+	h.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/actions/package-operations", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("action route status = %d, want %d (configured action store)", recorder.Code, http.StatusUnauthorized)
 	}
 }

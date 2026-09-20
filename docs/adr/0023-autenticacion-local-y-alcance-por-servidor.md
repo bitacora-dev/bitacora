@@ -1,6 +1,6 @@
 # ADR-0023: Autenticación local limitada y alcance por servidor
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado
 - **Fecha:** 2026-09-19
 - **Sustituye a:** parcialmente, ADR-0019 (solo el descarte de credenciales locales)
 
@@ -141,9 +141,10 @@ todos sus hosts, pero el modelo no presupone que sea así en el futuro.
 
 ## Notas de implementación
 
-- Las tareas posteriores implementarán la fuente local, el adaptador común de
-  sesión, el almacenamiento de alcance, la migración de rutas y las pruebas de
-  no revelación. Este ADR no modifica código de producción ni habilita el login.
+- La fuente local reutiliza las sesiones de `internal/hubauth`; su credencial,
+  bloqueos y generación se persisten en los ficheros definidos arriba. El
+  alcance inicial de `local:operator` es `view` y `operate` sobre todos los
+  hosts; esta primera entrega lo modela sin aplicar todavía filtros de rutas.
 - Antes de cualquier implementación se revisarán los parámetros criptográficos
   frente a la biblioteca y la capacidad de memoria de la instalación; cualquier
   cambio de los valores decididos requiere actualizar este ADR.

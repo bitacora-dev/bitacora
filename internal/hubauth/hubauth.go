@@ -1,5 +1,5 @@
 // Package hubauth implements the optional human authentication boundary of
-// ADR-0019.
+// ADR-0019 and ADR-0023.
 //
 // The hub keeps an authentication boundary of its own but never becomes an
 // identity provider: it stores no passwords, no hashes and no recovery flows.
@@ -18,7 +18,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +69,7 @@ func (c Config) Enabled() bool {
 // Identity is what the hub keeps about a signed-in person: enough to show who
 // is looking and to write it into an audit trail, and nothing more.
 type Identity struct {
+	Source  string `json:"source"`
 	Subject string `json:"subject"`
 	Email   string `json:"email,omitempty"`
 	Name    string `json:"name,omitempty"`
@@ -74,6 +78,9 @@ type Identity struct {
 type session struct {
 	identity  Identity
 	expiresAt time.Time
+	// localGeneration is set only for the local source. A credential rotation
+	// changes the persisted generation and invalidates every matching session.
+	localGeneration *uint64
 }
 
 type pending struct {
@@ -95,6 +102,7 @@ type Authenticator struct {
 	oauth    oauth2.Config
 	ttl      time.Duration
 	secure   bool
+	local    *LocalStore
 
 	mu       sync.Mutex
 	sessions map[string]session
@@ -107,8 +115,28 @@ type Authenticator struct {
 // a nil Authenticator and no error when the config is disabled, so callers can
 // wire it unconditionally.
 func New(ctx context.Context, cfg Config) (*Authenticator, error) {
-	if !cfg.Enabled() {
+	return NewWithLocal(ctx, cfg, nil)
+}
+
+// NewWithLocal keeps OIDC and local authentication behind one session store.
+// Either source can be absent; returning nil still means the human boundary is
+// entirely disabled.
+func NewWithLocal(ctx context.Context, cfg Config, local *LocalStore) (*Authenticator, error) {
+	localEnabled := local != nil && local.IsEnabled()
+	if !cfg.Enabled() && !localEnabled {
 		return nil, nil
+	}
+
+	auth := &Authenticator{
+		ttl:      DefaultSessionTTL,
+		secure:   !cfg.InsecureCookies,
+		local:    local,
+		sessions: map[string]session{},
+		pendings: map[string]pending{},
+		now:      time.Now,
+	}
+	if !cfg.Enabled() {
+		return auth, nil
 	}
 
 	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
@@ -125,22 +153,17 @@ func New(ctx context.Context, cfg Config) (*Authenticator, error) {
 		ttl = DefaultSessionTTL
 	}
 
-	return &Authenticator{
-		provider: provider,
-		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
-		oauth: oauth2.Config{
-			ClientID:     cfg.ClientID,
-			ClientSecret: cfg.ClientSecret,
-			Endpoint:     provider.Endpoint(),
-			RedirectURL:  cfg.RedirectURL,
-			Scopes:       scopes,
-		},
-		ttl:      ttl,
-		secure:   !cfg.InsecureCookies,
-		sessions: map[string]session{},
-		pendings: map[string]pending{},
-		now:      time.Now,
-	}, nil
+	auth.provider = provider
+	auth.verifier = provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})
+	auth.oauth = oauth2.Config{
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		Endpoint:     provider.Endpoint(),
+		RedirectURL:  cfg.RedirectURL,
+		Scopes:       scopes,
+	}
+	auth.ttl = ttl
+	return auth, nil
 }
 
 // Handler serves the authentication endpoints. They are mounted as exact
@@ -148,6 +171,7 @@ func New(ctx context.Context, cfg Config) (*Authenticator, error) {
 func (a *Authenticator) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/login", a.handleLogin)
+	mux.HandleFunc("/auth/local/login", a.handleLocalLogin)
 	mux.HandleFunc("/auth/callback", a.handleCallback)
 	mux.HandleFunc("/auth/logout", a.handleLogout)
 	mux.HandleFunc("/auth/me", a.handleMe)
@@ -182,6 +206,10 @@ func (a *Authenticator) Identity(r *http.Request) (Identity, bool) {
 		delete(a.sessions, cookie.Value)
 		return Identity{}, false
 	}
+	if s.localGeneration != nil && !a.local.generationValid(*s.localGeneration) {
+		delete(a.sessions, cookie.Value)
+		return Identity{}, false
+	}
 	return s.identity, true
 }
 
@@ -202,12 +230,121 @@ func (a *Authenticator) RequireSession(next http.Handler) http.Handler {
 			writeJSONError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
+		if a.provider == nil {
+			http.Redirect(w, r, "/auth/login?return_to="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			return
+		}
 		a.startLogin(w, r, r.URL.RequestURI())
 	})
 }
 
 func (a *Authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if a.provider == nil {
+		a.handleLocalLogin(w, r)
+		return
+	}
 	a.startLogin(w, r, r.URL.Query().Get("return_to"))
+}
+
+// handleLocalLogin is deliberately the whole local surface: it accepts an
+// existing password and a TOTP or recovery code, but never creates, resets, or
+// enumerates users. Credential lifecycle stays on the server's TTY-only CLI.
+func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request) {
+	if a.local == nil {
+		writeJSONError(w, http.StatusNotFound, "local authentication is not configured")
+		return
+	}
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, localLoginPage(safeReturnTo(r.URL.Query().Get("return_to"))))
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	password, factor, returnTo, err := localLoginInput(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid local login request")
+		return
+	}
+	generation, err := a.local.Authenticate(password, factor)
+	if err != nil {
+		status := http.StatusUnauthorized
+		if errors.Is(err, ErrLocalAuthLocked) {
+			status = http.StatusTooManyRequests
+		}
+		if !errors.Is(err, ErrInvalidLocalCredentials) && !errors.Is(err, ErrLocalAuthLocked) && !errors.Is(err, ErrLocalAuthDisabled) {
+			status = http.StatusInternalServerError
+		}
+		writeJSONError(w, status, "invalid local credentials")
+		return
+	}
+	sid, err := randomToken()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "could not create the session")
+		return
+	}
+	a.mu.Lock()
+	a.sweepLocked()
+	a.sessions[sid] = session{
+		identity:        Identity{Source: "local", Subject: "local:operator", Name: "Local operator"},
+		expiresAt:       a.now().Add(DefaultSessionTTL),
+		localGeneration: &generation,
+	}
+	a.mu.Unlock()
+	http.SetCookie(w, a.cookie(sessionCookie, sid, DefaultSessionTTL))
+	if acceptsHTML(r) || r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
+		http.Redirect(w, r, safeReturnTo(returnTo), http.StatusFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(Identity{Source: "local", Subject: "local:operator", Name: "Local operator"})
+}
+
+func localLoginInput(r *http.Request) (password, factor, returnTo string, err error) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var body struct {
+			Password     string `json:"password"`
+			TOTP         string `json:"totp"`
+			RecoveryCode string `json:"recovery_code"`
+			ReturnTo     string `json:"return_to"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err = decoder.Decode(&body); err != nil {
+			return "", "", "", err
+		}
+		if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			return "", "", "", errors.New("multiple JSON values")
+		}
+		if (body.TOTP == "") == (body.RecoveryCode == "") {
+			return "", "", "", errors.New("one second factor is required")
+		}
+		if body.TOTP != "" {
+			return body.Password, body.TOTP, body.ReturnTo, nil
+		}
+		return body.Password, body.RecoveryCode, body.ReturnTo, nil
+	}
+	if err = r.ParseForm(); err != nil {
+		return "", "", "", err
+	}
+	factor = r.Form.Get("totp")
+	if recovery := r.Form.Get("recovery_code"); recovery != "" {
+		if factor != "" {
+			return "", "", "", errors.New("one second factor is required")
+		}
+		factor = recovery
+	}
+	if factor == "" {
+		return "", "", "", errors.New("second factor is required")
+	}
+	return r.Form.Get("password"), factor, r.Form.Get("return_to"), nil
+}
+
+func localLoginPage(returnTo string) string {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Bitácora sign in</title></head><body><form method="post" action="/auth/local/login"><input type="hidden" name="return_to" value="` + html.EscapeString(returnTo) + `"><label>Password <input name="password" type="password" autocomplete="current-password" required></label><label>Authentication code <input name="totp" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Sign in</button></form></body></html>`
 }
 
 func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, returnTo string) {
@@ -309,7 +446,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.sweepLocked()
 	a.sessions[sid] = session{
-		identity:  Identity{Subject: idToken.Subject, Email: claims.Email, Name: claims.Name},
+		identity:  Identity{Source: "oidc", Subject: idToken.Subject, Email: claims.Email, Name: claims.Name},
 		expiresAt: a.now().Add(a.ttl),
 	}
 	a.mu.Unlock()

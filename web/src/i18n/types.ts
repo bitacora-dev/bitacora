@@ -59,9 +59,14 @@ export interface Dictionary {
   cpuCoreLabel: (cpus: string) => string;
   cpuCoreType: (type: string) => string;
   cpuThreadLabel: (cpu: string) => string;
-  cpuThreadUsage: (cpu: string, usage: string) => string;
+  cpuThreadUsage: (cpu: string, mean: string, peak: string) => string;
   cpuOffline: string;
   cpuPowerWatts: (watts: string) => string;
+  cpuAveragingLabel: string;
+  cpuAveragingWindow: (seconds: number) => string;
+  cpuDetailsShow: string;
+  cpuDetailsHide: string;
+  cpuPeakLabel: (peak: string) => string;
   memoryUsedTitle: string;
   networkTrafficTitle: string;
   networkReceiveLabel: string;

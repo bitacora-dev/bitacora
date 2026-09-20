@@ -10,6 +10,7 @@ import PackageUpdatePanel from "./components/PackageUpdatePanel";
 import JobsList from "./components/JobsList";
 import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
+import LoginPanel from "./components/LoginPanel";
 
 const POLL_INTERVAL_MS = 10_000;
 const CPU_Y_RANGE: [number, number] = [0, 1];
@@ -61,6 +62,7 @@ function Brand() {
 
 export default function App() {
   const { t, intlTag } = useTranslation();
+  if (window.location.pathname === "/auth/login") return <LoginPanel />;
   const [hostID, setHostID] = useState(hostIDFromURL);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,6 +99,16 @@ export default function App() {
   const [logUnit, setLogUnit] = useState("");
   const [logFrom, setLogFrom] = useState(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
   const [logTo, setLogTo] = useState(() => new Date().toISOString().slice(0, 16));
+
+  useEffect(() => {
+    const checkSession = async () => {
+      const response = await fetch("/auth/me");
+      if (response.status !== 401) return;
+      window.location.assign(`/auth/login?return_to=${encodeURIComponent(window.location.pathname + window.location.search)}&expired=1`);
+    };
+    const interval = window.setInterval(() => { void checkSession(); }, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const memoryTotalByTS = useMemo(() => {
     const byTS = new Map<string, number>();

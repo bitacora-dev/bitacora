@@ -236,6 +236,13 @@ func newHubWithLocalAuth(dataDir string, localAuth *hubauth.LocalStore, pipeline
 	// requiring a browser session here would silence every agent at once.
 	mux.Handle("/v1/ingest", ingestSrv.Handler())
 	if auth != nil {
+		// This exact route wins over /auth/: it is the unguarded, embedded
+		// login shell. API endpoints remain owned by the authenticator below.
+		mux.Handle("/auth/login", readSrv.LoginHandler())
+		// The login shell's own committed assets must be reachable before a
+		// session exists. They are embedded files, never third-party URLs.
+		mux.Handle("/assets/", http.FileServer(http.FS(webui.FS())))
+		mux.Handle("/bitacora-logo.png", http.FileServer(http.FS(webui.FS())))
 		mux.Handle("/auth/", auth.Handler())
 	}
 	mux.Handle("/", readSrv.Handler())

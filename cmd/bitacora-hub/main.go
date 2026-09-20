@@ -20,6 +20,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -40,6 +41,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "auth" {
+		if err := runLocalAuthCommand(os.Args[2:], os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	addr := flag.String("addr", "127.0.0.1:8081", "listen address (ADR-0002: agent talks to hub here by default)")
 	dataDir := flag.String("data-dir", "/var/lib/bitacora", "base directory for hub data")
 	extractionRulesDir := flag.String("extraction-rules-dir", hubpipeline.DefaultExtractionRulesDir, "operator extraction rules directory")
@@ -56,7 +63,11 @@ func main() {
 		return
 	}
 
-	h, err := newHub(*dataDir, hubpipeline.Config{
+	localAuth, err := hubauth.OpenLocalStore(hubauth.DefaultLocalAuthPath, hubauth.DefaultLocalAuthKeyPath)
+	if err != nil {
+		log.Fatal(fmt.Errorf("opening local authentication: %w", err))
+	}
+	h, err := newHubWithLocalAuth(*dataDir, localAuth, hubpipeline.Config{
 		ExtractionRulesDir: *extractionRulesDir,
 		AlertRulesDir:      *alertRulesDir,
 		NotificationsPath:  *notificationsPath,
@@ -125,6 +136,13 @@ func (h *hub) Close() {
 // /v1/ingest endpoint (transport.Server, per ADR-0008) against storage
 // rooted at dataDir, merged into a single handler served by one listener.
 func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) {
+	return newHubWithLocalAuth(dataDir, nil, pipelineConfig...)
+}
+
+// newHubWithLocalAuth exists so production can load the fixed credential
+// paths while tests can exercise a private temporary credential without ever
+// reading or writing /etc.
+func newHubWithLocalAuth(dataDir string, localAuth *hubauth.LocalStore, pipelineConfig ...hubpipeline.Config) (*hub, error) {
 	relStore, err := storage.NewSQLiteStore(filepath.Join(dataDir, "db"))
 	if err != nil {
 		return nil, fmt.Errorf("opening relational store: %w", err)
@@ -196,7 +214,7 @@ func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) 
 	// hub on purpose — booting with authentication silently disabled would
 	// serve the interface to anyone who can reach the origin, which is the
 	// exact hole the ADR exists to close.
-	auth, err := hubauth.New(context.Background(), hubauth.ConfigFromEnv())
+	auth, err := hubauth.NewWithLocal(context.Background(), hubauth.ConfigFromEnv(), localAuth)
 	if err != nil {
 		return nil, fmt.Errorf("configuring human authentication: %w", err)
 	}

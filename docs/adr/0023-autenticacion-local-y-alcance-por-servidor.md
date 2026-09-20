@@ -4,6 +4,8 @@
 - **Fecha:** 2026-09-19
 - **Sustituye a:** parcialmente, ADR-0019 (solo el descarte de credenciales locales)
 
+> **Enmienda:** [ADR-0025](0025-instalacion-y-recuperacion-local-de-credencial.md) enmienda exclusivamente la prohibición de alta web y restablecimiento remoto para flujos tokenizados de instalación/recuperación que conservan acceso local; todo el resto sigue aceptado y vigente.
+
 ## Contexto
 
 OIDC opcional de ADR-0019 ya está implementado en `internal/hubauth` y conserva

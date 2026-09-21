@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory } from "./api";
+import { fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory, hasInstant } from "./api";
 
 describe("fetchHosts", () => {
   afterEach(() => {
@@ -64,4 +64,21 @@ describe("fetchLogHistory", () => {
 		await fetchLogHistory("host a", { from: "2026-01-01T00:00:00Z", to: "2026-01-02T00:00:00Z", text: "failed", source: "journald", unit: "nginx.service", limit: 50, offset: 100 });
 		expect(fetch).toHaveBeenCalledWith("/v1/logs?host_id=host+a&from=2026-01-01T00%3A00%3A00Z&to=2026-01-02T00%3A00%3A00Z&limit=50&offset=100&text=failed&source=journald&unit=nginx.service", { headers: { Authorization: "Bearer device-token" } });
 	});
+
+	it("narrows the page to the single block an event's log_refs names", async () => {
+		vi.stubGlobal("localStorage", { getItem: vi.fn().mockReturnValue("device-token") });
+		const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ entries: [] }), { status: 200 }));
+		vi.stubGlobal("fetch", fetch);
+		await fetchLogHistory("host-a", { from: "2026-01-01T00:00:00Z", to: "2026-01-02T00:00:00Z", block: "block a", limit: 50, offset: 0 });
+		expect(fetch).toHaveBeenCalledWith("/v1/logs?host_id=host-a&from=2026-01-01T00%3A00%3A00Z&to=2026-01-02T00%3A00%3A00Z&limit=50&offset=0&block=block+a", { headers: { Authorization: "Bearer device-token" } });
+	});
+});
+
+describe("hasInstant", () => {
+  it("rejects the zero instant Go sends for a timestamp `omitempty` never drops", () => {
+    expect(hasInstant("0001-01-01T00:00:00Z")).toBe(false);
+    expect(hasInstant("")).toBe(false);
+    expect(hasInstant(undefined)).toBe(false);
+    expect(hasInstant("2026-09-19T11:31:18Z")).toBe(true);
+  });
 });

@@ -5,7 +5,10 @@ import { useTranslation } from "../i18n";
 const CPU_PANEL_PREFERENCES_KEY = "bitacora_cpu_panel_preferences";
 export const CPU_AVERAGING_WINDOWS = [30, 60, 300, 900] as const;
 
-interface CoreGroup { id: string; type: string; online: boolean; cpus: CPUSeries[]; }
+// isolated lists the logical CPUs the kernel reports in its authoritative
+// isolcpus set. It stays empty when the kernel exposes no such list, which is
+// a different state from "nothing is isolated" and must not be drawn as one.
+interface CoreGroup { id: string; type: string; online: boolean; cpus: CPUSeries[]; isolated: string[]; }
 export interface CPUAggregate { ts: string; mean: number; max: number; count: number; }
 export interface CPUPanelPreferences { expanded: boolean; averagingWindowSeconds: typeof CPU_AVERAGING_WINDOWS[number]; }
 const defaultPreferences: CPUPanelPreferences = { expanded: false, averagingWindowSeconds: 60 };
@@ -31,15 +34,23 @@ export function groupCPUCores(series: CPUSeries[], inventory: Inventory | null):
     const item = topology.get(cpu.cpu);
     const coreID = item?.attrs.core_id;
     const key = coreID === undefined ? `cpu-${cpu.cpu}` : `core-${coreID}`;
-    const group = groups.get(key) ?? { id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", online: item?.attrs.online !== "false", cpus: [] };
+    const group = groups.get(key) ?? { id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", online: item?.attrs.online !== "false", cpus: [], isolated: [] };
     group.online = group.online && item?.attrs.online !== "false";
     if (group.type === "unknown" && item?.attrs.core_type) group.type = item.attrs.core_type;
+    if (item?.attrs.isolated === "true") group.isolated.push(cpu.cpu);
     group.cpus.push(cpu);
     groups.set(key, group);
   }
   return [...groups.values()]
     .map((group) => ({ ...group, cpus: group.cpus.sort((left, right) => cpuNumber(left.cpu) - cpuNumber(right.cpu)) }))
     .sort((left, right) => Number(left.id) - Number(right.id));
+}
+
+// How many logical CPUs the kernel has reserved. The panel is collapsed by
+// default, so this is the number that has to survive into the header: a core
+// held back by isolcpus reads as permanently idle without it.
+export function isolatedCPUCount(groups: { isolated: string[] }[]): number {
+  return groups.reduce((total, group) => total + group.isolated.length, 0);
 }
 
 export function aggregateCPUPoints(points: SeriesPoint[], intervalSeconds: number): CPUAggregate[] {
@@ -96,6 +107,7 @@ export default function CPUCorePanel({ cores, topology, identity }: Props) {
   const { t, intlTag } = useTranslation();
   const [preferences, setPreferences] = useState(readCPUPanelPreferences);
   const groups = groupCPUCores(cores, topology);
+  const isolatedCount = isolatedCPUCount(groups);
   const system = identity?.items.find((item) => item.id === "system");
   const model = system?.attrs.cpu_model;
   const power = Number(system?.attrs.cpu_power_watts);
@@ -108,7 +120,7 @@ export default function CPUCorePanel({ cores, topology, identity }: Props) {
   return <article className="control-panel cpu-core-panel">
     <div className="panel-title-row cpu-core-panel-header">
       <div><h2>{t.cpuCoresTitle}</h2>{model && <p className="cpu-core-model">{model}</p>}</div>
-      <div className="cpu-core-header-meta"><span className="cpu-temperature-slot" aria-hidden="true" />{hasPower && <span className="cpu-core-power">{t.cpuPowerWatts(new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 }).format(power))}</span>}</div>
+      <div className="cpu-core-header-meta"><span className="cpu-temperature-slot" aria-hidden="true" />{isolatedCount > 0 && <span className="cpu-core-isolated">{t.cpuIsolatedCount(isolatedCount)}</span>}{hasPower && <span className="cpu-core-power">{t.cpuPowerWatts(new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 }).format(power))}</span>}</div>
     </div>
     {groups.length === 0 ? <p className="cpu-core-empty">{t.cpuCoresPending}</p> : <>
       <div className="cpu-core-controls">
@@ -119,9 +131,10 @@ export default function CPUCorePanel({ cores, topology, identity }: Props) {
       </div>
       {preferences.expanded && <div className="cpu-core-grid" id={detailsID} aria-label={t.cpuCoresTitle}>
         {groups.map((group) => <section className="cpu-core" key={group.id}>
-          <div className="cpu-core-heading"><strong>{t.cpuCoreLabel(group.id)}</strong>{group.type !== "unknown" && <span>{t.cpuCoreType(group.type)}</span>}{!group.online && <span>{t.cpuOffline}</span>}</div>
+          <div className="cpu-core-heading"><strong>{t.cpuCoreLabel(group.id)}</strong>{group.type !== "unknown" && <span>{t.cpuCoreType(group.type)}</span>}{!group.online && <span>{t.cpuOffline}</span>}{group.isolated.length === group.cpus.length && <span>{t.cpuIsolated}</span>}</div>
           <div className="cpu-thread-list">{group.cpus.map((cpu) => {
             const aggregate = latestAggregate(cpu, preferences.averagingWindowSeconds);
+            const isolated = group.isolated.includes(cpu.cpu);
             const mean = aggregate?.mean ?? null;
             const peak = aggregate?.max ?? null;
             const peakWidth = Math.max(0, Math.min(1, peak ?? 0)) * 100;
@@ -133,6 +146,7 @@ export default function CPUCorePanel({ cores, topology, identity }: Props) {
               </div>
               <strong>{mean === null ? t.noSamples : percentage.format(mean)}</strong>
               {peak !== null && <small>{t.cpuPeakLabel(percentage.format(peak))}</small>}
+              {isolated && <small className="cpu-thread-isolated"><span className="sr-only">{t.cpuIsolatedThread(cpu.cpu)}</span><span aria-hidden="true">{t.cpuIsolated}</span></small>}
             </div>;
           })}</div>
         </section>)}

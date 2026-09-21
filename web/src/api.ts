@@ -1,5 +1,15 @@
 // Types mirror internal/hubapi.Summary exactly. Keep them in sync by hand;
 // the shape is intentionally small enough that a generator would be noise.
+// A field the hub sends and this file omits is dropped silently, with no
+// compile error to catch it — declare what arrives even before it is rendered.
+
+// Go's `omitempty` does not apply to time.Time, so a timestamp the producer
+// never set arrives as the zero instant rather than being absent.
+const ZERO_INSTANT_PREFIX = "0001-01-01";
+
+export function hasInstant(value: string | null | undefined): value is string {
+  return typeof value === "string" && value !== "" && !value.startsWith(ZERO_INSTANT_PREFIX);
+}
 
 export interface SeriesPoint {
   ts: string;
@@ -23,9 +33,28 @@ export interface EventSubject {
   pid?: number;
 }
 
+// LogRef mirrors schema.LogRef: the log block and zero-based line an Event was
+// derived from. logstore names each durable line "<block_id>:<line>", so a ref
+// resolves to a single entry id without a second lookup.
+export interface LogRef {
+  block_id: string;
+  line: number;
+}
+
+// JobLogRef mirrors schema.JobLogRef: the inclusive line range a Job's run
+// produced inside one durable block.
+export interface JobLogRef {
+  block_id: string;
+  from: number;
+  to: number;
+}
+
 export interface BitacoraEvent {
   id: string;
   ts: string;
+  // Go serializes time.Time even under `omitempty`, so an event the hub never
+  // stamped arrives as the zero instant. Read it through hasInstant.
+  ts_received?: string;
   host_id: string;
   source: string;
   type: string;
@@ -33,6 +62,9 @@ export interface BitacoraEvent {
   title: string;
   subject?: EventSubject;
   attrs?: Record<string, unknown>;
+  fingerprint?: string;
+  log_refs?: LogRef[];
+  schema?: number;
 }
 
 export interface Summary {
@@ -63,7 +95,16 @@ export interface Job {
   duration_seconds: number;
   status: "success" | "warning" | "failed" | "timeout" | "killed" | "running";
   exit_code: number;
+  signal?: string;
   stats?: Record<string, unknown>;
+  peer_host_id?: string;
+  // What started this run — "systemd-timer" or "systemd-path" today.
+  trigger?: string;
+  // When the trigger is due again. Absent runs arrive as the zero instant, so
+  // read it through hasInstant.
+  next_expected?: string;
+  log_refs?: JobLogRef[];
+  schema?: number;
 }
 
 export interface EventHistory {
@@ -110,6 +151,8 @@ export interface LogHistoryQuery {
   text?: string;
   source?: string;
   unit?: string;
+  // A single durable block id, as carried by an Event's or a Job's log_refs.
+  block?: string;
   limit: number;
   offset: number;
 }
@@ -137,6 +180,7 @@ export interface ActionToken {
 }
 
 export interface JobOutputLine {
+  job_id: string;
   sequence: number;
   ts: string;
   stream: string;
@@ -197,6 +241,7 @@ export async function fetchLogHistory(hostID: string, query: LogHistoryQuery): P
   if (query.text) params.set("text", query.text);
   if (query.source) params.set("source", query.source);
   if (query.unit) params.set("unit", query.unit);
+  if (query.block) params.set("block", query.block);
   const url = `/v1/logs?${params}`;
   const token = getDeviceToken();
   const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });

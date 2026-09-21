@@ -1,4 +1,5 @@
-import type { BitacoraEvent } from "../api";
+import { hasInstant, type BitacoraEvent } from "../api";
+import { eventLogTarget, logEntryID, type LogRefTarget } from "../logrefs";
 import { useTranslation } from "../i18n";
 
 const SEVERITY_COLOR: Record<BitacoraEvent["severity"], string> = {
@@ -14,12 +15,16 @@ interface Props {
   events: BitacoraEvent[];
   emptyHeading?: string;
   emptyBody?: string;
+  // Present only where the log viewer can be reached. The summary panel and
+  // the history panel both render events; only the dashboard can navigate.
+  onShowLogs?: (event: BitacoraEvent, target: LogRefTarget) => void;
 }
 
 const MAX_EVENT_ATTRIBUTES = 4;
 const MAX_EVENT_KEY_LENGTH = 64;
 const MAX_EVENT_VALUE_LENGTH = 160;
 const SUMMARY_ATTRIBUTES = ["data_name", "reason"];
+const MAX_SHOWN_LOG_REFS = 3;
 
 export interface EventDetail {
   key: string;
@@ -62,10 +67,23 @@ export function eventDetails(event: BitacoraEvent): EventDetail[] {
         .map(([key, value]) => ({ key, value: safeEventValue(value) }))
     : [];
 
-  return [...attrs, ...subject];
+  // Provenance: when the hub received the event, the identity it deduplicates
+  // on, and the log coordinates it came from. All three reach the browser and
+  // all three used to stop at the type definition.
+  const refs = event.log_refs ?? [];
+  const shownRefs = refs.slice(0, MAX_SHOWN_LOG_REFS).map((ref) => logEntryID(ref.block_id, ref.line));
+  const provenance = ([
+    ["ts_received", hasInstant(event.ts_received) && event.ts_received !== event.ts ? event.ts_received : undefined],
+    ["fingerprint", event.fingerprint],
+    ["log_refs", shownRefs.length > 0 ? `${shownRefs.join(", ")}${refs.length > shownRefs.length ? ", …" : ""}` : undefined],
+  ] as const)
+    .filter(([, value]) => value !== undefined && value !== "")
+    .map(([key, value]) => ({ key, value: safeEventValue(value) }));
+
+  return [...attrs, ...subject, ...provenance];
 }
 
-export default function EventsList({ events, emptyHeading, emptyBody }: Props) {
+export default function EventsList({ events, emptyHeading, emptyBody, onShowLogs }: Props) {
   const { t, intlTag } = useTranslation();
 
   if (events.length === 0) {
@@ -85,6 +103,7 @@ export default function EventsList({ events, emptyHeading, emptyBody }: Props) {
       {sorted.map((e) => {
         const details = eventDetails(e);
         const summary = details.slice(0, 2);
+        const logTarget = onShowLogs ? eventLogTarget(e) : null;
         return (
           <li key={e.id}>
             <div>
@@ -93,6 +112,13 @@ export default function EventsList({ events, emptyHeading, emptyBody }: Props) {
               <span>{e.type}</span>
             </div>
             <p>{e.title}</p>
+            {logTarget && onShowLogs && (
+              <div className="event-actions">
+                <button type="button" className="link-button" aria-label={t.eventLogsAria(e.title)} onClick={() => onShowLogs(e, logTarget)}>
+                  {t.eventLogsButton}
+                </button>
+              </div>
+            )}
             {details.length > 0 && (
               <details className="event-details">
                 <summary>

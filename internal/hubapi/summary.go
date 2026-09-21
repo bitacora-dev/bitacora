@@ -472,6 +472,10 @@ func (s *Server) handleJobPoll(w http.ResponseWriter, r *http.Request) {
 // handleLogs implements GET /v1/logs over durable log blocks. Ranges are
 // explicit and limited to 31 days because text filtering is intentionally
 // applied only after metadata has narrowed the compressed-block candidates.
+//
+// ?block= narrows the page to a single durable block. It is what turns an
+// Event's or a Job's log_refs into a reachable page of lines instead of a
+// coordinate the caller has no way to resolve.
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -517,7 +521,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	page, err := s.Logs.Query(r.Context(), logstore.Query{HostID: hostID, From: from, To: to, Text: q.Get("text"), Source: q.Get("source"), Unit: q.Get("unit"), Limit: limit, Offset: offset})
+	page, err := s.Logs.Query(r.Context(), logstore.Query{HostID: hostID, From: from, To: to, Text: q.Get("text"), Source: q.Get("source"), Unit: q.Get("unit"), BlockID: q.Get("block"), Limit: limit, Offset: offset})
 	if err != nil {
 		http.Error(w, "querying logs", http.StatusInternalServerError)
 		return

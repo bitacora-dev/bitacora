@@ -29,6 +29,13 @@ it ships a first tagged release.
   the agent so their data is collected in normal deployments.
 - Enforce the Apache-licensed `bitacora-run` boundary with its own license
   material and CI validation.
+- Navigate from an event or a scheduled operation to the exact log lines it
+  came from. `GET /v1/logs` accepts a `block` filter, and the dashboard opens
+  the log viewer on that block with the referenced lines marked.
+- Show what the dashboard already received but never drew: CPUs the kernel
+  reserves through `isolcpus`, an operation's trigger, next expected run,
+  signal, peer host and result statistics, and the selected host's agent
+  version and last-seen time.
 
 ### Changed
 
@@ -43,6 +50,10 @@ it ships a first tagged release.
   clients from losing access.
 - Calculate CPU summary values from the total CPU series only, rather than
   mixing per-core series into a misleading aggregate.
+- Stop discarding hub fields the dashboard's TypeScript types never declared:
+  an event's reception time, fingerprint and log references, an operation's
+  signal, peer, trigger, next run and log references, and a job output line's
+  job identity.
 
 ## [0.1.0] - 2026-08-30
 

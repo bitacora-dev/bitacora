@@ -106,6 +106,27 @@ as `name`, then `hostname`, then the stable ULID. The ULID remains visible as
 copyable metadata even when only one host is enrolled, because its identity is
 not interchangeable with a mutable hostname (ADR-0004).
 
+## Correlation
+
+A single correlated timeline is the product's claim, so a field that carries
+correlation must be reachable, not merely received. Events and jobs carry
+`log_refs`: the durable block and lines they came from. Rules:
+
+- A row whose payload names its log lines exposes a control that opens the log
+  viewer on that block, through the `?block=` filter and the page holding the
+  first referenced line. Do not make the operator retype a time range.
+- Referenced rows in the log viewer are marked with a visible label, not colour
+  alone, and the active block filter stays visible with a control that clears
+  it. A filter the operator cannot see is a filter they cannot undo.
+- When the referenced lines are not on the current page, say so. Silence there
+  reads as "there were no logs", which is a different and wrong answer.
+
+The same rule applies to any field the hub already sends: declare it in
+[`api.ts`](src/api.ts) even before it is drawn, because an undeclared field is
+dropped with no compile error, then either render it or stop requesting it.
+Downloading a value every ten seconds and discarding it is a defect, not a
+neutral omission.
+
 ## Empty And Disabled States
 
 Empty is normal in Bitácora. Production event streams may stay empty for long
@@ -194,6 +215,7 @@ The current baseline comes from [`index.css`](src/index.css),
 - [ ] Phone, laptop, and `1920px+` layouts keep the same information order and readable text measures.
 - [ ] Tall portrait (`1080×1920`) layouts stack charts and use available height.
 - [ ] Empty, disabled, and pending-collector states are explicit and not treated as broken UI.
+- [ ] Fields the hub already sends are declared in `api.ts` and either rendered or no longer requested.
 - [ ] Every user-facing string, including library-driven labels, comes from `web/src/i18n/`.
 - [ ] uPlot charts hide the native legend and expose a dictionary-backed current/inspected readout.
 - [ ] Focus, contrast, labels, alt text, and hit areas remain keyboard and touch usable.

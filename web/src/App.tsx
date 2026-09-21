@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { claimPairing, fetchActionAvailability, fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type LogEntry, type SeriesPoint, type Summary } from "./api";
+import { claimPairing, fetchActionAvailability, fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory, fetchSummary, getDeviceToken, hasInstant, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type LogEntry, type SeriesPoint, type Summary } from "./api";
+import { LOG_PAGE_SIZE, logRefPageOffset, logRefRange, type LogRefTarget } from "./logrefs";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
 import LogsList from "./components/LogsList";
@@ -16,6 +17,9 @@ import LoginPanel from "./components/LoginPanel";
 
 const POLL_INTERVAL_MS = 10_000;
 const CPU_Y_RANGE: [number, number] = [0, 1];
+// The agent reports on its own cadence; a host that has said nothing for
+// several polling rounds is the answer to "is this server still alive?".
+const HOST_STALE_AFTER_MS = 5 * 60_000;
 
 function hostIDFromURL(): string {
   return new URLSearchParams(window.location.search).get("host_id") ?? "";
@@ -101,6 +105,9 @@ export default function App() {
   const [logText, setLogText] = useState("");
   const [logSource, setLogSource] = useState("");
   const [logUnit, setLogUnit] = useState("");
+  const [logBlock, setLogBlock] = useState("");
+  const [logReferencedIDs, setLogReferencedIDs] = useState<string[]>([]);
+  const [logRefSubject, setLogRefSubject] = useState("");
   const [logFrom, setLogFrom] = useState(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
   const [logTo, setLogTo] = useState(() => new Date().toISOString().slice(0, 16));
 
@@ -126,6 +133,15 @@ export default function App() {
     return byTS;
   }, [summary?.memory_available_bytes]);
 
+  // bitacora_memory_used_ratio is polled every 10 seconds whether or not the
+  // derived byte series exists. It is the share-of-RAM number an operator
+  // scans for, so it is read here rather than only as a fallback below.
+  const memoryRatioByTS = useMemo(() => {
+    const byTS = new Map<string, number>();
+    for (const point of summary?.memory ?? []) byTS.set(point.ts, point.value);
+    return byTS;
+  }, [summary?.memory]);
+
   const memoryAvailable = latest(summary?.memory_available_bytes ?? []);
   const swapFree = latest(summary?.memory_swap_free_bytes ?? []);
   const swapTotal = latest(summary?.memory_swap_total_bytes ?? []);
@@ -136,6 +152,8 @@ export default function App() {
   const bytesPerSecond = useCallback((value: number) => t.bytesPerSecond(formatBytes(value, intlTag)), [intlTag, t]);
   const selectedHost = hosts.find((host) => host.id === hostID);
   const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
+  const lastSeenAt = hasInstant(selectedHost?.last_seen_at) ? selectedHost.last_seen_at : null;
+  const hostStale = lastSeenAt !== null && Date.now() - new Date(lastSeenAt).getTime() > HOST_STALE_AFTER_MS;
 
   const refreshInventories = useCallback(async () => {
     const [nextDisks, nextUpdates, nextHardwareIdentity, nextCPUTopology] = await Promise.all([
@@ -174,6 +192,32 @@ export default function App() {
     if (next === "summary") url.searchParams.delete("view"); else url.searchParams.set("view", next);
     window.history.pushState(null, "", url);
     setView(next);
+  };
+
+  // An event or a job names the exact durable block and lines it came from.
+  // Opening the log viewer on that block is what makes the timeline correlated
+  // instead of three lists the operator has to cross-reference by eye.
+  const showReferencedLogs = (subject: string, target: LogRefTarget) => {
+    const range = logRefRange(target.anchorTS);
+    if (range) {
+      setLogFrom(range.from);
+      setLogTo(range.to);
+    }
+    setLogText("");
+    setLogSource("");
+    setLogUnit("");
+    setLogBlock(target.blockID);
+    setLogReferencedIDs(target.entryIDs);
+    setLogRefSubject(subject);
+    setLogOffset(logRefPageOffset(target.firstLine));
+    goToView("logs");
+  };
+
+  const clearReferencedLogs = () => {
+    setLogBlock("");
+    setLogReferencedIDs([]);
+    setLogRefSubject("");
+    setLogOffset(0);
   };
 
   useEffect(() => {
@@ -229,10 +273,10 @@ export default function App() {
 
   useEffect(() => {
     if (!hostID || !token || view !== "logs") return;
-    fetchLogHistory(hostID, { from: new Date(logFrom).toISOString(), to: new Date(logTo).toISOString(), text: logText, source: logSource, unit: logUnit, limit: 50, offset: logOffset })
+    fetchLogHistory(hostID, { from: new Date(logFrom).toISOString(), to: new Date(logTo).toISOString(), text: logText, source: logSource, unit: logUnit, block: logBlock, limit: LOG_PAGE_SIZE, offset: logOffset })
       .then((page) => { setLogEntries(page.entries); setLogTotal(page.total); setLogError(null); })
       .catch((err) => setLogError(err instanceof Error ? err.message : String(err)));
-  }, [hostID, token, view, logFrom, logTo, logText, logSource, logUnit, logOffset]);
+  }, [hostID, token, view, logFrom, logTo, logText, logSource, logUnit, logBlock, logOffset]);
 
   useEffect(() => {
     if (!hostID || !token) return;
@@ -377,16 +421,35 @@ export default function App() {
               {hosts.map((host) => <option key={host.id} value={host.id}>{host.name || host.hostname || host.id}</option>)}
             </select>
           ) : null}
-          {summary && (
+          {(summary || selectedHost) && (
             <dl className="dashboard-metadata">
-              <div>
-                <dt>{t.windowMetadataLabel}</dt>
-                <dd>{t.windowLabel(windowMinutes)}</dd>
-              </div>
-              <div>
-                <dt>{t.updatedAtLabel}</dt>
-                <dd>{generatedAt || t.noSamples}</dd>
-              </div>
+              {summary && (
+                <div>
+                  <dt>{t.windowMetadataLabel}</dt>
+                  <dd>{t.windowLabel(windowMinutes)}</dd>
+                </div>
+              )}
+              {summary && (
+                <div>
+                  <dt>{t.updatedAtLabel}</dt>
+                  <dd>{generatedAt || t.noSamples}</dd>
+                </div>
+              )}
+              {lastSeenAt && (
+                <div>
+                  <dt>{t.lastSeenLabel}</dt>
+                  <dd className={hostStale ? "host-metadata--stale" : undefined}>
+                    {new Date(lastSeenAt).toLocaleString(intlTag)}
+                    {hostStale && <span className="host-stale-note"> · {t.hostStale}</span>}
+                  </dd>
+                </div>
+              )}
+              {selectedHost?.agent_version && (
+                <div>
+                  <dt>{t.agentVersionLabel}</dt>
+                  <dd>{selectedHost.agent_version}</dd>
+                </div>
+              )}
             </dl>
           )}
           <button type="button" onClick={() => setAddServerOpen((open) => !open)} className="link-button">
@@ -434,7 +497,7 @@ export default function App() {
             <label>{t.eventsTypeLabel}<input value={historyType} onChange={(e) => { setHistoryOffset(0); setHistoryType(e.target.value); }} /></label>
           </div>
           {historyError && <div className="error-panel">{t.hubUnreachable(historyError)}</div>}
-          <EventsList events={historyEvents} emptyHeading={t.eventsHistoryEmptyHeading} emptyBody={t.eventsHistoryEmptyBody} />
+          <EventsList events={historyEvents} emptyHeading={t.eventsHistoryEmptyHeading} emptyBody={t.eventsHistoryEmptyBody} onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
           <div className="events-history-pagination"><button type="button" className="link-button" disabled={historyOffset === 0} onClick={() => setHistoryOffset((offset) => Math.max(0, offset - 50))}>{t.eventsPreviousPage}</button><span>{t.eventsPage(historyTotal === 0 ? 0 : historyOffset + 1, Math.min(historyOffset + historyEvents.length, historyTotal), historyTotal)}</span><button type="button" className="link-button" disabled={historyOffset + historyEvents.length >= historyTotal} onClick={() => setHistoryOffset((offset) => offset + 50)}>{t.eventsNextPage}</button></div>
         </article>
       ) : view === "logs" ? (
@@ -448,9 +511,19 @@ export default function App() {
             <label>{t.logsSourceLabel}<input value={logSource} onChange={(e) => { setLogOffset(0); setLogSource(e.target.value); }} /></label>
             <label>{t.logsUnitLabel}<input value={logUnit} onChange={(e) => { setLogOffset(0); setLogUnit(e.target.value); }} /></label>
           </div>
+          {logBlock && (
+            <div className="log-ref-notice">
+              <div>
+                <strong>{t.logsReferencedFrom(logRefSubject)}</strong>
+                <span>{t.logsReferencedBlock(logBlock)}</span>
+              </div>
+              <button type="button" className="link-button" onClick={clearReferencedLogs}>{t.logsClearBlockFilter}</button>
+            </div>
+          )}
           {logError && <div className="error-panel">{t.hubUnreachable(logError)}</div>}
-          <LogsList entries={logEntries} />
-          <div className="events-history-pagination"><button type="button" className="link-button" disabled={logOffset === 0} onClick={() => setLogOffset((offset) => Math.max(0, offset - 50))}>{t.eventsPreviousPage}</button><span>{t.eventsPage(logTotal === 0 ? 0 : logOffset + 1, Math.min(logOffset + logEntries.length, logTotal), logTotal)}</span><button type="button" className="link-button" disabled={logOffset + logEntries.length >= logTotal} onClick={() => setLogOffset((offset) => offset + 50)}>{t.eventsNextPage}</button></div>
+          {logBlock && logEntries.length > 0 && !logEntries.some((entry) => logReferencedIDs.includes(entry.id)) && <p className="muted-text">{t.logsReferencedMissing}</p>}
+          <LogsList entries={logEntries} referencedIDs={logReferencedIDs} />
+          <div className="events-history-pagination"><button type="button" className="link-button" disabled={logOffset === 0} onClick={() => setLogOffset((offset) => Math.max(0, offset - LOG_PAGE_SIZE))}>{t.eventsPreviousPage}</button><span>{t.eventsPage(logTotal === 0 ? 0 : logOffset + 1, Math.min(logOffset + logEntries.length, logTotal), logTotal)}</span><button type="button" className="link-button" disabled={logOffset + logEntries.length >= logTotal} onClick={() => setLogOffset((offset) => offset + LOG_PAGE_SIZE)}>{t.eventsNextPage}</button></div>
         </article>
       ) : summary && (
         <>
@@ -465,7 +538,11 @@ export default function App() {
                 if (summary.memory_used_bytes.length === 0) return { primary: ratio(point.value) };
                 const total = memoryTotalByTS.get(point.ts) ?? latest(summary.memory_total_bytes)?.value;
                 const available = memoryAvailableByTS.get(point.ts) ?? memoryAvailable?.value;
-                return { primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value), secondary: available ? t.memoryAvailable(bytes(available)) : undefined };
+                const used = memoryRatioByTS.get(point.ts) ?? (total ? point.value / total : undefined);
+                const context: string[] = [];
+                if (used !== undefined) context.push(t.memoryUsedRatio(ratio(used)));
+                if (available) context.push(t.memoryAvailable(bytes(available)));
+                return { primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value), secondary: context.length > 0 ? context.join(" · ") : undefined };
               }} />
             </div>
           </section>
@@ -482,12 +559,12 @@ export default function App() {
                 <h2>{t.eventsHeading(windowMinutes)}</h2>
                 <span>{summary.events.length}</span>
               </div>
-              <EventsList events={summary.events} />
+              <EventsList events={summary.events} onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
             </article>
 
             <article className="control-panel events-panel">
               <div className="panel-title-row"><h2>{t.jobsHeading(windowMinutes)}</h2><span>{summary.jobs.length}</span></div>
-              <JobsList jobs={summary.jobs} />
+              <JobsList jobs={summary.jobs} onShowLogs={(job, target) => showReferencedLogs(job.job_name, target)} />
             </article>
 
             <article className="control-panel signal-panel">

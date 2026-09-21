@@ -16,23 +16,33 @@ import (
 // relevant host/day directories and candidate compressed blocks.
 const MaxQueryRange = 31 * 24 * time.Hour
 
-// Query describes an explicit, bounded durable-log search. Source and Unit
-// are applied from block metadata before opening a compressed payload; Text is
-// applied only after that candidate reduction.
+// Query describes an explicit, bounded durable-log search. BlockID, Source and
+// Unit are applied from block metadata before opening a compressed payload;
+// Text is applied only after that candidate reduction.
+//
+// BlockID exists so a caller holding a schema.LogRef can reach the exact lines
+// an Event or Job came from. Without it the only way back to a referenced line
+// is scanning every block in the range, which is the manual cross-referencing
+// the correlated timeline is meant to remove.
 type Query struct {
-	HostID string
-	From   time.Time
-	To     time.Time
-	Text   string
-	Source string
-	Unit   string
-	Limit  int
-	Offset int
+	HostID  string
+	From    time.Time
+	To      time.Time
+	Text    string
+	Source  string
+	Unit    string
+	BlockID string
+	Limit   int
+	Offset  int
 }
 
 // Entry is the highest-fidelity representation available from existing blocks.
 // Older block payloads store newline-delimited messages only, so TS is the
 // block's ts_min and Unit is block-level metadata rather than per-line data.
+//
+// ID is "<block_id>:<line>", where line is the zero-based position inside the
+// decompressed block. That is the same coordinate schema.LogRef carries, so a
+// referenced line can be identified by ID without a second lookup.
 type Entry struct {
 	ID      string    `json:"id"`
 	TS      time.Time `json:"ts"`
@@ -122,7 +132,7 @@ func (s *Store) candidateMetas(ctx context.Context, q Query) ([]BlockMeta, error
 			if err := json.Unmarshal(raw, &meta); err != nil {
 				return nil, fmt.Errorf("parsing metadata: %w", err)
 			}
-			if meta.HostID != q.HostID || meta.TSMax.Before(q.From) || meta.TSMin.After(q.To) || (q.Source != "" && meta.Source != q.Source) || (q.Unit != "" && meta.Unit != q.Unit) {
+			if meta.HostID != q.HostID || meta.TSMax.Before(q.From) || meta.TSMin.After(q.To) || (q.Source != "" && meta.Source != q.Source) || (q.Unit != "" && meta.Unit != q.Unit) || (q.BlockID != "" && meta.BlockID != q.BlockID) {
 				continue
 			}
 			metas = append(metas, meta)

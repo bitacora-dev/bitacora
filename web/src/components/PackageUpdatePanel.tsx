@@ -33,6 +33,15 @@ export function phaseAfterSuccessfulCacheRefresh(inventory: Inventory | null, ma
   return age !== null && age > maxAge ? "refresh_still_stale" : "refreshed";
 }
 
+// Every output line names the job it belongs to. A poll issued before the
+// operator started another operation can still land after begin() cleared the
+// buffer, so foreign lines are dropped instead of being appended to the wrong
+// run. An unset job_id is treated as belonging to the polled job: that is what
+// a hub older than this field sends.
+export function linesForJob(jobID: string, lines: JobOutputLine[]): JobOutputLine[] {
+  return lines.filter((line) => !line.job_id || line.job_id === jobID);
+}
+
 export function packageActionVisibility(canRefresh: boolean, canApply: boolean, stale: boolean, phase: Phase) {
   return {
     showApply: canApply && !stale && (phase === "idle" || phase === "refreshed"),
@@ -64,7 +73,7 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
         const result = await fetchJob(hostID, issued.request_id, afterRef.current);
         if (cancelled) return;
         afterRef.current = result.next_after;
-        setLines((previous) => [...previous, ...result.lines]);
+        setLines((previous) => [...previous, ...linesForJob(issued.request_id, result.lines)]);
         if (!result.complete) {
           setPhase("running");
           return;

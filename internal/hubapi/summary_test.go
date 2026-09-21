@@ -84,7 +84,7 @@ func (f *fakeJobPoller) ListJobOutput(_ context.Context, hostID, jobID string, a
 func (f *fakeLogs) Query(_ context.Context, q logstore.Query) (logstore.Page, error) {
 	var matches []logstore.Entry
 	for _, entry := range f.entries {
-		if entry.HostID == q.HostID && !entry.TS.Before(q.From) && !entry.TS.After(q.To) && (q.Source == "" || entry.Source == q.Source) && (q.Unit == "" || entry.Unit == q.Unit) && (q.Text == "" || strings.Contains(entry.Message, q.Text)) {
+		if entry.HostID == q.HostID && !entry.TS.Before(q.From) && !entry.TS.After(q.To) && (q.Source == "" || entry.Source == q.Source) && (q.Unit == "" || entry.Unit == q.Unit) && (q.Text == "" || strings.Contains(entry.Message, q.Text)) && (q.BlockID == "" || strings.HasPrefix(entry.ID, q.BlockID+":")) {
 			matches = append(matches, entry)
 		}
 	}
@@ -606,6 +606,31 @@ func TestHandleLogs_QueriesBoundedPage(t *testing.T) {
 	}
 	if got.Total != 2 || len(got.Entries) != 1 || got.Entries[0].ID != "two" {
 		t.Fatalf("unexpected page: %+v", got)
+	}
+}
+
+func TestHandleLogs_BlockFilterReachesTheLinesALogRefNames(t *testing.T) {
+	from := time.Date(2026, time.January, 2, 10, 0, 0, 0, time.UTC)
+	srv := &Server{Logs: &fakeLogs{entries: []logstore.Entry{
+		{ID: "block-a:0", TS: from.Add(time.Minute), HostID: "host-a", Source: "journald", Message: "unrelated"},
+		{ID: "block-b:0", TS: from.Add(2 * time.Minute), HostID: "host-a", Source: "journald", Message: "segfault preamble"},
+		{ID: "block-b:1", TS: from.Add(3 * time.Minute), HostID: "host-a", Source: "journald", Message: "kernel: general protection fault"},
+	}}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/logs?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&block=block-b&limit=50", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got LogHistory
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 {
+		t.Fatalf("expected only the referenced block, got %+v", got)
+	}
+	if got.Entries[1].ID != "block-b:1" {
+		t.Fatalf("expected the referenced line to be identifiable by id, got %q", got.Entries[1].ID)
 	}
 }
 

@@ -86,21 +86,52 @@ change, not incidental cleanup.
 
 The dashboard's question is "is my server OK?" The answer order is:
 
-1. Can the page read this hub and host?
-2. What are CPU and memory doing now?
-3. What changed over the current window?
-4. Is anything attacking the public surface right now?
-5. Were any events emitted?
-6. Which signal areas are connected or pending?
+1. Is the server about to lose power?
+2. Can the page read this hub and host?
+3. What are CPU and memory doing now?
+4. What changed over the current window?
+5. Is anything attacking the public surface right now?
+6. Can the operator still reach this host?
+7. Were any events emitted?
+8. Which signal areas are connected or pending?
 
 This order is encoded in [`App.tsx`](src/App.tsx): auth and host selection
-states first, then header metadata, `metrics-grid`, `public-surface-grid`,
-`EventsList`, and signal coverage. Do not lead with setup prose, marketing
-copy, or secondary collector detail on the main dashboard.
+states first, then the power strip, header metadata, `metrics-grid`,
+`public-surface-grid`, `access-grid`, `EventsList`, and signal coverage. Do not
+lead with setup prose, marketing copy, or secondary collector detail on the
+main dashboard.
 
 Public surface sits with the window signals rather than under inventory
 because the host it describes is reachable from the internet. A brute-force
 run in progress is a current operating state, not a catalogue entry.
+
+Power outranks everything because it is the only signal with a countdown
+attached. [`PowerPanel`](src/components/PowerPanel.tsx) holds one fixed slot
+above the dashboard and outside the summary/events/logs switch, and it changes
+intensity in place rather than moving: a single quiet line while mains power is
+present, `power-panel--alarm` when the UPS reports battery. A panel that only
+appears during the emergency teaches the operator nothing about where to look;
+one that is always in the same place does. It renders nothing at all on a host
+without a UPS.
+
+Remote access sits with the public surface for the same reason it does: both
+describe how this host meets the outside world right now. The operator reaches
+this server over Tailscale when the public route fails, so "can I still get in"
+is asked precisely when the rest of the page is bad news.
+
+Shares, share sizes, and accounts are one subject, not three. `share`,
+`share_usage`, and `user` join into a single row per share in
+[`SharesPanel`](src/components/SharesPanel.tsx). Join them on the inventory
+item `id`, never on `name`: `share_usage` identifies an NFS export by its full
+path while `share` names it by the basename, so a name join drops every NFS
+size without an error.
+
+Account names and their per-share permissions stay behind a `<details>`
+disclosure. They are system usernames and declared privileges, and the screen
+this panel lives on is shared far more often than the server is. This is a
+default, not a secret: the disclosure is one click and its own copy says what
+is inside. Revisit the default when ADR-0023's per-server scope lands, not by
+loosening it silently.
 
 Panels should be dense enough for repeated operations. Avoid decorative cards,
 oversized empty spacing, and hero-style composition inside the app shell. The
@@ -155,6 +186,25 @@ Use explicit, dignified empty states:
   where being wrong is dangerous.
 - Disabled controls must keep visible labels and use the existing disabled
   treatment: `cursor: not-allowed` plus reduced opacity on real buttons.
+
+- Optional inventory whose whole subject may not exist on a host renders
+  nothing rather than an empty panel. `PowerPanel`, `AccessTunnelsPanel`, and
+  `SharesPanel` return `null` when their inventory has no items: a server with
+  no UPS must not grow a UPS panel reading `0 %`, and a server with no shares
+  must not grow an empty shares panel. This is the opposite call from
+  `InventoryPanel`, whose subjects (disks, packages) exist on every host, so an
+  empty list there is news.
+- `Number("")` is `0`, so every inventory attribute must be rejected as absent
+  before it is parsed. Inventory attrs are strings that the collectors omit
+  when they have no value, and a size, a charge, or a runtime that silently
+  becomes zero is the same false answer as a zero in "failed SSH logins".
+- A figure computed on a slow cadence carries when it was computed.
+  `share_usage` is recalculated every 24 hours, so its size always appears with
+  `calculated_at` rendered as a relative age. Presenting yesterday's number as
+  current is the same defect as hiding the package cache's age.
+- A boolean attribute has three states in the browser: `"true"`, `"false"`, and
+  absent. Never collapse absent into `false`. "The UPS did not report its power
+  source" and "the UPS is on mains" lead to opposite decisions.
 
 Do not communicate unavailable collectors as errors unless the backend reports a
 fault. Absence of optional data and hub/API failure are different states.
@@ -229,6 +279,10 @@ The current baseline comes from [`index.css`](src/index.css),
 - [ ] Tall portrait (`1080×1920`) layouts stack charts and use available height.
 - [ ] Empty, disabled, and pending-collector states are explicit and not treated as broken UI.
 - [ ] Fields the hub already sends are declared in `api.ts` and either rendered or no longer requested.
+- [ ] Inventory kinds the agent emits are either requested and rendered, or deliberately and visibly out of scope.
+- [ ] Absent attributes are not parsed into zeros, and absent booleans are not read as `false`.
+- [ ] Optional inventory whose subject may not exist on a host renders nothing rather than an empty panel.
+- [ ] Figures computed on a slow cadence are shown with the age of the calculation.
 - [ ] Every user-facing string, including library-driven labels, comes from `web/src/i18n/`.
 - [ ] uPlot charts hide the native legend and expose a dictionary-backed current/inspected readout.
 - [ ] Focus, contrast, labels, alt text, and hit areas remain keyboard and touch usable.

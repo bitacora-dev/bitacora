@@ -12,11 +12,19 @@ import JobsList from "./components/JobsList";
 import CPUCorePanel from "./components/CPUCorePanel";
 import MotherboardPanel from "./components/MotherboardPanel";
 import PublicSurfacePanel from "./components/PublicSurfacePanel";
+import PowerPanel from "./components/PowerPanel";
+import AccessTunnelsPanel from "./components/AccessTunnelsPanel";
+import SharesPanel from "./components/SharesPanel";
 import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
 import LoginPanel from "./components/LoginPanel";
 
 const POLL_INTERVAL_MS = 10_000;
+// Shares, accounts, and share sizes are collected every five minutes, five
+// minutes, and twenty-four hours respectively. Re-requesting them on the
+// ten-second dashboard poll would triple the request count to redraw figures
+// that cannot have changed.
+const SLOW_INVENTORY_POLL_INTERVAL_MS = 5 * 60_000;
 const CPU_Y_RANGE: [number, number] = [0, 1];
 // The agent reports on its own cadence; a host that has said nothing for
 // several polling rounds is the answer to "is this server still alive?".
@@ -78,6 +86,11 @@ export default function App() {
   const [updates, setUpdates] = useState<Inventory | null>(null);
   const [hardwareIdentity, setHardwareIdentity] = useState<Inventory | null>(null);
   const [cpuTopology, setCPUTopology] = useState<Inventory | null>(null);
+  const [ups, setUPS] = useState<Inventory | null>(null);
+  const [tunnels, setTunnels] = useState<Inventory | null>(null);
+  const [shares, setShares] = useState<Inventory | null>(null);
+  const [shareUsage, setShareUsage] = useState<Inventory | null>(null);
+  const [shareUsers, setShareUsers] = useState<Inventory | null>(null);
   const [secondFactorAvailable, setSecondFactorAvailable] = useState(false);
 
   const [token, setToken] = useState<string | null>(getDeviceToken);
@@ -157,17 +170,35 @@ export default function App() {
   const hostStale = lastSeenAt !== null && Date.now() - new Date(lastSeenAt).getTime() > HOST_STALE_AFTER_MS;
 
   const refreshInventories = useCallback(async () => {
-    const [nextDisks, nextUpdates, nextHardwareIdentity, nextCPUTopology] = await Promise.all([
+    // The UPS reports every minute and the VPN helper every thirty seconds:
+    // both describe the server's current state, so they poll with the rest of
+    // the live dashboard rather than on the slow inventory cadence.
+    const [nextDisks, nextUpdates, nextHardwareIdentity, nextCPUTopology, nextUPS, nextTunnels] = await Promise.all([
       fetchInventory(hostID, "disk"),
       fetchInventory(hostID, "package_update"),
       fetchInventory(hostID, "hardware_identity"),
       fetchInventory(hostID, "cpu_topology"),
+      fetchInventory(hostID, "ups"),
+      fetchInventory(hostID, "vpn_tunnel"),
     ]);
     setDisks(nextDisks);
     setUpdates(nextUpdates);
     setHardwareIdentity(nextHardwareIdentity);
     setCPUTopology(nextCPUTopology);
+    setUPS(nextUPS);
+    setTunnels(nextTunnels);
     return nextUpdates;
+  }, [hostID]);
+
+  const refreshShareInventories = useCallback(async () => {
+    const [nextShares, nextUsage, nextUsers] = await Promise.all([
+      fetchInventory(hostID, "share"),
+      fetchInventory(hostID, "share_usage"),
+      fetchInventory(hostID, "user"),
+    ]);
+    setShares(nextShares);
+    setShareUsage(nextUsage);
+    setShareUsers(nextUsers);
   }, [hostID]);
 
   const copyHostID = async () => {
@@ -295,6 +326,23 @@ export default function App() {
     const id = setInterval(poll, POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [hostID, token, refreshInventories]);
+
+  useEffect(() => {
+    if (!hostID || !token) return;
+
+    const poll = async () => {
+      try {
+        await refreshShareInventories();
+      } catch {
+        // Same contract as the fast inventories: an optional collector that
+        // is momentarily unreachable keeps its last readable snapshot.
+      }
+    };
+
+    poll();
+    const id = setInterval(poll, SLOW_INVENTORY_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [hostID, token, refreshShareInventories]);
 
   useEffect(() => {
     if (!hostID || !token) return;
@@ -486,6 +534,12 @@ export default function App() {
 
       {error && <div className="error-panel">{t.hubUnreachable(error)}</div>}
 
+      {/* A power cut has a countdown attached, and everything else on this
+          page is moot if the machine is about to go down. So the UPS keeps one
+          fixed slot above the dashboard and follows the operator into the
+          event and log views. It renders nothing on a host without a UPS. */}
+      <PowerPanel inventory={ups} />
+
       {view === "events" ? (
         <article className="control-panel events-history-panel">
           <div className="panel-title-row"><h2>{t.eventsHistoryHeading}</h2><button type="button" onClick={() => goToView("summary")} className="link-button">{t.dashboardButton}</button></div>
@@ -561,6 +615,13 @@ export default function App() {
             <PublicSurfacePanel surface={summary.public_surface} windowMinutes={windowMinutes} />
           </section>
 
+          {/* "Can I still get in?" is the same family of question as "is
+              anyone attacking me?" — both describe how this host meets the
+              outside world right now, not what it contains. */}
+          <section className="access-grid" aria-label={t.accessSectionLabel}>
+            <AccessTunnelsPanel inventory={tunnels} />
+          </section>
+
           <section className="lower-grid">
             <article className="control-panel events-panel">
               <div className="panel-title-row">
@@ -600,6 +661,7 @@ export default function App() {
           <section className="inventory-grid" aria-label={t.inventorySectionLabel}>
             <InventoryPanel inventory={disks} kind="disk" />
             <PackageUpdatePanel hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
+            <SharesPanel shares={shares} usage={shareUsage} users={shareUsers} />
           </section>
         </>
       )}

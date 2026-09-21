@@ -811,3 +811,158 @@ func TestHandleDevicePair_RespondsServiceUnavailableWithoutDevices(t *testing.T)
 		t.Fatalf("expected 503 when Devices is nil, got %d", rec.Code)
 	}
 }
+
+// TestHandleSummary_ExposesPublicSurfaceSignals is the regression test for
+// the audit finding this endpoint shipped with: the public_surface
+// collector wrote five metrics into tsdb and GET /v1/summary queried none
+// of them, so a brute-force run against an internet-facing host was
+// invisible on the dashboard while its evidence sat in the database.
+func TestHandleSummary_ExposesPublicSurfaceSignals(t *testing.T) {
+	first := time.Now().Add(-10 * time.Minute).UTC()
+	second := first.Add(5 * time.Minute)
+	host := map[string]string{"host_id": "host-a"}
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_public_ssh_failed_logins_total": {
+			{Labels: host, Timestamp: first, Value: 400},
+			{Labels: host, Timestamp: second, Value: 460},
+		},
+		"bitacora_public_fail2ban_jails_total": {
+			{Labels: host, Timestamp: second, Value: 3},
+		},
+		"bitacora_public_fail2ban_banned_total": {
+			{Labels: host, Timestamp: first, Value: 11},
+			{Labels: host, Timestamp: second, Value: 14},
+		},
+		"bitacora_public_firewall_rules_total": {
+			{Labels: host, Timestamp: second, Value: 27},
+		},
+		"bitacora_public_ovh_traffic_used_ratio": {
+			{Labels: host, Timestamp: second, Value: 0.42},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a&window=1h", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	surface := got.PublicSurface
+
+	if len(surface.SSHFailedLoginsTotal) != 2 || surface.SSHFailedLoginsTotal[1].Value != 460 {
+		t.Fatalf("ssh failed login totals = %+v, want both raw samples", surface.SSHFailedLoginsTotal)
+	}
+	// 60 new failures over 300 seconds is 12 per minute. The first sample
+	// has nothing to differentiate against, so it contributes no point.
+	if len(surface.SSHFailedLoginsPerMinute) != 1 || surface.SSHFailedLoginsPerMinute[0].Value != 12 {
+		t.Fatalf("ssh failed logins per minute = %+v, want a single 12/min point", surface.SSHFailedLoginsPerMinute)
+	}
+	if len(surface.Fail2BanJailsTotal) != 1 || surface.Fail2BanJailsTotal[0].Value != 3 {
+		t.Fatalf("fail2ban jails = %+v, want 3", surface.Fail2BanJailsTotal)
+	}
+	if len(surface.Fail2BanBannedTotal) != 2 || surface.Fail2BanBannedTotal[1].Value != 14 {
+		t.Fatalf("fail2ban banned = %+v, want 14 latest", surface.Fail2BanBannedTotal)
+	}
+	if len(surface.FirewallRulesTotal) != 1 || surface.FirewallRulesTotal[0].Value != 27 {
+		t.Fatalf("firewall rules = %+v, want 27", surface.FirewallRulesTotal)
+	}
+	if len(surface.OVHTrafficUsedRatio) != 1 || surface.OVHTrafficUsedRatio[0].Value != 0.42 {
+		t.Fatalf("ovh traffic ratio = %+v, want 0.42", surface.OVHTrafficUsedRatio)
+	}
+}
+
+// TestHandleSummary_PublicSurfaceRateSkipsLogRotation guards the specific
+// shape of this collector: it re-counts matching lines in the *current*
+// auth log every cycle, so logrotate drops the counter back down. That drop
+// must produce no point rather than a negative rate — a negative or zeroed
+// "attempts per minute" reads as "the attack stopped", which is the exact
+// class of false reassurance this panel exists to avoid.
+func TestHandleSummary_PublicSurfaceRateSkipsLogRotation(t *testing.T) {
+	first := time.Now().Add(-15 * time.Minute).UTC()
+	second := first.Add(5 * time.Minute)
+	third := second.Add(5 * time.Minute)
+	host := map[string]string{"host_id": "host-a"}
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_public_ssh_failed_logins_total": {
+			{Labels: host, Timestamp: first, Value: 900},
+			{Labels: host, Timestamp: second, Value: 4}, // auth.log rotated
+			{Labels: host, Timestamp: third, Value: 34},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a&window=1h", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	points := got.PublicSurface.SSHFailedLoginsPerMinute
+	if len(points) != 1 || points[0].Value != 6 {
+		t.Fatalf("per-minute points = %+v, want only the post-rotation interval at 6/min", points)
+	}
+	if !points[0].TS.Equal(third) {
+		t.Fatalf("per-minute point timestamp = %s, want the post-rotation sample at %s", points[0].TS, third)
+	}
+}
+
+// TestHandleSummary_PublicSurfaceAbsentIsEmptyNotZero is the "never an
+// invented zero" contract. A host that is not operator-declared as publicly
+// exposed runs no public_surface collector at all, so the honest answer is
+// "nothing reported", expressed as empty arrays the UI can tell apart from
+// a measured zero.
+func TestHandleSummary_PublicSurfaceAbsentIsEmptyNotZero(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{samples: map[string][]metricstore.Sample{}}, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	body := rec.Body.String()
+	for _, field := range []string{
+		`"ssh_failed_logins_total":[]`,
+		`"ssh_failed_logins_per_minute":[]`,
+		`"fail2ban_jails_total":[]`,
+		`"fail2ban_banned_total":[]`,
+		`"firewall_rules_total":[]`,
+		`"ovh_traffic_used_ratio":[]`,
+	} {
+		if !strings.Contains(body, field) {
+			t.Fatalf("expected %s in response (empty array, not null and not a zero point), got %s", field, body)
+		}
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.PublicSurface.SSHFailedLoginsTotal) != 0 || len(got.PublicSurface.Fail2BanBannedTotal) != 0 {
+		t.Fatalf("unreported public surface must carry no points, got %+v", got.PublicSurface)
+	}
+}
+
+// TestHandleSummary_PublicSurfaceIsScopedToTheRequestedHost keeps the
+// host_id matcher on every new query: a shared hub must never attribute one
+// host's attack traffic to another.
+func TestHandleSummary_PublicSurfaceIsScopedToTheRequestedHost(t *testing.T) {
+	ts := time.Now().Add(-time.Minute).UTC()
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_public_fail2ban_banned_total": {
+			{Labels: map[string]string{"host_id": "host-a"}, Timestamp: ts, Value: 7},
+			{Labels: map[string]string{"host_id": "host-b"}, Timestamp: ts, Value: 91},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.PublicSurface.Fail2BanBannedTotal) != 1 || got.PublicSurface.Fail2BanBannedTotal[0].Value != 7 {
+		t.Fatalf("banned totals = %+v, want only host-a's 7", got.PublicSurface.Fail2BanBannedTotal)
+	}
+}

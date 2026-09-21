@@ -350,6 +350,36 @@ type TemperatureSeries struct {
 	Points []SeriesPoint `json:"points"`
 }
 
+// PublicSurface groups the internet-facing signals the public_surface
+// collector reports (ADR-0004 names them for the VPS case: "intentos SSH
+// fallidos, estado de fail2ban, reglas de firewall activas, consumo contra
+// la cuota de tráfico de OVH").
+//
+// Every field is a series, never a scalar, and a signal nobody reported is
+// an empty series rather than a zero point. That distinction is the whole
+// contract here: the collector only runs on hosts whose operator declared
+// them publicly exposed (capabilities.PublicExposed, gated on
+// BITACORA_PUBLIC_EXPOSED), so "no samples" is the ordinary state of most
+// hosts. Rendering a 0 there would assert "nobody is knocking on this
+// door", which is a claim the hub has no evidence for — and the dangerous
+// direction to be wrong in.
+type PublicSurface struct {
+	// SSHFailedLoginsTotal is the collector's raw count of failed-login
+	// lines in the current auth log. It is cumulative within one logrotate
+	// epoch and drops back when the log rotates, so it is context, not the
+	// answer to "am I being attacked right now".
+	SSHFailedLoginsTotal []SeriesPoint `json:"ssh_failed_logins_total"`
+	// SSHFailedLoginsPerMinute is that counter differentiated: how fast new
+	// failed attempts are arriving. This is the series that answers the
+	// question, because a standing total of 400 reads identically for a
+	// quiet month and for the last twenty minutes.
+	SSHFailedLoginsPerMinute []SeriesPoint `json:"ssh_failed_logins_per_minute"`
+	Fail2BanJailsTotal       []SeriesPoint `json:"fail2ban_jails_total"`
+	Fail2BanBannedTotal      []SeriesPoint `json:"fail2ban_banned_total"`
+	FirewallRulesTotal       []SeriesPoint `json:"firewall_rules_total"`
+	OVHTrafficUsedRatio      []SeriesPoint `json:"ovh_traffic_used_ratio"`
+}
+
 // Summary is GET /v1/summary's response: everything the single-page
 // timeline view needs to render, in one call (ADR-0014: "el endpoint
 // GET /v1/summary?host_id=... debe devolver todo lo necesario para
@@ -369,6 +399,7 @@ type Summary struct {
 	MemorySwapFreeBytes     []SeriesPoint       `json:"memory_swap_free_bytes"`
 	NetworkRXBytesPerSecond []SeriesPoint       `json:"network_rx_bytes_per_second"`
 	NetworkTXBytesPerSecond []SeriesPoint       `json:"network_tx_bytes_per_second"`
+	PublicSurface           PublicSurface       `json:"public_surface"`
 	Events                  []schema.Event      `json:"events"`
 	Jobs                    []schema.Job        `json:"jobs"`
 }
@@ -671,6 +702,31 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "querying network transmit metrics", http.StatusInternalServerError)
 		return
 	}
+	sshFailedLogins, err := s.Metrics.Query(r.Context(), "bitacora_public_ssh_failed_logins_total", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying ssh failed login metrics", http.StatusInternalServerError)
+		return
+	}
+	fail2banJails, err := s.Metrics.Query(r.Context(), "bitacora_public_fail2ban_jails_total", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying fail2ban jail metrics", http.StatusInternalServerError)
+		return
+	}
+	fail2banBanned, err := s.Metrics.Query(r.Context(), "bitacora_public_fail2ban_banned_total", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying fail2ban ban metrics", http.StatusInternalServerError)
+		return
+	}
+	firewallRules, err := s.Metrics.Query(r.Context(), "bitacora_public_firewall_rules_total", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying firewall rule metrics", http.StatusInternalServerError)
+		return
+	}
+	ovhTraffic, err := s.Metrics.Query(r.Context(), "bitacora_public_ovh_traffic_used_ratio", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying ovh traffic quota metrics", http.StatusInternalServerError)
+		return
+	}
 	events, err := s.Events.ListEvents(r.Context(), from, now, hostID)
 	if err != nil {
 		http.Error(w, "querying events", http.StatusInternalServerError)
@@ -700,8 +756,16 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		MemorySwapFreeBytes:     toSeries(swapFree),
 		NetworkRXBytesPerSecond: rateSeries(networkRX),
 		NetworkTXBytesPerSecond: rateSeries(networkTX),
-		Events:                  events,
-		Jobs:                    jobs,
+		PublicSurface: PublicSurface{
+			SSHFailedLoginsTotal:     toSeries(sshFailedLogins),
+			SSHFailedLoginsPerMinute: perMinuteSeries(sshFailedLogins),
+			Fail2BanJailsTotal:       toSeries(fail2banJails),
+			Fail2BanBannedTotal:      toSeries(fail2banBanned),
+			FirewallRulesTotal:       toSeries(firewallRules),
+			OVHTrafficUsedRatio:      toSeries(ovhTraffic),
+		},
+		Events: events,
+		Jobs:   jobs,
 	}
 	if summary.Events == nil {
 		summary.Events = []schema.Event{}
@@ -876,6 +940,27 @@ func rateSeries(samples []metricstore.Sample) []SeriesPoint {
 	points := make([]SeriesPoint, 0, len(timestamps))
 	for _, timestamp := range timestamps {
 		points = append(points, SeriesPoint{TS: timestamp, Value: rateByTS[timestamp]})
+	}
+	return points
+}
+
+// perMinuteSeries turns a cumulative counter into new-events-per-minute.
+//
+// It reuses rateSeries deliberately, for its two guarantees rather than for
+// brevity: the first sample of a series yields no point at all (never a
+// zero one), and a counter that goes backwards is skipped instead of
+// reported as a negative rate. Both matter here. The public-surface
+// collector re-counts matching lines in the *current* auth log on every
+// cycle, so logrotate drops the count back to near zero — a reset the
+// dashboard must not draw as "the attack stopped".
+//
+// Per minute rather than rateSeries's per second because the collector runs
+// on a 5-minute cadence: a brute-force run of 100 attempts between two
+// cycles reads as "20 attempts/min", not as "0.3/s".
+func perMinuteSeries(samples []metricstore.Sample) []SeriesPoint {
+	points := rateSeries(samples)
+	for i := range points {
+		points[i].Value *= 60
 	}
 	return points
 }

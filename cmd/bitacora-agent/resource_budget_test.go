@@ -20,6 +20,7 @@ func TestResourceBudget(t *testing.T) {
 	cmd := exec.Command(bin,
 		"-host-id-path", filepath.Join(state, "host_id"),
 		"-spool-dir", filepath.Join(state, "spool"),
+		"-blackbox-path", filepath.Join(state, "blackbox.dat"),
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start agent: %v", err)
@@ -29,19 +30,23 @@ func TestResourceBudget(t *testing.T) {
 		_ = cmd.Wait()
 	}()
 
-	time.Sleep(300 * time.Millisecond)
+	// Wait through at least one ADR-0011 sample so the measured process includes
+	// the mmap-backed recorder's actual steady-state work, not only its startup.
+	time.Sleep(1500 * time.Millisecond)
 
 	_, beforeCPU, err := resourcebudget.Sample(cmd.Process.Pid)
 	if err != nil {
 		t.Fatalf("agent exited before its baseline resource sample: %v", err)
 	}
 	started := time.Now()
-	time.Sleep(700 * time.Millisecond)
+	const measurementWindow = 10 * time.Second
+	time.Sleep(measurementWindow)
 	rss, afterCPU, err := resourcebudget.Sample(cmd.Process.Pid)
 	if err != nil {
 		t.Fatalf("agent exited before its steady-state resource sample: %v", err)
 	}
 	cpuFraction := (afterCPU - beforeCPU) / time.Since(started).Seconds()
+	t.Logf("agent with blackbox: rss_bytes=%d cpu_fraction=%.6f window=%s", rss, cpuFraction, time.Since(started).Round(time.Millisecond))
 	if err := resourcebudget.CheckBudget(rss, cpuFraction); err != nil {
 		t.Fatalf("agent exceeded ADR-0001 resource budget: %v", err)
 	}

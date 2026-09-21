@@ -4,11 +4,14 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/bitacora-dev/bitacora/internal/blackbox"
 	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
@@ -61,6 +64,61 @@ func TestActionConfigurationDisabledEvent(t *testing.T) {
 
 	if _, ok := actionConfigurationDisabledEvent("host-a", "/etc/bitacora/actions.json", nil, time.Unix(100, 0)); ok {
 		t.Fatal("missing action configuration is normal and must not emit an event")
+	}
+}
+
+func TestBlackboxFailureEventMakesDegradationVisible(t *testing.T) {
+	err := errors.New("permission denied")
+	event := blackboxFailureEvent("host-a", "/var/lib/bitacora/blackbox.dat", "start", err, time.Unix(100, 0))
+
+	if event.Type != "agent.blackbox_recorder_degraded" || event.Severity != schema.SeverityWarn {
+		t.Fatalf("unexpected event identity: %+v", event)
+	}
+	if event.Attrs["path"] != "/var/lib/bitacora/blackbox.dat" || event.Attrs["stage"] != "start" || event.Attrs["reason"] != err.Error() {
+		t.Fatalf("event did not preserve diagnostic context: %+v", event.Attrs)
+	}
+}
+
+func TestRunBlackboxWritesFileReadableByBitaAndStops(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the bita command against a real 1 Hz blackbox recorder")
+	}
+
+	path := filepath.Join(t.TempDir(), "blackbox.dat")
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- runBlackbox(stop, path, nil) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		samples, err := blackbox.Dump(path)
+		if err == nil && len(samples) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(stop)
+			<-done
+			t.Fatalf("blackbox did not record a sample by the deadline: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	close(stop)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("blackbox runner returned an error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("blackbox runner did not stop after its stop channel closed")
+	}
+
+	output, err := exec.Command("go", "run", "../bita", "blackbox", "dump", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("bita blackbox dump failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "1 sample(s)") {
+		t.Fatalf("bita did not read the agent-written blackbox file: %s", output)
 	}
 }
 

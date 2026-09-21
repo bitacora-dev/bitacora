@@ -50,7 +50,11 @@ Then install and start the service:
 3. Create `/etc/bitacora` as `root:bitacora` with mode `0750`. Copy
    `packaging/systemd/bitacora-agent.env.example` to
    `/etc/bitacora/agent.env`, set `BITACORA_HUB_URL` and
-   `BITACORA_TOKEN_FILE`, then set the environment file mode to `0640`.
+   `BITACORA_TOKEN_FILE`, then set the environment file mode to `0640`. On a
+   host reachable from the internet, also uncomment
+   `BITACORA_PUBLIC_EXPOSED=1`: the public-surface collector is gated on it
+   and stays off otherwise, so the dashboard's public surface panel will
+   report that nothing was measured rather than a reassuring zero.
 4. Write the enrollment token to the configured token path, owned by
    `root:bitacora` with mode `0640`. The enrollment command displayed by the
    hub creates those permissions automatically.

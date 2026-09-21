@@ -98,6 +98,28 @@ export const en: Dictionary = {
   memoryUsedRatio: (ratio) => `${ratio} of RAM`,
   swapFree: (free, total) => `Swap: ${free} free of ${total}`,
   bytesPerSecond: (value) => `${value}/s`,
+  publicSurfaceSectionLabel: "Public surface",
+  publicSurfaceHeading: "Public surface",
+  publicSurfaceIntro:
+    "Signals from the internet-facing host: how fast failed login attempts are arriving, how many addresses are banned, and how many firewall rules are active.",
+  publicSurfacePendingHeading: "No public surface data",
+  publicSurfacePendingBody:
+    "This host has reported none of these signals. A zero is deliberately not shown here: it would say nobody is knocking on the door, and no measurement supports that.",
+  publicSurfacePendingHowTo:
+    "The collector only runs once the operator declares the host exposed with BITACORA_PUBLIC_EXPOSED=1 in /etc/bitacora/agent.env.",
+  publicSurfaceNotReported: "Not reported",
+  publicSurfaceTotalsNote:
+    "The agent reports totals: not per-jail, per-rule, or per-banned-address detail.",
+  sshFailedLoginsTitle: "Failed SSH logins",
+  sshFailedLoginsPerMinute: (value) => `${value} attempts/min`,
+  sshFailedLoginsWindowLabel: "New attempts",
+  sshFailedLoginsWindowValue: (attempts, minutes) => `${attempts} in ${minutes} min`,
+  sshFailedLoginsCumulative: (total) => `${total} cumulative in the current log`,
+  fail2banJailsLabel: "fail2ban jails",
+  fail2banBannedLabel: "Banned addresses",
+  fail2banBannedNew: (addresses) => `+${addresses} in the window`,
+  firewallRulesLabel: "Firewall rules",
+  ovhTrafficLabel: "OVH traffic quota",
   collectorStateHeading: "Signal coverage",
   collectorStateIntro:
     "The summary shows the signals connected to this screen. Optional collectors that are not reporting yet are treated as pending capability, not empty gaps.",

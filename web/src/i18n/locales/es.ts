@@ -98,6 +98,28 @@ export const es: Dictionary = {
   memoryUsedRatio: (ratio) => `${ratio} de la RAM`,
   swapFree: (free, total) => `Swap: ${free} libres de ${total}`,
   bytesPerSecond: (value) => `${value}/s`,
+  publicSurfaceSectionLabel: "Superficie pública",
+  publicSurfaceHeading: "Superficie pública",
+  publicSurfaceIntro:
+    "Señales del host expuesto a internet: con qué ritmo llegan intentos de acceso fallidos, cuántas direcciones hay bloqueadas y cuántas reglas de firewall están activas.",
+  publicSurfacePendingHeading: "Sin datos de superficie pública",
+  publicSurfacePendingBody:
+    "Este host no ha reportado ninguna de estas señales. Aquí no se muestra un cero a propósito: un cero diría que nadie está llamando a la puerta, y no hay ninguna medición que lo respalde.",
+  publicSurfacePendingHowTo:
+    "El colector solo se activa cuando el operador declara el host como expuesto con BITACORA_PUBLIC_EXPOSED=1 en /etc/bitacora/agent.env.",
+  publicSurfaceNotReported: "Sin reportar",
+  publicSurfaceTotalsNote:
+    "El agente reporta totales: no el detalle por jaula, por regla ni por dirección bloqueada.",
+  sshFailedLoginsTitle: "Intentos SSH fallidos",
+  sshFailedLoginsPerMinute: (value) => `${value} intentos/min`,
+  sshFailedLoginsWindowLabel: "Intentos nuevos",
+  sshFailedLoginsWindowValue: (attempts, minutes) => `${attempts} en ${minutes} min`,
+  sshFailedLoginsCumulative: (total) => `${total} acumulados en el log actual`,
+  fail2banJailsLabel: "Jaulas de fail2ban",
+  fail2banBannedLabel: "Direcciones bloqueadas",
+  fail2banBannedNew: (addresses) => `+${addresses} en la ventana`,
+  firewallRulesLabel: "Reglas de firewall",
+  ovhTrafficLabel: "Cuota de tráfico OVH",
   collectorStateHeading: "Cobertura de señales",
   collectorStateIntro:
     "El resumen muestra las señales conectadas a esta pantalla. Los colectores opcionales que aún no reportan datos se tratan como capacidad pendiente, no como huecos vacíos.",

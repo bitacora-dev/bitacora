@@ -32,6 +32,7 @@ Current exceptions are transitional and should not spread:
 | Exception | Evidence | Rule |
 |---|---|---|
 | Chart series colors | [`App.tsx`](src/App.tsx) passes `#38bdf8` for CPU and network receive, `#f8d66d` for memory, and `#4ade80` for network transmit. | Keep CPU and receive cyan, memory gold, and transmit green; move them behind named tokens when the chart API accepts tokens directly. |
+| Public surface chart color | [`PublicSurfacePanel.tsx`](src/components/PublicSurfacePanel.tsx) passes `#f8d66d` for the failed-SSH-login rate. | Security pressure is operational emphasis, not an error: reuse gold rather than red, so a permanently visible line does not read as a permanent alarm. |
 | uPlot axis/grid colors | [`TimeSeriesChart.tsx`](src/components/TimeSeriesChart.tsx) sets slate axis/grid colors. | Keep chart chrome muted and lower priority than the active series. |
 | Severity text colors | [`EventsList.tsx`](src/components/EventsList.tsx) uses Tailwind severity classes. | Severity color may stay semantic, but new event severity styling must remain readable on the dark panel background. |
 | Enrollment panel Tailwind classes | [`AddServerPanel.tsx`](src/components/AddServerPanel.tsx) still uses inline Tailwind utilities. | Prefer the shared CSS panel/button vocabulary for new dashboard work; do not use this as a reason to fork the visual language. |
@@ -69,8 +70,8 @@ space while text-heavy blocks keep readable line lengths.
 | Viewport | Current behavior | Rule |
 |---|---|---|
 | Phone, below `560px` | Header, metadata, charts, events, and signal coverage stack; values shrink; chart readout aligns left. | One-column scanning wins. Avoid side-by-side controls that create cramped touch targets. |
-| Tablet/small laptop, below `980px` | Header actions stack; metrics and lower grids become one column. | Preserve order: header metadata, charts, events, signal coverage. |
-| Laptop/default | CPU and memory charts sit side by side; events and signal coverage share the lower row. | Keep the current state visible without scrolling on ordinary laptop sizes when data is present. |
+| Tablet/small laptop, below `980px` | Header actions stack; metrics, public surface, and lower grids become one column. | Preserve order: header metadata, charts, public surface, events, signal coverage. |
+| Laptop/default | CPU and memory charts sit side by side; the public-surface rate chart and its totals share a row; events and signal coverage share the lower row. | Keep the current state visible without scrolling on ordinary laptop sizes when data is present. |
 | Wide desktop, `1920px+` | Charts use wider tracks, lower grid grows, and text blocks remain capped. | Widen plots and data grids; do not turn prose into long horizontal ribbons. |
 | Tall portrait, `900px+` wide and `1500px+` high in portrait orientation (including `1080×1920`) | Charts stack and each canvas uses `clamp(16rem, 18vh, 20rem)`: more than the default height, but capped at 320 px. | Preserve long-form signal reading without forcing narrow landscape charts or using a full screen to render low-variance series. |
 
@@ -88,13 +89,18 @@ The dashboard's question is "is my server OK?" The answer order is:
 1. Can the page read this hub and host?
 2. What are CPU and memory doing now?
 3. What changed over the current window?
-4. Were any events emitted?
-5. Which signal areas are connected or pending?
+4. Is anything attacking the public surface right now?
+5. Were any events emitted?
+6. Which signal areas are connected or pending?
 
 This order is encoded in [`App.tsx`](src/App.tsx): auth and host selection
-states first, then header metadata, `metrics-grid`, `EventsList`, and signal
-coverage. Do not lead with setup prose, marketing copy, or secondary collector
-detail on the main dashboard.
+states first, then header metadata, `metrics-grid`, `public-surface-grid`,
+`EventsList`, and signal coverage. Do not lead with setup prose, marketing
+copy, or secondary collector detail on the main dashboard.
+
+Public surface sits with the window signals rather than under inventory
+because the host it describes is reachable from the internet. A brute-force
+run in progress is a current operating state, not a catalogue entry.
 
 Panels should be dense enough for repeated operations. Avoid decorative cards,
 oversized empty spacing, and hero-style composition inside the app shell. The
@@ -140,6 +146,13 @@ Use explicit, dignified empty states:
   Keep the panel shape stable while data is missing.
 - Signal coverage in `App.tsx` describes optional collectors as pending
   capability, not as broken UI.
+- `PublicSurfacePanel` renders "not reported" in words when a public-surface
+  signal has no samples, and replaces the whole section with one explanatory
+  panel when the host has reported none of them. Never substitute `0` for an
+  absent security signal: a zero in "failed SSH logins" asserts that nobody
+  is knocking, which is a measurement the hub does not have. Absent optional
+  data and a measured zero are different answers, and this is the direction
+  where being wrong is dangerous.
 - Disabled controls must keep visible labels and use the existing disabled
   treatment: `cursor: not-allowed` plus reduced opacity on real buttons.
 

@@ -303,7 +303,8 @@ body {
 .metrics-grid,
 .lower-grid,
 .inventory-grid,
-.processor-layout {
+.processor-layout,
+.public-surface-grid {
   display: grid;
   gap: 1rem;
 }
@@ -335,6 +336,88 @@ body {
 .processor-layout {
   grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.75fr);
   align-items: stretch;
+}
+
+/* The attack-rate chart is the scan target; the totals beside it are the
+   context that explains it. Same split as the processor row. */
+.public-surface-grid {
+  grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.75fr);
+  align-items: stretch;
+}
+
+/* A host that reports nothing renders one explanatory panel, not an empty
+   chart plus a column of dashes. */
+.public-surface-grid > .public-surface-panel--pending {
+  grid-column: 1 / -1;
+}
+
+.public-surface-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.public-surface-note {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.public-surface-details {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.public-surface-details > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 0.5rem;
+}
+
+.public-surface-details > div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.public-surface-details dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.public-surface-details dd {
+  display: flex;
+  flex-direction: column;
+  align-items: end;
+  gap: 0.15rem;
+  margin: 0;
+  text-align: right;
+}
+
+.public-surface-details dd strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.public-surface-details dd span {
+  color: var(--dim);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Unreported is a word, never a colour on its own and never a zero: the
+   operator has to be able to tell "nothing measured" from "measured none". */
+.public-surface-unreported {
+  color: var(--dim);
+  font-size: 0.8rem;
+  font-style: italic;
 }
 
 .processor-identity {
@@ -1250,7 +1333,8 @@ body {
     grid-template-columns: repeat(2, minmax(44rem, 1fr));
   }
 
-  .processor-layout {
+  .processor-layout,
+  .public-surface-grid {
     grid-template-columns: minmax(0, 1.65fr) minmax(24rem, 0.75fr);
   }
 
@@ -1281,7 +1365,8 @@ body {
   .metrics-grid,
   .lower-grid,
   .inventory-grid,
-  .processor-layout {
+  .processor-layout,
+  .public-surface-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1347,7 +1432,8 @@ body {
 }
 
 @media (orientation: portrait) and (min-width: 900px) and (min-height: 1500px) {
-  .dashboard-shell--tall-portrait .metrics-grid {
+  .dashboard-shell--tall-portrait .metrics-grid,
+  .dashboard-shell--tall-portrait .public-surface-grid {
     grid-template-columns: 1fr;
   }
 

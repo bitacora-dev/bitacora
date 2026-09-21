@@ -55,4 +55,30 @@ describe("eventDetails", () => {
   it("returns no details for an event without attributes or subject", () => {
     expect(eventDetails(event)).toEqual([]);
   });
+
+  it("surfaces the provenance the hub sends: when it arrived, its fingerprint and its log coordinates", () => {
+    expect(eventDetails({
+      ...event,
+      ts_received: "2026-09-19T11:31:20Z",
+      fingerprint: "e3b0c44298fc",
+      log_refs: [{ block_id: "block-a", line: 5 }, { block_id: "block-a", line: 7 }],
+    })).toEqual([
+      { key: "ts_received", value: "2026-09-19T11:31:20Z" },
+      { key: "fingerprint", value: "e3b0c44298fc" },
+      { key: "log_refs", value: "block-a:5, block-a:7" },
+    ]);
+  });
+
+  it("marks a longer ref list as truncated instead of implying it is complete", () => {
+    const details = eventDetails({
+      ...event,
+      log_refs: [0, 1, 2, 3].map((line) => ({ block_id: "block-a", line })),
+    });
+    expect(details).toEqual([{ key: "log_refs", value: "block-a:0, block-a:1, block-a:2, …" }]);
+  });
+
+  it("hides a reception time that adds nothing, and the zero instant Go sends for an unset one", () => {
+    expect(eventDetails({ ...event, ts_received: event.ts })).toEqual([]);
+    expect(eventDetails({ ...event, ts_received: "0001-01-01T00:00:00Z" })).toEqual([]);
+  });
 });

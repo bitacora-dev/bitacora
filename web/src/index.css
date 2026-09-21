@@ -1052,6 +1052,97 @@ body {
 .log-list li > div { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; color: var(--dim); font-size: 0.78rem; }
 .log-list pre { margin: 0.35rem 0 0; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 0.82rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 
+/* A referenced line is marked with a border, a tint and its own visible
+   label — never by colour alone (see web/DESIGN.md, Accessibility). */
+.log-entry--referenced {
+  margin: 0 -0.6rem;
+  padding: 0.8rem 0.6rem;
+  border-top-color: var(--gold);
+  border-left: 2px solid var(--gold);
+  background: rgb(248 214 109 / 0.07);
+}
+
+.log-referenced-badge {
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.log-ref-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0.75rem 0 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.log-ref-notice > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.log-ref-notice strong {
+  color: var(--text);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.log-ref-notice span {
+  color: var(--dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.event-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.event-actions .link-button {
+  font-size: 0.8rem;
+}
+
+.job-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  max-width: 72ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reserved CPUs read as permanently idle unless they are labelled. */
+.cpu-core-isolated {
+  color: var(--gold);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cpu-thread-isolated {
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.host-metadata--stale,
+.host-stale-note {
+  color: var(--gold);
+}
+
 .signal-panel {
   display: grid;
   gap: 1rem;

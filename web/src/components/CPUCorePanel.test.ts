@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateCPUPoints, groupCPUCores, readCPUPanelPreferences } from "./CPUCorePanel";
+import { aggregateCPUPoints, groupCPUCores, isolatedCPUCount, readCPUPanelPreferences } from "./CPUCorePanel";
 
 describe("groupCPUCores", () => {
   it("groups hyperthread siblings by core_id without losing their individual series", () => {
@@ -20,6 +20,45 @@ describe("groupCPUCores", () => {
     expect(groups[0].cpus.map((series) => series.cpu)).toEqual(["0", "1"]);
     expect(groups[0].type).toBe("p-core");
     expect(groups[1].cpus.map((series) => series.cpu)).toEqual(["2"]);
+  });
+});
+
+describe("isolated CPUs", () => {
+  const topology = (attrs: Record<string, Record<string, string>>) => ({
+    host_id: "host-a", kind: "cpu_topology", reported_at: "2026-09-20T10:00:00Z", schema: 1,
+    items: Object.entries(attrs).map(([id, value]) => ({ id, name: id, attrs: value })),
+  });
+  const series = (cpus: string[]) => cpus.map((cpu) => ({ cpu, points: [{ ts: "2026-09-20T10:00:00Z", value: 0 }] }));
+
+  it("keeps the kernel's reserved CPUs attached to the core that owns them", () => {
+    const groups = groupCPUCores(series(["0", "1", "2"]), topology({
+      cpu0: { core_id: "0", core_type: "p-core", online: "true", isolated: "false" },
+      cpu1: { core_id: "1", core_type: "p-core", online: "true", isolated: "true" },
+      cpu2: { core_id: "2", core_type: "p-core", online: "true", isolated: "true" },
+    }));
+
+    expect(groups.map((group) => group.isolated)).toEqual([[], ["1"], ["2"]]);
+    expect(isolatedCPUCount(groups)).toBe(2);
+  });
+
+  it("reports nothing isolated when the kernel exposes no authoritative list", () => {
+    const groups = groupCPUCores(series(["0", "1"]), topology({
+      cpu0: { core_id: "0", core_type: "p-core", online: "true" },
+      cpu1: { core_id: "1", core_type: "p-core", online: "true" },
+    }));
+
+    expect(isolatedCPUCount(groups)).toBe(0);
+  });
+
+  it("counts every isolated thread of a hyperthreaded core, not the core once", () => {
+    const groups = groupCPUCores(series(["0", "1"]), topology({
+      cpu0: { core_id: "0", core_type: "p-core", online: "true", isolated: "true" },
+      cpu1: { core_id: "0", core_type: "p-core", online: "true", isolated: "true" },
+    }));
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].isolated).toEqual(["0", "1"]);
+    expect(isolatedCPUCount(groups)).toBe(2);
   });
 });
 

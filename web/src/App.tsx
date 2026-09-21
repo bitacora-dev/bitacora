@@ -15,6 +15,7 @@ import PublicSurfacePanel from "./components/PublicSurfacePanel";
 import PowerPanel from "./components/PowerPanel";
 import AccessTunnelsPanel from "./components/AccessTunnelsPanel";
 import SharesPanel from "./components/SharesPanel";
+import ContainerPanel from "./components/ContainerPanel";
 import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
 import LoginPanel from "./components/LoginPanel";
@@ -620,6 +621,13 @@ export default function App() {
               outside world right now, not what it contains. */}
           <section className="access-grid" aria-label={t.accessSectionLabel}>
             <AccessTunnelsPanel inventory={tunnels} />
+          </section>
+
+          {/* Containers come after the host-level signals: they explain what is
+              consuming the machine, once the operator has seen what the machine
+              is doing. A host running none simply says so. */}
+          <section className="metrics-grid">
+            <ContainerPanel containers={summary.containers ?? []} formatBytes={bytes} />
           </section>
 
           <section className="lower-grid">

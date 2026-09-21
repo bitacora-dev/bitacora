@@ -17,6 +17,7 @@ import (
 
 	"github.com/bitacora-dev/bitacora/internal/agentactions"
 	"github.com/bitacora-dev/bitacora/internal/agentbuffer"
+	"github.com/bitacora-dev/bitacora/internal/blackbox"
 	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
 	"github.com/bitacora-dev/bitacora/internal/collector/cpu"
@@ -45,6 +46,11 @@ import (
 
 // agentVersion is set at build time via -ldflags; "dev" outside a release build.
 var agentVersion = "dev"
+
+// DefaultBlackboxPath is the durable mmap-backed ring required by ADR-0011.
+// It is kept with the agent's other persistent state, inside the directory
+// ADR-0005 permits the unprivileged daemon to write.
+const DefaultBlackboxPath = "/var/lib/bitacora/blackbox.dat"
 
 func main() {
 	logger := log.New(os.Stderr, "bitacora-agent: ", log.LstdFlags)
@@ -143,8 +149,65 @@ func main() {
 			logger.Printf("resource budget monitor: %v", err)
 		}
 	}()
+	go func() {
+		syncFailureReported := false
+		err := runBlackbox(ctx.Done(), cfg.blackboxPath, func(err error) {
+			logger.Printf("blackbox recorder sync: %v", err)
+			if syncFailureReported {
+				return
+			}
+			syncFailureReported = true
+			sink.Event(blackboxFailureEvent(hostID, cfg.blackboxPath, "sync", err, time.Now()))
+		})
+		if err != nil {
+			logger.Printf("blackbox recorder disabled: %v", err)
+			sink.Event(blackboxFailureEvent(hostID, cfg.blackboxPath, "start", err, time.Now()))
+		}
+	}()
 
 	<-ctx.Done()
+}
+
+// runBlackbox owns the recorder for the lifetime of one agent process. It is
+// intentionally outside collector.Runtime: ADR-0011 requires this diagnostic
+// path to keep recording even when collectors or their outbound sink degrade.
+func runBlackbox(stop <-chan struct{}, path string, onSyncError func(error)) error {
+	recorder, err := blackbox.Open(path, blackbox.DefaultCapacity)
+	if err != nil {
+		return err
+	}
+
+	sampler, err := blackbox.NewSampler("/proc", "/sys")
+	if err != nil {
+		_ = recorder.Close()
+		return err
+	}
+
+	blackbox.Run(
+		blackbox.SystemClock{},
+		sampler,
+		recorder,
+		blackbox.DefaultSampleInterval,
+		blackbox.DefaultSyncInterval,
+		onSyncError,
+	)(stop)
+	return recorder.Close()
+}
+
+// blackboxFailureEvent makes a recorder that cannot start or flush visible in
+// the timeline while allowing the rest of the agent to continue running.
+func blackboxFailureEvent(hostID, path, stage string, err error, now time.Time) schema.Event {
+	return schema.Event{
+		ID:       ulid.Make().String(),
+		TS:       now,
+		HostID:   hostID,
+		Source:   "agent",
+		Type:     "agent.blackbox_recorder_degraded",
+		Severity: schema.SeverityWarn,
+		Title:    fmt.Sprintf("blackbox recorder %s failed: %v", stage, err),
+		Attrs:    schema.Labels{"path": path, "stage": stage, "reason": err.Error()},
+		Schema:   schema.CurrentSchemaVersion,
+	}
 }
 
 // actionConfigurationDisabledEvent makes a failed optional action configuration
@@ -230,12 +293,13 @@ func packageActionRequest(order *bitacorapb.PendingPackageOperation, hostID stri
 }
 
 type config struct {
-	hubURL      string
-	token       string
-	tokenFile   string
-	spoolDir    string
-	hostIDPath  string
-	actionsFile string
+	hubURL       string
+	token        string
+	tokenFile    string
+	spoolDir     string
+	hostIDPath   string
+	actionsFile  string
+	blackboxPath string
 }
 
 func parseConfig() (config, error) {
@@ -245,6 +309,7 @@ func parseConfig() (config, error) {
 	flag.StringVar(&cfg.spoolDir, "spool-dir", agentbuffer.DefaultOutboundDir, "outbound buffer directory")
 	flag.StringVar(&cfg.hostIDPath, "host-id-path", schema.DefaultHostIDPath, "path to the persistent host ID")
 	flag.StringVar(&cfg.actionsFile, "actions-file", os.Getenv("BITACORA_ACTIONS_FILE"), "path to local package action allowlist")
+	flag.StringVar(&cfg.blackboxPath, "blackbox-path", DefaultBlackboxPath, "path to the persistent blackbox recorder")
 	flag.Parse()
 
 	token, err := readToken(cfg.tokenFile, os.Getenv("BITACORA_TOKEN"))

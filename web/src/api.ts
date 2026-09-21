@@ -47,6 +47,20 @@ export interface PublicSurface {
   ovh_traffic_used_ratio: SeriesPoint[];
 }
 
+// ContainerSeries mirrors hubapi.ContainerSeries: one Docker container's own
+// series, never flattened into a shared list. cpu_cores_used is already a rate
+// in fractions of one logical CPU (0.5 = half a core), differentiated by the
+// hub inside this container's series; the frontend must not differentiate it
+// again, and must not sum raw counters of its own.
+//
+// Fewer points means the container was not running, not that it was idle.
+export interface ContainerSeries {
+  container_id: string;
+  container_name: string;
+  cpu_cores_used: SeriesPoint[];
+  memory_bytes: SeriesPoint[];
+}
+
 export interface EventSubject {
   kind: string;
   name: string;
@@ -103,6 +117,7 @@ export interface Summary {
   network_rx_bytes_per_second: SeriesPoint[];
   network_tx_bytes_per_second: SeriesPoint[];
   public_surface: PublicSurface;
+  containers: ContainerSeries[];
   events: BitacoraEvent[];
   jobs: Job[];
 }

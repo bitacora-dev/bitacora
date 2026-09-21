@@ -966,3 +966,233 @@ func TestHandleSummary_PublicSurfaceIsScopedToTheRequestedHost(t *testing.T) {
 		t.Fatalf("banned totals = %+v, want only host-a's 7", got.PublicSurface.Fail2BanBannedTotal)
 	}
 }
+
+// containerSample builds one docker-collector sample: the collector always
+// emits container_id truncated to 12 characters alongside container_name.
+func containerSample(id, name string, ts time.Time, value float64) metricstore.Sample {
+	return metricstore.Sample{Labels: map[string]string{"host_id": "host-a", "container_id": id, "container_name": name}, Timestamp: ts, Value: value}
+}
+
+// TestHandleSummary_KeepsContainersAsSeparateSeries is the guard against the
+// mistake #699 made with logical CPUs: every container is its own series and
+// flattening them produces one meaningless zig-zag line.
+func TestHandleSummary_KeepsContainersAsSeparateSeries(t *testing.T) {
+	t0 := time.Now().Add(-2 * time.Minute).UTC()
+	t1 := t0.Add(30 * time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_container_cpu_seconds_total": {
+			containerSample("aaaaaaaaaaaa", "dokploy-postgres", t0, 100),
+			containerSample("aaaaaaaaaaaa", "dokploy-postgres", t1, 115),
+			containerSample("bbbbbbbbbbbb", "dokploy-traefik", t0, 10),
+			containerSample("bbbbbbbbbbbb", "dokploy-traefik", t1, 13),
+		},
+		"bitacora_container_memory_bytes": {
+			containerSample("aaaaaaaaaaaa", "dokploy-postgres", t0, 512<<20),
+			containerSample("aaaaaaaaaaaa", "dokploy-postgres", t1, 520<<20),
+			containerSample("bbbbbbbbbbbb", "dokploy-traefik", t0, 64<<20),
+			containerSample("bbbbbbbbbbbb", "dokploy-traefik", t1, 66<<20),
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 2 {
+		t.Fatalf("expected one series per container, got %+v", got.Containers)
+	}
+	postgres, traefik := got.Containers[0], got.Containers[1]
+	if postgres.ContainerName != "dokploy-postgres" || traefik.ContainerName != "dokploy-traefik" {
+		t.Fatalf("expected containers sorted by name, got %q and %q", postgres.ContainerName, traefik.ContainerName)
+	}
+	if postgres.ContainerID != "aaaaaaaaaaaa" || traefik.ContainerID != "bbbbbbbbbbbb" {
+		t.Fatalf("expected each series to keep its own container id, got %q and %q", postgres.ContainerID, traefik.ContainerID)
+	}
+
+	// 15 CPU-seconds over 30s is half a core; 3 over 30s is a tenth.
+	if len(postgres.CPUCoresUsed) != 1 || postgres.CPUCoresUsed[0].Value != 0.5 {
+		t.Fatalf("expected postgres to use half a core on its own series, got %+v", postgres.CPUCoresUsed)
+	}
+	if len(traefik.CPUCoresUsed) != 1 || traefik.CPUCoresUsed[0].Value != 0.1 {
+		t.Fatalf("expected traefik to use a tenth of a core on its own series, got %+v", traefik.CPUCoresUsed)
+	}
+	// A flattened implementation would report the pair's sum (0.6) on a single
+	// series instead of keeping each container's own rate.
+	if postgres.CPUCoresUsed[0].Value+traefik.CPUCoresUsed[0].Value != 0.6 {
+		t.Fatalf("expected the two per-container rates to remain separate, got %+v and %+v", postgres.CPUCoresUsed, traefik.CPUCoresUsed)
+	}
+
+	if len(postgres.MemoryBytes) != 2 || postgres.MemoryBytes[0].Value != 512<<20 || postgres.MemoryBytes[1].Value != 520<<20 {
+		t.Fatalf("expected postgres memory to stay on its own series in timestamp order, got %+v", postgres.MemoryBytes)
+	}
+	if len(traefik.MemoryBytes) != 2 || traefik.MemoryBytes[0].Value != 64<<20 {
+		t.Fatalf("expected traefik memory to stay on its own series, got %+v", traefik.MemoryBytes)
+	}
+}
+
+// TestHandleSummary_ContainerStartingMidWindowAddsNoSpuriousSpike is the guard
+// against the mistake #885 made with network counters: summing cumulative
+// counters across containers first and differentiating the sum afterwards
+// turns every container start into a fake CPU spike. On a Dokploy host that
+// happens all day long.
+func TestHandleSummary_ContainerStartingMidWindowAddsNoSpuriousSpike(t *testing.T) {
+	t0 := time.Now().Add(-90 * time.Second).UTC()
+	t1 := t0.Add(30 * time.Second)
+	t2 := t1.Add(30 * time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		// "old" has been running for hours, so its counter is already large.
+		// "new" starts at t1 — a sum-then-differentiate pass would read old's
+		// 3600 plus new's 0 as a 3600-CPU-second jump inside one interval.
+		"bitacora_container_cpu_seconds_total": {
+			containerSample("oldoldoldold", "long-running", t0, 3600),
+			containerSample("oldoldoldold", "long-running", t1, 3603),
+			containerSample("oldoldoldold", "long-running", t2, 3606),
+			containerSample("newnewnewnew", "just-deployed", t1, 0),
+			containerSample("newnewnewnew", "just-deployed", t2, 6),
+		},
+		"bitacora_container_memory_bytes": {},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 2 {
+		t.Fatalf("expected two containers, got %+v", got.Containers)
+	}
+	byName := map[string]ContainerSeries{}
+	for _, container := range got.Containers {
+		byName[container.ContainerName] = container
+	}
+
+	deployed := byName["just-deployed"]
+	if len(deployed.CPUCoresUsed) != 1 {
+		t.Fatalf("expected one rate point for the container that started mid-window, got %+v", deployed.CPUCoresUsed)
+	}
+	// Its first sample opens the series; it is a baseline, not a 0->6 jump
+	// measured from nothing. 6 CPU-seconds over 30s is a fifth of a core.
+	if deployed.CPUCoresUsed[0].Value != 0.2 {
+		t.Fatalf("expected the new container's own rate (0.2 cores), got %v", deployed.CPUCoresUsed[0].Value)
+	}
+
+	running := byName["long-running"]
+	if len(running.CPUCoresUsed) != 2 {
+		t.Fatalf("expected two rate points for the long-running container, got %+v", running.CPUCoresUsed)
+	}
+	for _, point := range running.CPUCoresUsed {
+		if point.Value != 0.1 {
+			t.Fatalf("expected the long-running container to stay at 0.1 cores, unaffected by the new container; got %+v", running.CPUCoresUsed)
+		}
+	}
+}
+
+// TestHandleSummary_ContainerCPUSkipsCounterReset covers a container that is
+// restarted in place: cgroup v2 starts its cpu.stat back at zero, which is a
+// reset, not a negative rate.
+func TestHandleSummary_ContainerCPUSkipsCounterReset(t *testing.T) {
+	t0 := time.Now().Add(-90 * time.Second).UTC()
+	t1 := t0.Add(30 * time.Second)
+	t2 := t1.Add(30 * time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_container_cpu_seconds_total": {
+			containerSample("cccccccccccc", "restarted", t0, 300),
+			containerSample("cccccccccccc", "restarted", t1, 0),
+			containerSample("cccccccccccc", "restarted", t2, 3),
+		},
+		"bitacora_container_memory_bytes": {},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 1 {
+		t.Fatalf("expected one container, got %+v", got.Containers)
+	}
+	if len(got.Containers[0].CPUCoresUsed) != 1 || got.Containers[0].CPUCoresUsed[0].Value != 0.1 {
+		t.Fatalf("expected the reset interval skipped and only the 0.1-core interval kept, got %+v", got.Containers[0].CPUCoresUsed)
+	}
+}
+
+// TestHandleSummary_ContainerNameFollowsTheLatestSample covers the collector's
+// ADR-0005 degraded mode: without docker-socket-proxy it falls back to the
+// truncated ID as the name, and the real name only appears once the proxy
+// answers again. The most recent label wins.
+func TestHandleSummary_ContainerNameFollowsTheLatestSample(t *testing.T) {
+	t0 := time.Now().Add(-60 * time.Second).UTC()
+	t1 := t0.Add(30 * time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_container_cpu_seconds_total": {},
+		// Same container id throughout; only the name label changes, because
+		// the collector fell back to the truncated id until the proxy answered.
+		"bitacora_container_memory_bytes": {
+			containerSample("dddddddddddd", "dddddddddddd", t0, 1<<20),
+			containerSample("dddddddddddd", "dokploy-redis", t1, 2<<20),
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 1 {
+		t.Fatalf("expected the two samples to belong to one container, got %+v", got.Containers)
+	}
+	if got.Containers[0].ContainerName != "dokploy-redis" {
+		t.Fatalf("expected the most recent container_name to win, got %q", got.Containers[0].ContainerName)
+	}
+}
+
+// TestHandleSummary_HostWithoutContainersReportsAbsenceNotZero asserts a host
+// running no containers answers with an empty list, never with zero-valued
+// points a chart would draw as a flat "0 cores" line.
+func TestHandleSummary_HostWithoutContainersReportsAbsenceNotZero(t *testing.T) {
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	if !strings.Contains(rec.Body.String(), `"containers":[]`) {
+		t.Fatalf("expected an empty containers array rather than null, got %s", rec.Body.String())
+	}
+}
+
+// TestHandleSummary_ContainersAreScopedToTheRequestedHost keeps another host's
+// containers out of this host's panel.
+func TestHandleSummary_ContainersAreScopedToTheRequestedHost(t *testing.T) {
+	now := time.Now().UTC()
+	other := containerSample("eeeeeeeeeeee", "elsewhere", now, 1<<20)
+	other.Labels["host_id"] = "host-b"
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_container_memory_bytes": {
+			containerSample("ffffffffffff", "here", now, 2<<20),
+			other,
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 1 || got.Containers[0].ContainerName != "here" {
+		t.Fatalf("expected only host-a's container, got %+v", got.Containers)
+	}
+}

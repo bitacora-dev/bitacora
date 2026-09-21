@@ -380,6 +380,27 @@ type PublicSurface struct {
 	OVHTrafficUsedRatio      []SeriesPoint `json:"ovh_traffic_used_ratio"`
 }
 
+// ContainerSeries keeps one container's samples together, for the same
+// reason CPUSeries and TemperatureSeries do: a container is a series, and
+// flattening several of them into one list makes a chart join unrelated
+// workloads into an unreadable line.
+//
+// CPUCoresUsed is a rate, not the cumulative counter the collector emits:
+// fractions of one logical CPU, so 0.5 means "half a core". It is
+// differentiated strictly inside this container's own series — see
+// counterRatePoints for why that order is not negotiable.
+//
+// A container that started, stopped, or was restarted inside the window
+// simply has fewer points. There are no zero-filled gaps: a container that
+// was not running is absent from the data, which is not the same thing as a
+// container that was running and idle.
+type ContainerSeries struct {
+	ContainerID   string        `json:"container_id"`
+	ContainerName string        `json:"container_name"`
+	CPUCoresUsed  []SeriesPoint `json:"cpu_cores_used"`
+	MemoryBytes   []SeriesPoint `json:"memory_bytes"`
+}
+
 // Summary is GET /v1/summary's response: everything the single-page
 // timeline view needs to render, in one call (ADR-0014: "el endpoint
 // GET /v1/summary?host_id=... debe devolver todo lo necesario para
@@ -400,6 +421,7 @@ type Summary struct {
 	NetworkRXBytesPerSecond []SeriesPoint       `json:"network_rx_bytes_per_second"`
 	NetworkTXBytesPerSecond []SeriesPoint       `json:"network_tx_bytes_per_second"`
 	PublicSurface           PublicSurface       `json:"public_surface"`
+	Containers              []ContainerSeries   `json:"containers"`
 	Events                  []schema.Event      `json:"events"`
 	Jobs                    []schema.Job        `json:"jobs"`
 }
@@ -725,6 +747,19 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	ovhTraffic, err := s.Metrics.Query(r.Context(), "bitacora_public_ovh_traffic_used_ratio", from, now, hostMatcher)
 	if err != nil {
 		http.Error(w, "querying ovh traffic quota metrics", http.StatusInternalServerError)
+	}
+
+	// The docker collector (ADR-0007) gates itself on the container.cgroupv2
+	// capability, so a host without the cgroup v2 unified hierarchy simply
+	// reports nothing here. That is absence of data, not zero usage.
+	containerCPU, err := s.Metrics.Query(r.Context(), "bitacora_container_cpu_seconds_total", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying container cpu metrics", http.StatusInternalServerError)
+		return
+	}
+	containerMemory, err := s.Metrics.Query(r.Context(), "bitacora_container_memory_bytes", from, now, hostMatcher)
+	if err != nil {
+		http.Error(w, "querying container memory metrics", http.StatusInternalServerError)
 		return
 	}
 	events, err := s.Events.ListEvents(r.Context(), from, now, hostID)
@@ -764,8 +799,9 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 			FirewallRulesTotal:       toSeries(firewallRules),
 			OVHTrafficUsedRatio:      toSeries(ovhTraffic),
 		},
-		Events: events,
-		Jobs:   jobs,
+		Containers: containerSeries(containerCPU, containerMemory),
+		Events:     events,
+		Jobs:       jobs,
 	}
 	if summary.Events == nil {
 		summary.Events = []schema.Event{}
@@ -917,17 +953,8 @@ func rateSeries(samples []metricstore.Sample) []SeriesPoint {
 
 	rateByTS := make(map[time.Time]float64)
 	for _, series := range bySeries {
-		sort.Slice(series, func(i, j int) bool { return series[i].Timestamp.Before(series[j].Timestamp) })
-		for i := 1; i < len(series); i++ {
-			prev, cur := series[i-1], series[i]
-			elapsed := cur.Timestamp.Sub(prev.Timestamp).Seconds()
-			if elapsed <= 0 {
-				continue // out-of-order or duplicate timestamp — not a valid interval
-			}
-			if cur.Value < prev.Value {
-				continue // counter reset (reboot, interface reset) — not an error, just not a valid rate point
-			}
-			rateByTS[cur.Timestamp] += (cur.Value - prev.Value) / elapsed
+		for _, point := range counterRatePoints(series) {
+			rateByTS[point.TS] += point.Value
 		}
 	}
 
@@ -963,6 +990,113 @@ func perMinuteSeries(samples []metricstore.Sample) []SeriesPoint {
 		points[i].Value *= 60
 	}
 	return points
+}
+
+// counterRatePoints differentiates ONE series of cumulative counter samples
+// into per-second rate points. It is the single place that decides what a
+// valid interval is, so every counter this API exposes — host network bytes,
+// per-container CPU seconds — answers that question the same way.
+//
+// It takes an already-grouped series on purpose. Differentiating each series
+// on its own and only then combining the results is the whole discipline:
+// combining the raw cumulative counters first and differentiating the sum
+// afterwards reports every series that appears or disappears mid-window as a
+// spike that never happened. For containers that is not an edge case — on a
+// Dokploy host containers start and stop all day, and each one starts its
+// cgroup v2 cpu.stat back at zero.
+func counterRatePoints(series []metricstore.Sample) []SeriesPoint {
+	sorted := make([]metricstore.Sample, len(series))
+	copy(sorted, series)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Timestamp.Before(sorted[j].Timestamp) })
+
+	points := make([]SeriesPoint, 0, len(sorted))
+	for i := 1; i < len(sorted); i++ {
+		prev, cur := sorted[i-1], sorted[i]
+		elapsed := cur.Timestamp.Sub(prev.Timestamp).Seconds()
+		if elapsed <= 0 {
+			continue // out-of-order or duplicate timestamp — not a valid interval
+		}
+		if cur.Value < prev.Value {
+			continue // counter reset (reboot, interface reset, container restart) — not an error, just not a valid rate point
+		}
+		points = append(points, SeriesPoint{TS: cur.Timestamp, Value: (cur.Value - prev.Value) / elapsed})
+	}
+	return points
+}
+
+// containerSeries turns the docker collector's two labelled metrics into one
+// entry per container, never into one flattened list.
+//
+// Grouping is by container_id, the stable identity (truncated to 12
+// characters by the collector, per ADR-0006). container_name is display
+// metadata and can change within a window: the collector falls back to the
+// truncated id while docker-socket-proxy is unavailable (ADR-0005's degraded
+// mode), so the most recent name wins rather than the first one seen.
+//
+// CPU is differentiated per container before anything else happens to it.
+// Memory is a gauge and is passed through in timestamp order.
+func containerSeries(cpu, memory []metricstore.Sample) []ContainerSeries {
+	type bucket struct {
+		name   string
+		nameTS time.Time
+		cpu    []metricstore.Sample
+		memory []metricstore.Sample
+	}
+
+	buckets := make(map[string]*bucket)
+	observe := func(sample metricstore.Sample) *bucket {
+		id := sample.Labels["container_id"]
+		if id == "" {
+			return nil // not a per-container sample; nothing to attribute it to
+		}
+		current, ok := buckets[id]
+		if !ok {
+			current = &bucket{}
+			buckets[id] = current
+		}
+		if name := sample.Labels["container_name"]; name != "" && !sample.Timestamp.Before(current.nameTS) {
+			current.name, current.nameTS = name, sample.Timestamp
+		}
+		return current
+	}
+
+	for _, sample := range cpu {
+		if current := observe(sample); current != nil {
+			current.cpu = append(current.cpu, sample)
+		}
+	}
+	for _, sample := range memory {
+		if current := observe(sample); current != nil {
+			current.memory = append(current.memory, sample)
+		}
+	}
+
+	containers := make([]ContainerSeries, 0, len(buckets))
+	for id, current := range buckets {
+		name := current.name
+		if name == "" {
+			name = id // schema validation requires a name, but never render a blank row
+		}
+		sort.Slice(current.memory, func(i, j int) bool {
+			return current.memory[i].Timestamp.Before(current.memory[j].Timestamp)
+		})
+		containers = append(containers, ContainerSeries{
+			ContainerID:   id,
+			ContainerName: name,
+			CPUCoresUsed:  counterRatePoints(current.cpu),
+			MemoryBytes:   toSeries(current.memory),
+		})
+	}
+
+	// Sorted by name so the panel keeps a stable order between polls even as
+	// containers come and go; the id breaks ties between replicas sharing a name.
+	sort.Slice(containers, func(i, j int) bool {
+		if containers[i].ContainerName == containers[j].ContainerName {
+			return containers[i].ContainerID < containers[j].ContainerID
+		}
+		return containers[i].ContainerName < containers[j].ContainerName
+	})
+	return containers
 }
 
 // labelSetKey builds a stable, order-independent identity for a sample's

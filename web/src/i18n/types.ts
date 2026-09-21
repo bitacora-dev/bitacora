@@ -70,6 +70,17 @@ export interface Dictionary {
   cpuIsolated: string;
   cpuIsolatedCount: (count: number) => string;
   cpuIsolatedThread: (cpu: string) => string;
+  containersTitle: string;
+  containersSubtitle: string;
+  containersPending: string;
+  containersActiveCount: (count: number) => string;
+  containersCoresUsed: (cores: string) => string;
+  containersMemoryUsed: (memory: string) => string;
+  containersDetailsShow: string;
+  containersDetailsHide: string;
+  containersStopped: string;
+  containersCPUReading: (container: string, cores: string) => string;
+  containersMemoryReading: (container: string, memory: string) => string;
   motherboardTitle: string;
   motherboardLabel: string;
   motherboardVersionLabel: string;

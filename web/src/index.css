@@ -656,6 +656,163 @@ body {
   text-align: right;
 }
 
+.container-panel {
+  display: grid;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.container-panel .panel-title-row { margin-bottom: 0.85rem; }
+
+.container-panel-totals {
+  display: flex;
+  align-items: baseline;
+  justify-content: end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.container-panel-count {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.container-panel-totals strong {
+  color: var(--cyan);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.container-panel-totals .container-panel-memory { color: var(--gold); }
+
+.container-panel-note,
+.container-empty {
+  margin: 0.25rem 0 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.container-list {
+  display: grid;
+  /* Wide screens get two columns of rows rather than one ribbon with a void
+     between the name and its meters. */
+  grid-template-columns: repeat(auto-fit, minmax(min(34rem, 100%), 1fr));
+  /* Explicit: inside a scrolling, height-capped grid the implicit rows resolve
+     to min-content and a wrapped row's readings escape its own border. */
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 0.35rem;
+  max-height: 28.5rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0 0.2rem 0 0;
+  list-style: none;
+}
+
+.container-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  /* A row whose id wraps must not stand taller than its neighbours. */
+  min-height: 3rem;
+  padding: 0.5rem 0.65rem;
+}
+
+/* A container that stopped reporting is history, not an error: recede it,
+   keep it readable, and never let the meters imply a live reading. */
+.container-row--stopped { background: transparent; }
+.container-row--stopped .container-identity strong { color: var(--muted); }
+
+.container-identity {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
+  min-width: 0;
+}
+
+.container-identity strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.container-identity small {
+  color: var(--dim);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.container-stopped-badge {
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  padding: 0.05rem 0.4rem;
+  color: var(--muted);
+}
+
+.container-reading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.container-meter {
+  height: 0.42rem;
+  flex: 1 1 auto;
+  min-width: 1.5rem;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line-soft);
+}
+
+.container-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--cyan);
+}
+
+.container-meter--memory > span { background: var(--gold); }
+
+.container-reading strong {
+  flex: 0 0 auto;
+  min-width: 4.4rem;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.container-row--stopped .container-reading strong { color: var(--dim); }
+
+@media (max-width: 720px) {
+  .container-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .container-identity { grid-column: 1 / -1; }
+}
+
+@media (max-width: 560px) {
+  .container-panel .panel-title-row {
+    flex-direction: column;
+    align-items: start;
+    gap: 0.65rem;
+  }
+
+  .container-panel-totals { justify-content: start; }
+}
+
 /* The network chart is the third metric: give it a complete row instead of
    leaving an unfillable second grid cell beside it. */
 .metrics-grid > :last-child,

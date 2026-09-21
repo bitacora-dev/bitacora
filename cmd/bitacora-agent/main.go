@@ -37,6 +37,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/collector/ups"
 	"github.com/bitacora-dev/bitacora/internal/collector/users"
 	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
+	"github.com/bitacora-dev/bitacora/internal/pstore"
 	"github.com/bitacora-dev/bitacora/internal/resourcebudget"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/transport"
@@ -104,6 +105,7 @@ func main() {
 	}
 
 	sink := agentbuffer.NewSink(hostID, buffer, agentbuffer.WithLogger(logger.Printf))
+	consumePstoreAtStartup(sink, pstore.DefaultRoot, hostID, time.Now(), pstore.Consume, logger.Printf)
 	if cfg.hubURL != "" {
 		client := &transport.Client{BaseURL: cfg.hubURL, Token: cfg.token}
 		client.OnResponse = func(response *bitacorapb.IngestResponse) {
@@ -166,6 +168,21 @@ func main() {
 	}()
 
 	<-ctx.Done()
+}
+
+type pstoreConsumer func(root, hostID string, now time.Time) ([]schema.Event, []error)
+
+// consumePstoreAtStartup recovers kernel crash dumps before collectors start.
+// pstore errors are diagnostic failures, so they must not prevent the agent
+// from starting its normal telemetry collection.
+func consumePstoreAtStartup(sink collector.Sink, root, hostID string, now time.Time, consume pstoreConsumer, logf func(string, ...any)) {
+	events, errs := consume(root, hostID, now)
+	for _, event := range events {
+		sink.Event(event)
+	}
+	for _, err := range errs {
+		logf("consuming pstore: %v", err)
+	}
 }
 
 // runBlackbox owns the recorder for the lifetime of one agent process. It is

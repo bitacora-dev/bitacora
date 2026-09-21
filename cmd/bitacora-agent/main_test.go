@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,10 +13,107 @@ import (
 	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/blackbox"
+	"github.com/bitacora-dev/bitacora/internal/collector"
 	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
+	"github.com/bitacora-dev/bitacora/internal/pstore"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
+
+type recordingSink struct {
+	events []schema.Event
+}
+
+func (*recordingSink) Gauge(string, float64, collector.Labels) {}
+
+func (*recordingSink) Counter(string, float64, collector.Labels) {}
+
+func (s *recordingSink) Event(event collector.Event) {
+	s.events = append(s.events, event)
+}
+
+func (*recordingSink) LogLines(string, []collector.LogLine) {}
+
+func (*recordingSink) Inventory(collector.Inventory) {}
+
+func TestConsumePstoreAtStartupDeliversEvents(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"dmesg-efi-100": "first crash",
+		"dmesg-efi-200": "second crash",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing pstore entry: %v", err)
+		}
+	}
+
+	sink := &recordingSink{}
+	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	consumePstoreAtStartup(sink, root, "host-a", now, pstore.Consume, func(string, ...any) {
+		t.Fatal("unexpected pstore error")
+	})
+
+	if len(sink.events) != 2 {
+		t.Fatalf("events delivered = %d, want 2", len(sink.events))
+	}
+	for index, event := range sink.events {
+		if event.HostID != "host-a" || !event.TS.Equal(now) || event.Type != "kernel.crash_dump" {
+			t.Fatalf("event %d = %+v", index, event)
+		}
+	}
+	if sink.events[0].Attrs["pstore_file"] != "dmesg-efi-100" || sink.events[1].Attrs["pstore_file"] != "dmesg-efi-200" {
+		t.Fatalf("events were not delivered in pstore order: %+v", sink.events)
+	}
+	for _, name := range []string{"dmesg-efi-100", "dmesg-efi-200"} {
+		if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("pstore entry %q was not removed after consumption: %v", name, err)
+		}
+	}
+}
+
+func TestConsumePstoreAtStartupLogsErrorsWithoutAborting(t *testing.T) {
+	var logs []string
+	root := t.TempDir()
+	consumed := false
+	consumePstoreAtStartup(&recordingSink{}, root, "host-a", time.Now(), func(gotRoot, hostID string, now time.Time) ([]schema.Event, []error) {
+		if gotRoot != root || hostID != "host-a" || now.IsZero() {
+			t.Fatalf("unexpected pstore consume arguments: root=%q hostID=%q now=%v", gotRoot, hostID, now)
+		}
+		consumed = true
+		return nil, []error{errors.New("first failure"), errors.New("second failure")}
+	}, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	if !consumed {
+		t.Fatal("pstore was not consumed")
+	}
+	if !reflect.DeepEqual(logs, []string{"consuming pstore: first failure", "consuming pstore: second failure"}) {
+		t.Fatalf("logs = %v, want every pstore error", logs)
+	}
+}
+
+func TestConsumePstoreAtStartupAllowsCleanRoot(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		root string
+	}{
+		{name: "empty", root: t.TempDir()},
+		{name: "missing", root: filepath.Join(t.TempDir(), "missing")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sink := &recordingSink{}
+			var logs []string
+			consumePstoreAtStartup(sink, test.root, "host-a", time.Now(), pstore.Consume, func(format string, args ...any) {
+				logs = append(logs, fmt.Sprintf(format, args...))
+			})
+
+			if len(sink.events) != 0 || len(logs) != 0 {
+				t.Fatalf("clean root produced events=%v logs=%v", sink.events, logs)
+			}
+		})
+	}
+}
 
 func TestPackageActionRequestHasOnlyFixedOperations(t *testing.T) {
 	tests := []struct {

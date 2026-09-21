@@ -11,6 +11,7 @@ import PackageUpdatePanel from "./components/PackageUpdatePanel";
 import JobsList from "./components/JobsList";
 import CPUCorePanel from "./components/CPUCorePanel";
 import MotherboardPanel from "./components/MotherboardPanel";
+import PublicSurfacePanel from "./components/PublicSurfacePanel";
 import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
 import LoginPanel from "./components/LoginPanel";
@@ -551,6 +552,13 @@ export default function App() {
               { name: t.networkReceiveLabel, points: summary.network_rx_bytes_per_second, color: "#38bdf8", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
               { name: t.networkTransmitLabel, points: summary.network_tx_bytes_per_second, color: "#4ade80", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
             ]} formatAxisValue={bytesPerSecond} />
+          </section>
+
+          {/* The host is reachable from the internet, so "am I being
+              attacked right now" belongs beside the other window signals,
+              not buried under inventory. */}
+          <section className="public-surface-grid" aria-label={t.publicSurfaceSectionLabel}>
+            <PublicSurfacePanel surface={summary.public_surface} windowMinutes={windowMinutes} />
           </section>
 
           <section className="lower-grid">

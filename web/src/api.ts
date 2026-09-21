@@ -27,6 +27,26 @@ export interface TemperatureSeries {
   points: SeriesPoint[];
 }
 
+// PublicSurface mirrors hubapi.PublicSurface: the signals the public_surface
+// collector reports on internet-facing hosts.
+//
+// Read every field as "a series that may be empty", never as a number that
+// may be zero. The collector only runs where the operator declared the host
+// publicly exposed, so an empty series is the ordinary state, and drawing it
+// as 0 would claim nobody is knocking — a reassurance nothing here supports.
+export interface PublicSurface {
+  // Cumulative failed-login count in the current auth log. It drops back on
+  // logrotate, so it is context rather than an answer.
+  ssh_failed_logins_total: SeriesPoint[];
+  // The same counter differentiated by the hub: how fast attempts arrive.
+  // This is what answers "am I being attacked right now".
+  ssh_failed_logins_per_minute: SeriesPoint[];
+  fail2ban_jails_total: SeriesPoint[];
+  fail2ban_banned_total: SeriesPoint[];
+  firewall_rules_total: SeriesPoint[];
+  ovh_traffic_used_ratio: SeriesPoint[];
+}
+
 export interface EventSubject {
   kind: string;
   name: string;
@@ -82,6 +102,7 @@ export interface Summary {
   memory_swap_free_bytes: SeriesPoint[];
   network_rx_bytes_per_second: SeriesPoint[];
   network_tx_bytes_per_second: SeriesPoint[];
+  public_surface: PublicSurface;
   events: BitacoraEvent[];
   jobs: Job[];
 }

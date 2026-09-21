@@ -304,7 +304,9 @@ body {
 .lower-grid,
 .inventory-grid,
 .processor-layout,
-.public-surface-grid {
+.public-surface-grid,
+.access-grid,
+.power-strip {
   display: grid;
   gap: 1rem;
 }
@@ -737,6 +739,284 @@ body {
   cursor: crosshair;
 }
 
+/* Power sits in one fixed slot above the dashboard and changes intensity in
+   place. On mains it is a single quiet line of chrome; on battery it becomes
+   the loudest thing on the page without having moved, so the eye already
+   knows where to look. A host with no UPS renders nothing here at all. */
+.power-panel {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0.6rem 1rem;
+}
+
+.power-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.85rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.power-line strong {
+  color: var(--text);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+}
+
+.power-line .power-unit {
+  color: var(--dim);
+}
+
+.power-panel--alarm {
+  display: grid;
+  gap: 0.85rem;
+  border-color: var(--red);
+  background: var(--panel-strong);
+  box-shadow: inset 0.3rem 0 0 var(--red);
+  padding: 1rem 1.25rem;
+}
+
+.power-alarm-heading h2 {
+  margin: 0;
+  color: var(--red);
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+}
+
+.power-alarm-heading p {
+  margin: 0.25rem 0 0;
+  max-width: 60ch;
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.power-alarm-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem 2rem;
+}
+
+.power-runtime {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+}
+
+.power-runtime strong {
+  color: var(--text);
+  font-size: 2.1rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.power-runtime span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.power-runtime--unknown {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.power-charge {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 12rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.power-context {
+  margin: 0;
+  color: var(--dim);
+  font-size: 0.78rem;
+}
+
+/* Remote access answers "can I still get in?", so it shares the window-signal
+   width with the public surface rather than the two-column inventory grid. */
+.access-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tunnels-panel,
+.shares-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.inventory-badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.tunnel-list,
+.share-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tunnel-row,
+.share-row {
+  display: grid;
+  gap: 0.4rem;
+  border-top: 1px solid var(--line-soft);
+  padding: 0.75rem 0;
+}
+
+.tunnel-row:first-child,
+.share-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.tunnel-row-heading,
+.share-row-heading,
+.share-account-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.6rem;
+  min-width: 0;
+}
+
+.tunnel-row-heading strong,
+.share-row-heading strong,
+.share-account-heading strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+/* State is never carried by colour alone: the word is the answer and the
+   colour only reinforces it. */
+.tunnel-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.tunnel-state::before {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: currentcolor;
+}
+
+.tunnel-state--active { color: var(--green); }
+.tunnel-state--inactive { color: var(--muted); }
+.tunnel-state--unreported { color: var(--dim); }
+
+.tunnel-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 15rem));
+  justify-content: start;
+  gap: 0.35rem 1.5rem;
+  margin: 0;
+}
+
+.tunnel-details dt {
+  color: var(--dim);
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+}
+
+.tunnel-details dd {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+/* Shares span the inventory grid: one row carries a name, a path, a size and
+   an access summary, and squeezing that into half the width turns every row
+   into four wrapped lines. */
+.shares-panel {
+  grid-column: 1 / -1;
+}
+
+.share-mode {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.share-size {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.share-size strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.share-size-pending { color: var(--dim); }
+
+.share-path {
+  margin: 0;
+  color: var(--dim);
+  font: 0.76rem/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.share-access {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.share-accounts {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 0.75rem;
+}
+
+.share-accounts summary {
+  cursor: pointer;
+  color: var(--cyan);
+  font-size: 0.82rem;
+}
+
+.share-accounts ul {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-accounts li p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+
 .lower-grid {
   grid-template-columns: minmax(0, 1.4fr) minmax(22rem, 0.6fr);
   align-items: start;
@@ -1009,6 +1289,10 @@ body {
 .usage-bar { height: 0.42rem; overflow: hidden; border-radius: 999px; background: var(--line-soft); }
 .usage-bar span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); }
 .usage-bar--nearly-full span { background: var(--gold); }
+/* Declared after .usage-bar span, not beside the power rules above: at equal
+   specificity the later rule wins, and a battery drawn in the cyan "all is
+   well" colour is the wrong signal during a power cut. */
+.usage-bar--battery span { background: var(--red); }
 
 .disk-state,
 .disk-usage-unavailable { margin: 0; font-size: 0.75rem; }
@@ -1321,6 +1605,25 @@ body {
   padding: 1rem 0;
 }
 
+/* From laptop width up, a share row reads across instead of down: the name,
+   the size, and who can reach it line up in columns so several shares can be
+   compared at a glance. Below this the same row stacks. */
+@media (width >= 980px) {
+  .share-row {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 0.9fr);
+    grid-template-areas:
+      "name size access"
+      "path path access";
+    align-items: baseline;
+    column-gap: 1.5rem;
+  }
+
+  .share-row-heading { grid-area: name; }
+  .share-size { grid-area: size; }
+  .share-path { grid-area: path; }
+  .share-access { grid-area: access; }
+}
+
 @media (width >= 1920px) {
   .dashboard-shell {
     grid-template-columns: minmax(0, 1fr);
@@ -1366,7 +1669,8 @@ body {
   .lower-grid,
   .inventory-grid,
   .processor-layout,
-  .public-surface-grid {
+  .public-surface-grid,
+  .access-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1429,6 +1733,12 @@ body {
   }
 
   .disk-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .power-runtime strong { font-size: 1.6rem; }
+
+  .power-charge { min-width: 0; }
+
+  .tunnel-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (orientation: portrait) and (min-width: 900px) and (min-height: 1500px) {

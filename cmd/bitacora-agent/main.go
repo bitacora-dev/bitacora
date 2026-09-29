@@ -88,7 +88,8 @@ func main() {
 	manifest := capabilities.Detect(detectCfg, hostID, hostname, agentVersion, time.Now())
 	reportManifest(ctx, manifest, cfg, logger)
 
-	reg := buildRegistry(allowlist)
+	rt := collector.Runtime{}
+	reg := buildRegistry(rt.RequestCollection, allowlist)
 
 	buffer, err := agentbuffer.Open(cfg.spoolDir)
 	if err != nil {
@@ -105,6 +106,7 @@ func main() {
 	}
 
 	sink := agentbuffer.NewSink(hostID, buffer, agentbuffer.WithLogger(logger.Printf))
+	rt.Sink = sink
 	consumePstoreAtStartup(sink, pstore.DefaultRoot, hostID, time.Now(), pstore.Consume, logger.Printf)
 	if cfg.hubURL != "" {
 		client := &transport.Client{BaseURL: cfg.hubURL, Token: cfg.token}
@@ -142,7 +144,6 @@ func main() {
 	}
 	collector.EmitDisabledEvents(sink, hostID, disabled, time.Now())
 
-	rt := collector.Runtime{Sink: sink}
 	rt.Start(ctx, regs)
 	defer rt.Close()
 	go func() {
@@ -247,7 +248,7 @@ func actionConfigurationDisabledEvent(hostID, path string, loadErr error, now ti
 	}, true
 }
 
-func buildRegistry(actionLists ...agentactions.Allowlist) collector.Registry {
+func buildRegistry(requestCollection func(string), actionLists ...agentactions.Allowlist) collector.Registry {
 	reg := collector.Registry{}
 	actions := agentactions.Allowlist{}
 	if len(actionLists) > 0 {
@@ -286,7 +287,7 @@ func buildRegistry(actionLists ...agentactions.Allowlist) collector.Registry {
 	reg.Register(pkgupdates.New(pkgupdates.ActionAvailability{RefreshPackageCache: actions.RefreshPackageCache, ApplyPendingPackageUpdates: actions.ApplyPendingPackageUpdates, PackageCacheMaxAgeSeconds: actions.PackageCacheMaxAgeSeconds}), 6*time.Hour, 2*time.Minute)
 	// The privileged helper writes terminal results here; this collector only
 	// reads them and turns them into the job update and output log lines.
-	reg.Register(packageactions.New(), 5*time.Second, time.Second)
+	reg.Register(packageactions.New(requestCollection), 5*time.Second, time.Second)
 	// The operations outbox is producer-owned and append-only; importing it is
 	// cheap and gives scheduled backups a real end-to-end path to the hub.
 	reg.Register(operations.New(), 15*time.Second, 5*time.Second)

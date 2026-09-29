@@ -1,6 +1,8 @@
 import { hasInstant, type BitacoraEvent } from "../api";
+import { groupByDay } from "../dayGroups";
 import { eventLogTarget, logEntryID, type LogRefTarget } from "../logrefs";
 import { useTranslation } from "../i18n";
+import RowInstant, { DayHeading } from "./RowInstant";
 
 const SEVERITY_COLOR: Record<BitacoraEvent["severity"], string> = {
   debug: "text-neutral-500",
@@ -84,7 +86,7 @@ export function eventDetails(event: BitacoraEvent): EventDetail[] {
 }
 
 export default function EventsList({ events, emptyHeading, emptyBody, onShowLogs }: Props) {
-  const { t, intlTag } = useTranslation();
+  const { t } = useTranslation();
 
   if (events.length === 0) {
     return (
@@ -95,49 +97,57 @@ export default function EventsList({ events, emptyHeading, emptyBody, onShowLogs
     );
   }
 
-  // Most recent first.
+  // Most recent first, then split into one run per calendar day so the date
+  // is stated once above each run instead of repeated on every row.
   const sorted = [...events].sort((a, b) => b.ts.localeCompare(a.ts));
 
   return (
-    <ul className="event-list">
-      {sorted.map((e) => {
-        const details = eventDetails(e);
-        const summary = details.slice(0, 2);
-        const logTarget = onShowLogs ? eventLogTarget(e) : null;
-        return (
-          <li key={e.id}>
-            <div>
-              <span>{new Date(e.ts).toLocaleTimeString(intlTag)}</span>
-              <span className={SEVERITY_COLOR[e.severity]}>{t.severity[e.severity]}</span>
-              <span>{e.type}</span>
-            </div>
-            <p>{e.title}</p>
-            {logTarget && onShowLogs && (
-              <div className="event-actions">
-                <button type="button" className="link-button" aria-label={t.eventLogsAria(e.title)} onClick={() => onShowLogs(e, logTarget)}>
-                  {t.eventLogsButton}
-                </button>
-              </div>
-            )}
-            {details.length > 0 && (
-              <details className="event-details">
-                <summary>
-                  {t.eventDetails}
-                  <span>{summary.map(({ key, value }) => `${key}: ${value}`).join(" · ")}</span>
-                </summary>
-                <dl>
-                  {details.map(({ key, value }, index) => (
-                    <div key={`${key}-${index}`}>
-                      <dt>{key}</dt>
-                      <dd>{value}</dd>
+    <div className="event-days">
+      {groupByDay(sorted, (e) => e.ts).map((day) => (
+        <section className="event-day" key={day.key}>
+          <DayHeading dayKey={day.key} />
+          <ul className="event-list">
+            {day.items.map((e) => {
+              const details = eventDetails(e);
+              const summary = details.slice(0, 2);
+              const logTarget = onShowLogs ? eventLogTarget(e) : null;
+              return (
+                <li key={e.id}>
+                  <div>
+                    <RowInstant instant={e.ts} />
+                    <span className={SEVERITY_COLOR[e.severity]}>{t.severity[e.severity]}</span>
+                    <span>{e.type}</span>
+                  </div>
+                  <p>{e.title}</p>
+                  {logTarget && onShowLogs && (
+                    <div className="event-actions">
+                      <button type="button" className="link-button" aria-label={t.eventLogsAria(e.title)} onClick={() => onShowLogs(e, logTarget)}>
+                        {t.eventLogsButton}
+                      </button>
                     </div>
-                  ))}
-                </dl>
-              </details>
-            )}
-          </li>
-        );
-      })}
-    </ul>
+                  )}
+                  {details.length > 0 && (
+                    <details className="event-details">
+                      <summary>
+                        {t.eventDetails}
+                        <span>{summary.map(({ key, value }) => `${key}: ${value}`).join(" · ")}</span>
+                      </summary>
+                      <dl>
+                        {details.map(({ key, value }, index) => (
+                          <div key={`${key}-${index}`}>
+                            <dt>{key}</dt>
+                            <dd>{value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </details>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+    </div>
   );
 }

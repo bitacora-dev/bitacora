@@ -633,14 +633,14 @@ export default function App() {
           <section className="lower-grid">
             <article className="control-panel events-panel">
               <div className="panel-title-row">
-                <h2>{t.eventsHeading(windowMinutes)}</h2>
+                <h2>{t.eventsHeading}</h2>
                 <span>{summary.events.length}</span>
               </div>
               <EventsList events={summary.events} onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
             </article>
 
             <article className="control-panel events-panel">
-              <div className="panel-title-row"><h2>{t.jobsHeading(windowMinutes)}</h2><span>{summary.jobs.length}</span></div>
+              <div className="panel-title-row"><h2>{t.jobsHeading}</h2><span>{summary.jobs.length}</span></div>
               <JobsList jobs={summary.jobs} onShowLogs={(job, target) => showReferencedLogs(job.job_name, target)} />
             </article>
 

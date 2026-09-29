@@ -5,6 +5,7 @@ import (
 	"errors"
 	goruntime "runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -252,5 +253,38 @@ func TestRuntime_CloseLeavesNoGoroutineLeak(t *testing.T) {
 			t.Fatalf("goroutine leak after Close(): before=%d after=%d", before, after)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRuntime_RequestCollectionCoalescesWhileCollectionRuns(t *testing.T) {
+	clock := &fakeClock{}
+	started := make(chan struct{}, 1)
+	finish := make(chan struct{})
+	completed := make(chan struct{}, 1)
+	var calls atomic.Int32
+	c := &scriptedCollector{
+		name: "pkgupdates",
+		collect: func(context.Context) error {
+			calls.Add(1)
+			started <- struct{}{}
+			<-finish
+			completed <- struct{}{}
+			return nil
+		},
+	}
+
+	rt := &Runtime{Clock: clock, Sink: noopSink{}}
+	rt.Start(context.Background(), []Registration{{Collector: c, Interval: time.Hour, Timeout: time.Minute}})
+	defer rt.Close()
+
+	rt.RequestCollection("pkgupdates")
+	<-started
+	rt.RequestCollection("pkgupdates")
+	close(finish)
+	<-completed
+
+	time.Sleep(20 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("collection calls = %d, want 1 after coalesced request", got)
 	}
 }

@@ -14,11 +14,21 @@ import (
 )
 
 type Collector struct {
-	ResultDir string
-	hostID    string
+	ResultDir         string
+	hostID            string
+	requestCollection func(string)
 }
 
-func New() *Collector { return &Collector{ResultDir: packageexecutor.DefaultResultDir} }
+// New creates the collector that imports completed package actions. The
+// callback requests collection through the runtime without coupling this
+// package to the scheduler implementation.
+func New(requestCollection ...func(string)) *Collector {
+	c := &Collector{ResultDir: packageexecutor.DefaultResultDir}
+	if len(requestCollection) > 0 {
+		c.requestCollection = requestCollection[0]
+	}
+	return c
+}
 
 func (c *Collector) Name() string                     { return "package-actions" }
 func (c *Collector) Requires() []collector.Capability { return nil }
@@ -40,6 +50,7 @@ func (c *Collector) Collect(_ context.Context, sink collector.Sink) error {
 	if err != nil {
 		return err
 	}
+	refreshPackageInventory := false
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -70,11 +81,22 @@ func (c *Collector) Collect(_ context.Context, sink collector.Sink) error {
 		if result.Output != "" {
 			sink.LogLines("package-action", outputLines(result, c.hostID))
 		}
+		refreshPackageInventory = refreshPackageInventory || shouldRefreshPackageInventory(result)
 		if err := os.Remove(path); err != nil {
 			return err
 		}
 	}
+	if refreshPackageInventory && c.requestCollection != nil {
+		c.requestCollection("pkgupdates")
+	}
 	return nil
+}
+
+// shouldRefreshPackageInventory follows only the terminal success of the
+// human-confirmed update operation. It schedules a read-only collection; it
+// never creates, modifies, or derives another action.
+func shouldRefreshPackageInventory(result packageexecutor.Result) bool {
+	return result.Operation == packageexecutor.ApplyPendingPackageUpdates && result.Status == packageexecutor.StatusSuccess
 }
 
 func validResult(result packageexecutor.Result) bool {

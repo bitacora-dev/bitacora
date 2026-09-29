@@ -57,3 +57,77 @@ func TestCollectorEmitsTerminalJobAndOutput(t *testing.T) {
 		t.Fatalf("logs = %+v", sink.logs)
 	}
 }
+
+func TestCollectorRequestsPackageInventoryOnlyAfterSuccessfulApply(t *testing.T) {
+	tests := []struct {
+		name      string
+		results   []packageexecutor.Result
+		wantCalls int
+	}{
+		{
+			name: "successful apply requests inventory collection",
+			results: []packageexecutor.Result{{
+				Request:   packageexecutor.Request{ID: "apply-success", HostID: "host-a", Operation: packageexecutor.ApplyPendingPackageUpdates},
+				StartedAt: time.Unix(100, 0), FinishedAt: time.Unix(101, 0), Status: packageexecutor.StatusSuccess,
+			}},
+			wantCalls: 1,
+		},
+		{
+			name: "failed apply does not request inventory collection",
+			results: []packageexecutor.Result{{
+				Request:   packageexecutor.Request{ID: "apply-failed", HostID: "host-a", Operation: packageexecutor.ApplyPendingPackageUpdates},
+				StartedAt: time.Unix(100, 0), FinishedAt: time.Unix(101, 0), Status: packageexecutor.StatusFailed,
+			}},
+			wantCalls: 0,
+		},
+		{
+			name: "cache refresh does not request inventory collection",
+			results: []packageexecutor.Result{{
+				Request:   packageexecutor.Request{ID: "cache-refresh", HostID: "host-a", Operation: packageexecutor.RefreshPackageCache},
+				StartedAt: time.Unix(100, 0), FinishedAt: time.Unix(101, 0), Status: packageexecutor.StatusSuccess,
+			}},
+			wantCalls: 0,
+		},
+		{
+			name: "two successful applies request one collection",
+			results: []packageexecutor.Result{
+				{Request: packageexecutor.Request{ID: "apply-one", HostID: "host-a", Operation: packageexecutor.ApplyPendingPackageUpdates}, StartedAt: time.Unix(100, 0), FinishedAt: time.Unix(101, 0), Status: packageexecutor.StatusSuccess},
+				{Request: packageexecutor.Request{ID: "apply-two", HostID: "host-a", Operation: packageexecutor.ApplyPendingPackageUpdates}, StartedAt: time.Unix(102, 0), FinishedAt: time.Unix(103, 0), Status: packageexecutor.StatusSuccess},
+			},
+			wantCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, result := range tt.results {
+				data, err := json.Marshal(result)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, result.ID+".json"), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			calls := 0
+			c := New(func(name string) {
+				if name != "pkgupdates" {
+					t.Errorf("requested collector %q, want pkgupdates", name)
+				}
+				calls++
+			})
+			c.ResultDir = dir
+			if err := c.Init(context.Background(), nil, &collector.HostInfo{ID: "host-a"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Collect(context.Background(), &recordingSink{}); err != nil {
+				t.Fatal(err)
+			}
+			if calls != tt.wantCalls {
+				t.Fatalf("collection requests = %d, want %d", calls, tt.wantCalls)
+			}
+		})
+	}
+}

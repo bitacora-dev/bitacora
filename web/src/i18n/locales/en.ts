@@ -167,6 +167,10 @@ export const en: Dictionary = {
   disksHeading: "Disks",
   updatesHeading: "Pending updates",
   inventoryReportedAt: (time) => `Reported: ${time}`,
+  inventoryAge: (age, stale) => stale
+    ? `Collected ${age}: this inventory is overdue for a refresh.`
+    : `Collected ${age}.`,
+  inventoryReportedAria: (time) => `Inventory collected on ${time}`,
   inventoryPending: "This inventory has not been reported by the agent yet.",
   disksEmpty: "No disks have been reported for this host.",
   updatesEmpty: "No pending updates have been reported.",

@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { confirmAction, fetchJob, issueActionToken, type ActionToken, type Inventory, type JobOutputLine, type PackageOperation } from "../api";
 import { useTranslation } from "../i18n";
+import { ageSeconds, formatAge } from "../relativeTime";
 
 const POLL_INTERVAL_MS = 3_000;
 const DEFAULT_MAX_CACHE_AGE_SECONDS = 24 * 60 * 60;
+
+// pkgupdates runs every 6 hours (cmd/bitacora-agent/main.go), so an inventory
+// that is a few hours old is normal, not late. The threshold sits half a cycle
+// past the cadence: at exactly 6 hours the next cycle simply has not run yet,
+// and calling that stale would paint every healthy host gold.
+const PACKAGE_INVENTORY_INTERVAL_SECONDS = 6 * 60 * 60;
+export const INVENTORY_STALE_AFTER_SECONDS = PACKAGE_INVENTORY_INTERVAL_SECONDS * 1.5;
 
 type Phase = "idle" | "confirming" | "pending" | "running" | "failed" | "refreshed" | "refresh_still_stale" | "complete";
 
@@ -22,6 +30,17 @@ function cacheAge(inventory: Inventory | null) {
   const value = inventory?.items.find((item) => item.attrs.cache_age_seconds !== undefined)?.attrs.cache_age_seconds;
   const age = Number(value);
   return Number.isFinite(age) && age >= 0 ? age : null;
+}
+
+// The panel used to print the report instant alone, in small muted type:
+// "Reportado: 29/9/2026, 10:14:49". That is literal and still says nothing —
+// an operator read a four-hour-old package list as the current one, because
+// nothing on screen subtracted the two numbers for them. The age is the fact
+// that decides whether the list can be trusted, so it is the fact that is
+// shown; the exact instant stays one hover or one screen reader away.
+export function inventoryIsStale(reportedAt: string | undefined | null, now = Date.now()): boolean {
+  const age = ageSeconds(reportedAt, now);
+  return age !== null && age > INVENTORY_STALE_AFTER_SECONDS;
 }
 
 // A successful apt update can still leave one active source stale (for
@@ -126,10 +145,16 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
   };
 
   const { showApply, showRefresh } = packageActionVisibility(canRefresh, canApply, stale, phase);
+  const reportedAt = inventory ? new Date(inventory.reported_at) : null;
+  const reportedInstant = reportedAt && Number.isFinite(reportedAt.getTime()) ? reportedAt.toLocaleString(intlTag) : "";
+  const reportedAge = inventory ? formatAge(inventory.reported_at, intlTag) : null;
+  const inventoryStale = inventoryIsStale(inventory?.reported_at);
 
   return (
     <article className="control-panel package-update-panel">
-      <div className="panel-title-row"><div><h2>{t.updatesHeading}</h2>{inventory && <p className="inventory-reported">{t.inventoryReportedAt(new Date(inventory.reported_at).toLocaleString(intlTag))}</p>}</div><span className="inventory-count">{packageItems.length}</span></div>
+      <div className="panel-title-row"><div><h2>{t.updatesHeading}</h2>{inventory && <p className={inventoryStale ? "inventory-reported inventory-reported--stale" : "inventory-reported"}>{reportedAge === null
+        ? t.inventoryReportedAt(reportedInstant)
+        : <time dateTime={reportedAt?.toISOString()} title={reportedInstant} aria-label={t.inventoryReportedAria(reportedInstant)}>{t.inventoryAge(reportedAge, inventoryStale)}</time>}</p>}</div><span className="inventory-count">{packageItems.length}</span></div>
       {!inventory ? <p className="inventory-empty">{t.inventoryPending}</p> : packageItems.length === 0 ? <p className="inventory-empty">{t.updatesEmpty}</p> : <ul className="inventory-list">{packageItems.map((item) => <li key={item.id}><strong>{item.name}</strong><dl>{Object.entries(item.attrs).filter(([key]) => key !== "cache_age_seconds").map(([key, value]) => <div key={key}><dt>{t.inventoryAttribute(key)}</dt><dd>{value}</dd></div>)}</dl></li>)}</ul>}
       {age !== null && <p className={stale ? "cache-age cache-age--stale" : "cache-age"}>{t.cacheAge(new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 }).format(age / 86400), stale)}</p>}
       <div className="package-action-controls">

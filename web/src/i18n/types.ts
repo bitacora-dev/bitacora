@@ -162,6 +162,8 @@ export interface Dictionary {
   disksHeading: string;
   updatesHeading: string;
   inventoryReportedAt: (time: string) => string;
+  inventoryAge: (age: string, stale: boolean) => string;
+  inventoryReportedAria: (time: string) => string;
   inventoryPending: string;
   disksEmpty: string;
   updatesEmpty: string;

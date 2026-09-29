@@ -167,6 +167,10 @@ export const es: Dictionary = {
   disksHeading: "Discos",
   updatesHeading: "Actualizaciones pendientes",
   inventoryReportedAt: (time) => `Reportado: ${time}`,
+  inventoryAge: (age, stale) => stale
+    ? `Recogido ${age}: este inventario ya debería haberse renovado.`
+    : `Recogido ${age}.`,
+  inventoryReportedAria: (time) => `Inventario recogido el ${time}`,
   inventoryPending: "Este inventario todavía no ha sido reportado por el agente.",
   disksEmpty: "No hay discos reportados para este host.",
   updatesEmpty: "No hay actualizaciones pendientes reportadas.",

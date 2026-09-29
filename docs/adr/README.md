@@ -46,6 +46,7 @@ consecuencias, incluidas las malas.
 | [0023](0023-autenticacion-local-y-alcance-por-servidor.md) | Autenticación local limitada y alcance por servidor | Aceptado |
 | [0024](0024-evidencia-presupuesto-recursos-agente.md) | Evidencia reproducible del presupuesto de recursos del agente | Aceptado |
 | [0025](0025-instalacion-y-recuperacion-local-de-credencial.md) | Instalación y recuperación local de la credencial | Propuesto |
+| [0026](0026-canal-de-ordenes-de-recoleccion.md) | Canal de órdenes de recolección bajo demanda | Propuesto |
 
 ## Estado del proyecto
 

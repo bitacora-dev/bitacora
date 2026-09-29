@@ -133,6 +133,25 @@ default, not a secret: the disclosure is one click and its own copy says what
 is inside. Revisit the default when ADR-0023's per-server scope lands, not by
 loosening it silently.
 
+Events and operations are counted, not ranged. The metric charts are defined
+by their window and keep `t.windowLabel`; the events and operations panels ask
+the hub for the newest N rows with no lower time bound, because a panel that
+goes blank whenever the host has been quiet for fifteen minutes says "nothing
+is known", not "nothing happened". `window_secs` still means exactly what it
+meant, and still only governs the series.
+
+Because those rows can now be any age, every row carries its date as well as
+its clock time — but not on the row. Rows are grouped into consecutive runs of
+one calendar day and the date is stated once, in an `.event-day-heading` above
+the run: "Today", "Yesterday", or weekday/day/month, with the year only when it
+is not the current one. Repeating `29/9/2026` on five consecutive lines is
+noise the eye has to step over on each one; omitting it entirely makes an event
+from last March indistinguishable from one a minute old. The row's own `<time>`
+still carries the full instant in `title` and in its accessible name, so the
+unabbreviated answer is one hover or one screen reader away — which is the
+failure this rule exists for: two panels reading `10:14:49` and `14:14:50`
+looked adjacent and were four hours apart.
+
 Panels should be dense enough for repeated operations. Avoid decorative cards,
 oversized empty spacing, and hero-style composition inside the app shell. The
 header carries the current time window and update time as discrete metadata;
@@ -283,6 +302,7 @@ The current baseline comes from [`index.css`](src/index.css),
 - [ ] Absent attributes are not parsed into zeros, and absent booleans are not read as `false`.
 - [ ] Optional inventory whose subject may not exist on a host renders nothing rather than an empty panel.
 - [ ] Figures computed on a slow cadence are shown with the age of the calculation.
+- [ ] A timestamp that can be older than the current window states its date, once per day group rather than once per row.
 - [ ] Every user-facing string, including library-driven labels, comes from `web/src/i18n/`.
 - [ ] uPlot charts hide the native legend and expose a dictionary-backed current/inspected readout.
 - [ ] Focus, contrast, labels, alt text, and hit areas remain keyboard and touch usable.

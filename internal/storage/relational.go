@@ -31,6 +31,17 @@ type Relational interface {
 	// ListEvents returns every event in [from, to] for hostID, or for every
 	// host if hostID is empty, ordered by ts ascending.
 	ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error)
+
+	// ListLatestEvents returns at most limit events for hostID, or for every
+	// host if hostID is empty, newest first and with no lower time bound.
+	//
+	// This is deliberately not ListEvents with a very old `from`. The
+	// dashboard asks "what happened last on this host", not "what happened
+	// in the last N minutes": a host that has been quiet all morning must
+	// still get rows instead of an empty panel, and the answer must not
+	// grow with how long the hub has been running.
+	ListLatestEvents(ctx context.Context, hostID string, limit int) ([]schema.Event, error)
+
 	// InsertJob remains for producers that only report historical terminal jobs.
 	InsertJob(ctx context.Context, job schema.Job) error
 	CreateJob(ctx context.Context, job schema.Job) error
@@ -39,6 +50,14 @@ type Relational interface {
 	AppendJobOutput(ctx context.Context, hostID string, line schema.JobOutputLine) error
 	ListJobOutput(ctx context.Context, hostID, jobID string, afterSequence int64, limit int) ([]schema.JobOutputLine, int64, error)
 	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
+
+	// ListLatestJobs returns at most limit jobs for hostID, or for every
+	// host if hostID is empty, with no lower time bound. They are ordered
+	// by the instant the operation last moved: finished_at once it is
+	// terminal, started_at while it is still running. ListJobs answers
+	// "which operations finished in this range" and therefore cannot see a
+	// backup that is running right now; the recent-operations panel must.
+	ListLatestJobs(ctx context.Context, hostID string, limit int) ([]schema.Job, error)
 
 	// ListEventPage returns one newest-first, filtered page plus the total
 	// number of matching events. The limit and offset are applied by the

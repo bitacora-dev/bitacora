@@ -175,6 +175,28 @@ func (s *PostgresStore) ListEvents(ctx context.Context, from, to time.Time, host
 	return scanEvents(rows)
 }
 
+// ListLatestEvents implements Relational. PostgreSQL keeps every event in
+// one table, so "the newest limit rows, whenever they happened" is the
+// query it already has an ordering for.
+func (s *PostgresStore) ListLatestEvents(ctx context.Context, hostID string, limit int) ([]schema.Event, error) {
+	if limit <= 0 {
+		return []schema.Event{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema
+		FROM events
+		WHERE ($1 = '' OR host_id = $1)
+		ORDER BY ts DESC, id DESC
+		LIMIT $2
+	`, hostID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying latest events: %w", err)
+	}
+	defer rows.Close()
+
+	return scanEvents(rows)
+}
+
 // ListEventPage implements Relational with database-side filtering and
 // pagination for the event-history API.
 func (s *PostgresStore) ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error) {

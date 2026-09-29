@@ -3,6 +3,7 @@ package hubapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -127,6 +128,19 @@ func (f *fakeEvents) ListEvents(ctx context.Context, from, to time.Time, hostID 
 		}
 	}
 	return out, nil
+}
+
+// ListLatestEvents mirrors the storage contract: newest first, bounded by
+// limit, and with no lower time bound at all.
+func (f *fakeEvents) ListLatestEvents(ctx context.Context, hostID string, limit int) ([]schema.Event, error) {
+	var matches []schema.Event
+	for _, e := range f.events {
+		if hostID == "" || e.HostID == hostID {
+			matches = append(matches, e)
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].TS.After(matches[j].TS) })
+	return matches[:min(limit, len(matches))], nil
 }
 
 func (f *fakeEvents) ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error) {
@@ -487,6 +501,117 @@ func TestHandleSummary_DerivesMemoryUsedBytesFromTotalAndAvailable(t *testing.T)
 
 	if len(got.MemoryUsedBytes) != 1 || got.MemoryUsedBytes[0].Value != 5*1024*1024*1024 {
 		t.Fatalf("expected 5 GiB memory used derived from latest total, got %+v", got.MemoryUsedBytes)
+	}
+}
+
+// A fake job store with the same shape as storage: ListJobs is bounded by
+// the range it is given, ListLatestJobs is not.
+type fakeJobs struct {
+	jobs []schema.Job
+}
+
+func (f *fakeJobs) ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error) {
+	var out []schema.Job
+	for _, j := range f.jobs {
+		if j.HostID == hostID && !j.FinishedAt.Before(from) && !j.FinishedAt.After(to) {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeJobs) ListLatestJobs(ctx context.Context, hostID string, limit int) ([]schema.Job, error) {
+	var out []schema.Job
+	for _, j := range f.jobs {
+		if hostID == "" || j.HostID == hostID {
+			out = append(out, j)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FinishedAt.After(out[j].FinishedAt) })
+	return out[:min(limit, len(out))], nil
+}
+
+// The panels used to go blank whenever the host had been quiet for fifteen
+// minutes, which reads as "nothing is known" rather than "nothing happened".
+// Events and jobs are now counted, not ranged.
+func TestHandleSummary_EventsAndJobsIgnoreTheMetricWindow(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-72 * time.Hour)
+	events := &fakeEvents{events: []schema.Event{
+		{ID: "evt-old", TS: old, HostID: "host-a", Source: "kernel", Type: "kernel.segfault", Severity: schema.SeverityError, Title: "segfault", Schema: 1},
+	}}
+	jobs := &fakeJobs{jobs: []schema.Job{
+		{ID: "job-old", JobName: "nightly-backup", HostID: "host-a", StartedAt: old, FinishedAt: old.Add(time.Minute), Status: schema.JobSuccess, Schema: 1},
+	}}
+
+	srv := &Server{Metrics: &fakeMetrics{}, Events: events, Jobs: jobs}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Events) != 1 || got.Events[0].ID != "evt-old" {
+		t.Fatalf("an event three days old is still the latest event: %+v", got.Events)
+	}
+	if len(got.Jobs) != 1 || got.Jobs[0].ID != "job-old" {
+		t.Fatalf("an operation three days old is still the latest operation: %+v", got.Jobs)
+	}
+	// The metric window is untouched by any of this.
+	if got.WindowSecs != DefaultWindow.Seconds() {
+		t.Fatalf("window_secs = %v, want the unchanged metric window %v", got.WindowSecs, DefaultWindow.Seconds())
+	}
+}
+
+func TestHandleSummary_RecentBoundsHowManyRowsComeBack(t *testing.T) {
+	now := time.Now()
+	var stored []schema.Event
+	for i := range DefaultRecentRows + 3 {
+		stored = append(stored, schema.Event{
+			ID: fmt.Sprintf("evt-%d", i), TS: now.Add(-time.Duration(i) * time.Hour), HostID: "host-a",
+			Source: "kernel", Type: "kernel.segfault", Severity: schema.SeverityError, Title: "segfault", Schema: 1,
+		})
+	}
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{events: stored}}
+
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{query: "", want: DefaultRecentRows},
+		{query: "&recent=2", want: 2},
+		{query: "&recent=50", want: len(stored)},
+	} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a"+tc.query, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: expected 200, got %d: %s", tc.query, rec.Code, rec.Body.String())
+		}
+		var got Summary
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("%q: decoding response: %v", tc.query, err)
+		}
+		if len(got.Events) != tc.want {
+			t.Fatalf("%q: got %d events, want %d", tc.query, len(got.Events), tc.want)
+		}
+		if len(got.Events) > 1 && !got.Events[0].TS.After(got.Events[1].TS) {
+			t.Fatalf("%q: events must arrive newest first: %+v", tc.query, got.Events)
+		}
+	}
+}
+
+func TestHandleSummary_RejectsAnOutOfRangeRecent(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}}
+	for _, raw := range []string{"0", "-1", "not-a-number", fmt.Sprint(maxRecentRows + 1)} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a&recent="+raw, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("recent=%s: expected 400, got %d", raw, rec.Code)
+		}
 	}
 }
 

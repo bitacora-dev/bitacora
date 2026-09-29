@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -469,6 +470,109 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, from, to time.Time, hostID
 	defer rows.Close()
 
 	return scanEvents(rows)
+}
+
+// monthsWithEvents returns every month that already has an event database,
+// newest first. ListEvents derives its month list from the range it was
+// given; ListLatestEvents has no range to derive one from, so it has to
+// discover what exists on disk.
+func (s *SQLiteStore) monthsWithEvents() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading storage dir %s: %w", s.dir, err)
+	}
+
+	seen := make(map[string]bool)
+	var months []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		month, ok := monthFromEventFilename(entry.Name())
+		if !ok || seen[month] {
+			continue
+		}
+		seen[month] = true
+		months = append(months, month)
+	}
+
+	// A month opened in this process is a month with a database, even if
+	// the directory listing above raced its creation.
+	s.mu.Lock()
+	for month := range s.dbs {
+		if !seen[month] {
+			seen[month] = true
+			months = append(months, month)
+		}
+	}
+	s.mu.Unlock()
+
+	// "2006-01" sorts lexicographically the same way it sorts
+	// chronologically, so reverse string order is newest first.
+	sort.Sort(sort.Reverse(sort.StringSlice(months)))
+	return months, nil
+}
+
+// monthFromEventFilename recognizes exactly the files pathForMonth creates.
+// SQLite's WAL sidecars (`-wal`, `-shm`) share the prefix and must not be
+// mistaken for a month of their own.
+func monthFromEventFilename(name string) (string, bool) {
+	month, ok := strings.CutPrefix(name, "events-")
+	if !ok {
+		return "", false
+	}
+	month, ok = strings.CutSuffix(month, ".db")
+	if !ok {
+		return "", false
+	}
+	if _, err := time.Parse("2006-01", month); err != nil {
+		return "", false
+	}
+	return month, true
+}
+
+// ListLatestEvents implements Relational. An event is stored in the month
+// file its own ts falls in, so walking the months newest-first and stopping
+// as soon as limit rows are collected reads one file in the ordinary case.
+// That also keeps this away from ATTACH: SQLITE_MAX_ATTACHED defaults to 10
+// databases, and an unbounded history is not bounded by ten months.
+func (s *SQLiteStore) ListLatestEvents(ctx context.Context, hostID string, limit int) ([]schema.Event, error) {
+	if limit <= 0 {
+		return []schema.Event{}, nil
+	}
+
+	months, err := s.monthsWithEvents()
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]schema.Event, 0, limit)
+	for _, month := range months {
+		db, err := s.monthDB(month)
+		if err != nil {
+			return nil, fmt.Errorf("preparing month %s: %w", month, err)
+		}
+		rows, err := db.QueryContext(ctx, `
+			SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema
+			FROM events
+			WHERE (? = '' OR host_id = ?)
+			ORDER BY ts DESC, id DESC
+			LIMIT ?
+		`, hostID, hostID, limit-len(out))
+		if err != nil {
+			return nil, fmt.Errorf("querying latest events in %s: %w", month, err)
+		}
+		found, err := scanEvents(rows)
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, found...)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 // ListEventPage implements Relational with database-side filtering and

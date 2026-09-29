@@ -1490,12 +1490,53 @@ body {
   line-height: 1.6;
 }
 
+/* The events and operations panels show the newest rows, not a window, so a
+   row can be from today or from three months ago. The date is stated once
+   per calendar day rather than repeated on every line: five identical
+   "29/9/2026" prefixes are noise the eye has to step over, and no date at
+   all makes an event from last March look like one from a minute ago. */
+.event-days {
+  display: grid;
+  max-width: 78ch;
+}
+
+.event-day-heading {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 1.1rem 0 0;
+  color: var(--dim);
+  font-size: 0.76rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.event-day-heading::after {
+  content: "";
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.event-day:first-child .event-day-heading {
+  margin-top: 0.75rem;
+}
+
+.event-day .event-list {
+  margin-top: 0;
+}
+
 .event-list {
   display: grid;
   max-width: 78ch;
   margin: 0.75rem 0 0;
   padding: 0;
   list-style: none;
+}
+
+/* Timestamps change on every poll; tabular figures keep them from jumping. */
+.event-time {
+  font-variant-numeric: tabular-nums;
 }
 
 .event-list li {

@@ -217,9 +217,18 @@ export interface Dictionary {
   shareAccountNoShares: string;
   shareAccountReadWrite: (shares: string) => string;
   shareAccountReadOnly: (shares: string) => string;
-  eventsHeading: (minutes: number) => string;
+  // The events and operations panels show the newest rows, not a window,
+  // so neither heading takes a duration any more. `windowLabel` above still
+  // does: the metric charts are genuinely defined by their range.
+  eventsHeading: string;
   eventsEmptyHeading: string;
   eventsEmptyBody: string;
+  // Headings for the day a run of rows belongs to. They replace the date
+  // that would otherwise repeat on every line.
+  dayToday: string;
+  dayYesterday: string;
+  dayUnknown: string;
+  rowInstantAria: (instant: string) => string;
   eventDetails: string;
   eventLogsButton: string;
   eventLogsAria: (title: string) => string;
@@ -254,7 +263,7 @@ export interface Dictionary {
   logsClearBlockFilter: string;
   logsReferencedLine: string;
   logsReferencedMissing: string;
-  jobsHeading: (minutes: number) => string;
+  jobsHeading: string;
   jobsEmptyHeading: string;
   jobsEmptyBody: string;
   jobExitStatus: (exitCode: number, durationSeconds: number) => string;

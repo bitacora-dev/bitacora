@@ -84,6 +84,10 @@ func (noEvents) ListEvents(context.Context, time.Time, time.Time, string) ([]sch
 	return nil, nil
 }
 
+func (noEvents) ListLatestEvents(context.Context, string, int) ([]schema.Event, error) {
+	return nil, nil
+}
+
 func (noEvents) ListEventPage(context.Context, time.Time, time.Time, string, string, string, int, int) ([]schema.Event, int, error) {
 	return nil, 0, nil
 }

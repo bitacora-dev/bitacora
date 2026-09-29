@@ -221,6 +221,15 @@ Use explicit, dignified empty states:
   `share_usage` is recalculated every 24 hours, so its size always appears with
   `calculated_at` rendered as a relative age. Presenting yesterday's number as
   current is the same defect as hiding the package cache's age.
+- An inventory collected on a slow cadence states its own age the same way.
+  `PackageUpdatePanel` renders `reported_at` as a relative age ("collected 4
+  hours ago"), not as a bare clock time, and keeps the exact instant in the
+  `<time>` element's `title` and accessible name. A timestamp is literal and
+  still silent: an operator read a four-hour-old package list as current
+  because nothing on screen did the subtraction for them. When the age passes
+  the collector's own cadence with margin, the line takes the same gold
+  `--stale` treatment `cache-age--stale` uses, paired with a sentence so the
+  state never rests on colour alone.
 - A boolean attribute has three states in the browser: `"true"`, `"false"`, and
   absent. Never collapse absent into `false`. "The UPS did not report its power
   source" and "the UPS is on mains" lead to opposite decisions.
@@ -303,6 +312,7 @@ The current baseline comes from [`index.css`](src/index.css),
 - [ ] Optional inventory whose subject may not exist on a host renders nothing rather than an empty panel.
 - [ ] Figures computed on a slow cadence are shown with the age of the calculation.
 - [ ] A timestamp that can be older than the current window states its date, once per day group rather than once per row.
+- [ ] An inventory collected on a slow cadence shows its relative age, and looks different once that age passes the cadence.
 - [ ] Every user-facing string, including library-driven labels, comes from `web/src/i18n/`.
 - [ ] uPlot charts hide the native legend and expose a dictionary-backed current/inspected readout.
 - [ ] Focus, contrast, labels, alt text, and hit areas remain keyboard and touch usable.

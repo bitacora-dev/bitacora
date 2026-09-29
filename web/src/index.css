@@ -1246,6 +1246,12 @@ body {
   font-size: 0.78rem;
 }
 
+/* Same treatment as .cache-age--stale, for the same reason: an inventory the
+   operator is about to act on must look different when it is behind. The text
+   says so too, so this never carries the state on colour alone. */
+.inventory-reported--stale { color: var(--gold); font-weight: 650; }
+.inventory-reported time { color: inherit; }
+
 .inventory-list {
   display: grid;
   gap: 0.75rem;

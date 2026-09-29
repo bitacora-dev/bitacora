@@ -130,13 +130,18 @@ func (s *PostgresStore) ListJobs(ctx context.Context, from, to time.Time, hostID
 		return nil, err
 	}
 	defer rows.Close()
-	jobs := []schema.Job{}
-	for rows.Next() {
-		j, _, err := scanJob(rows)
-		if err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, j)
+	return collectJobs(rows)
+}
+
+// ListLatestJobs implements Relational.
+func (s *PostgresStore) ListLatestJobs(ctx context.Context, hostID string, limit int) ([]schema.Job, error) {
+	if limit <= 0 {
+		return []schema.Job{}, nil
 	}
-	return jobs, rows.Err()
+	rows, err := s.db.QueryContext(ctx, `SELECT id,job_name,host_id,started_at,finished_at,duration_seconds,status,exit_code,signal,stats_json::text,peer_host_id,trigger,next_expected,log_refs_json::text,schema FROM jobs WHERE ($1='' OR host_id=$1) ORDER BY COALESCE(finished_at, started_at) DESC, id DESC LIMIT $2`, hostID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectJobs(rows)
 }

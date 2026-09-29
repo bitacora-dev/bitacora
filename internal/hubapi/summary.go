@@ -29,6 +29,20 @@ import (
 // doesn't specify ?window=.
 const DefaultWindow = 15 * time.Minute
 
+// DefaultRecentRows is how many events and jobs GET /v1/summary returns when
+// the caller doesn't specify ?recent=.
+//
+// The window governs the metric series, where a range is the definition of
+// the signal. It never governed events and jobs well: a host that emits one
+// event a week showed an empty panel for the other six days, which reads as
+// "nothing is known", not "nothing happened". These two lists are counted,
+// not ranged.
+const DefaultRecentRows = 5
+
+// maxRecentRows bounds ?recent= so one request cannot ask the hub to
+// materialize an entire history into a summary response.
+const maxRecentRows = 100
+
 // MetricQuerier is the read side of a metricstore.Store — narrowed to
 // what Summary needs, so hubapi doesn't require a full metricstore.Store
 // (a fake is enough in tests).
@@ -39,10 +53,12 @@ type MetricQuerier interface {
 // EventLister is the read side of storage.Relational that Summary needs.
 type EventLister interface {
 	ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error)
+	ListLatestEvents(ctx context.Context, hostID string, limit int) ([]schema.Event, error)
 	ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error)
 }
 type JobLister interface {
 	ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error)
+	ListLatestJobs(ctx context.Context, hostID string, limit int) ([]schema.Job, error)
 }
 
 // JobPoller supplies a consistent job snapshot and cursor-based output pages.
@@ -406,8 +422,12 @@ type ContainerSeries struct {
 // GET /v1/summary?host_id=... debe devolver todo lo necesario para
 // pintar la pantalla principal en una sola petición").
 type Summary struct {
-	HostID                  string              `json:"host_id"`
-	GeneratedAt             time.Time           `json:"generated_at"`
+	HostID      string    `json:"host_id"`
+	GeneratedAt time.Time `json:"generated_at"`
+	// WindowSecs is the range of the metric series below, and only of
+	// those. Events and Jobs are the newest ?recent= rows regardless of
+	// age: a time series is defined by its range, a list of things that
+	// happened is defined by how many of them you want to read.
 	WindowSecs              float64             `json:"window_secs"`
 	CPU                     []SeriesPoint       `json:"cpu"`
 	CPUCores                []CPUSeries         `json:"cpu_cores"`
@@ -422,8 +442,9 @@ type Summary struct {
 	NetworkTXBytesPerSecond []SeriesPoint       `json:"network_tx_bytes_per_second"`
 	PublicSurface           PublicSurface       `json:"public_surface"`
 	Containers              []ContainerSeries   `json:"containers"`
-	Events                  []schema.Event      `json:"events"`
-	Jobs                    []schema.Job        `json:"jobs"`
+	// Events and Jobs are newest first and have no lower time bound.
+	Events []schema.Event `json:"events"`
+	Jobs   []schema.Job   `json:"jobs"`
 }
 
 // EventHistory is a bounded page of historical events. Events are not pruned
@@ -667,6 +688,16 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		window = d
 	}
 
+	recent := DefaultRecentRows
+	if raw := r.URL.Query().Get("recent"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxRecentRows {
+			http.Error(w, fmt.Sprintf("recent must be between 1 and %d", maxRecentRows), http.StatusBadRequest)
+			return
+		}
+		recent = n
+	}
+
 	now := time.Now()
 	from := now.Add(-window)
 	hostMatcher := labels.MustNewMatcher(labels.MatchEqual, "host_id", hostID)
@@ -762,14 +793,17 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "querying container memory metrics", http.StatusInternalServerError)
 		return
 	}
-	events, err := s.Events.ListEvents(r.Context(), from, now, hostID)
+	// Events and jobs deliberately ignore `from`: they are the newest
+	// `recent` rows whenever they happened, so the panels answer "what has
+	// this host done lately" instead of going blank during a quiet window.
+	events, err := s.Events.ListLatestEvents(r.Context(), hostID, recent)
 	if err != nil {
 		http.Error(w, "querying events", http.StatusInternalServerError)
 		return
 	}
 	var jobs []schema.Job
 	if s.Jobs != nil {
-		jobs, err = s.Jobs.ListJobs(r.Context(), from, now, hostID)
+		jobs, err = s.Jobs.ListLatestJobs(r.Context(), hostID, recent)
 		if err != nil {
 			http.Error(w, "querying jobs", http.StatusInternalServerError)
 			return

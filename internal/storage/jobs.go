@@ -183,15 +183,25 @@ func (s *SQLiteStore) ListJobs(ctx context.Context, from, to time.Time, hostID s
 		return nil, err
 	}
 	defer rows.Close()
-	jobs := []schema.Job{}
-	for rows.Next() {
-		j, _, err := scanJob(rows)
-		if err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, j)
+	return collectJobs(rows)
+}
+
+// ListLatestJobs implements Relational. Jobs live in one unsharded file, so
+// unlike ListLatestEvents this is a single ordered query.
+func (s *SQLiteStore) ListLatestJobs(ctx context.Context, hostID string, limit int) ([]schema.Job, error) {
+	if limit <= 0 {
+		return []schema.Job{}, nil
 	}
-	return jobs, rows.Err()
+	db, err := s.jobsDatabase()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id,job_name,host_id,started_at,finished_at,duration_seconds,status,exit_code,signal,stats_json,peer_host_id,trigger,next_expected,log_refs_json,schema FROM jobs WHERE (?='' OR host_id=?) ORDER BY COALESCE(finished_at, started_at) DESC, id DESC LIMIT ?`, hostID, hostID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectJobs(rows)
 }
 
 func (s *SQLiteStore) AppendJobOutput(ctx context.Context, hostID string, line schema.JobOutputLine) error {
@@ -275,6 +285,20 @@ func getSQLiteJob(ctx context.Context, db *sql.DB, hostID, jobID string) (schema
 }
 
 type jobRow interface{ Scan(...any) error }
+
+// collectJobs drains a job result set. Both backends and both list queries
+// scan the same columns, so the loop lives here instead of four times over.
+func collectJobs(rows *sql.Rows) ([]schema.Job, error) {
+	jobs := []schema.Job{}
+	for rows.Next() {
+		j, _, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, j)
+	}
+	return jobs, rows.Err()
+}
 
 func scanJob(row jobRow) (schema.Job, bool, error) {
 	var j schema.Job

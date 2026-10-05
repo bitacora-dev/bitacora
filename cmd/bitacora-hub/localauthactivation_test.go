@@ -164,6 +164,11 @@ func TestConfiguredLocalAuthLeavesIngestReachableWhilePending(t *testing.T) {
 // The end-to-end path the owner follows after running the CLI: sign in with
 // password and a real TOTP code, then read the dashboard with that session.
 func TestInitializedLocalAuthSignsInWithTOTPAndOpensTheDashboard(t *testing.T) {
+	// serveHub uses plaintext loopback HTTP. Make the test cookie transport
+	// explicit rather than depending on the Go version's loopback Secure-cookie
+	// handling; production keeps Secure cookies by default.
+	t.Setenv(hubauth.EnvInsecureCookies, "true")
+
 	cfg := localAuthPaths(t)
 	secret, recovery, err := hubauth.NewLocalStore(cfg.StatePath(), cfg.KeyStatePath()).Initialize("correct horse battery staple")
 	if err != nil {

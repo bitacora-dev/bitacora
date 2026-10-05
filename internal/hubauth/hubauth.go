@@ -2,9 +2,10 @@
 // ADR-0019 and ADR-0023.
 //
 // The hub keeps an authentication boundary of its own but never becomes an
-// identity provider: it stores no passwords, no hashes and no recovery flows.
-// Identity comes from an OIDC provider the operator controls, so MFA, account
-// recovery and account lifecycle stay with software built to maintain them.
+// identity provider: there is no registration, no web enrolment and no email
+// recovery. Identity comes either from an OIDC provider the operator controls
+// or from the single local credential of ADR-0023, whose whole lifecycle lives
+// on the server's TTY-only CLI.
 //
 // The whole package is optional. When Config.Enabled reports false the hub
 // behaves exactly as it did before, which keeps working the installations that
@@ -122,7 +123,11 @@ func New(ctx context.Context, cfg Config) (*Authenticator, error) {
 // Either source can be absent; returning nil still means the human boundary is
 // entirely disabled.
 func NewWithLocal(ctx context.Context, cfg Config, local *LocalStore) (*Authenticator, error) {
-	localEnabled := local != nil && local.IsEnabled()
+	// IsRequired, not only IsEnabled: an operator who switched the local
+	// source on must get the boundary immediately, before the credential
+	// exists. Waiting for initialization would leave the dashboard open to
+	// whoever reaches the origin during that window.
+	localEnabled := local != nil && (local.IsEnabled() || local.IsRequired())
 	if !cfg.Enabled() && !localEnabled {
 		return nil, nil
 	}
@@ -241,6 +246,15 @@ func (a *Authenticator) LoginSources() (local, oidc bool) {
 	return a != nil && a.local != nil && a.local.IsEnabled(), a != nil && a.provider != nil
 }
 
+// LocalPendingInitialization reports that local authentication is configured
+// but no credential exists yet. It is the difference between "this hub has no
+// login" and "this hub is waiting for `bitacora-hub auth local init`", which
+// is otherwise indistinguishable from the outside and was exactly the state
+// that made the deployment look broken.
+func (a *Authenticator) LocalPendingInitialization() bool {
+	return a != nil && a.local.PendingInitialization()
+}
+
 // RequireSession guards a handler with the human boundary. A nil
 // Authenticator passes every request through untouched.
 func (a *Authenticator) RequireSession(next http.Handler) http.Handler {
@@ -282,6 +296,13 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusNotFound, "local authentication is not configured")
 		return
 	}
+	if a.local.PendingInitialization() {
+		// Deliberately a dead end. ADR-0023 keeps credential creation on the
+		// server's TTY, so there is nothing to offer here: a form that
+		// accepted a password would be the self-enrolment this design refuses.
+		writeJSONError(w, http.StatusUnauthorized, "local authentication is not initialized")
+		return
+	}
 	if r.Method == http.MethodGet {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = io.WriteString(w, localLoginPage(safeReturnTo(r.URL.Query().Get("return_to"))))
@@ -307,6 +328,10 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 			if lockedUntil, lockErr := a.local.LockedUntil(); lockErr == nil && !lockedUntil.IsZero() {
 				status = http.StatusTooManyRequests
 			}
+		}
+		if errors.Is(err, ErrLocalAuthNotInitialized) {
+			writeJSONError(w, http.StatusUnauthorized, "local authentication is not initialized")
+			return
 		}
 		if !errors.Is(err, ErrInvalidLocalCredentials) && !errors.Is(err, ErrLocalAuthLocked) && !errors.Is(err, ErrLocalAuthDisabled) {
 			status = http.StatusInternalServerError
@@ -509,7 +534,12 @@ func (a *Authenticator) handleMe(w http.ResponseWriter, r *http.Request) {
 	identity, ok := a.Identity(r)
 	if !ok {
 		local, oidc := a.LoginSources()
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "no active session", "local_enabled": local, "oidc_enabled": oidc})
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error":                        "no active session",
+			"local_enabled":                local,
+			"oidc_enabled":                 oidc,
+			"local_pending_initialization": a.LocalPendingInitialization(),
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -63,9 +63,19 @@ func main() {
 		return
 	}
 
-	localAuth, err := hubauth.OpenLocalStore(hubauth.DefaultLocalAuthPath, hubauth.DefaultLocalAuthKeyPath)
+	localConfig, err := hubauth.LocalConfigFromEnv()
+	if err != nil {
+		log.Fatal(fmt.Errorf("reading local authentication configuration: %w", err))
+	}
+	localAuth, err := hubauth.LoadLocalStore(localConfig)
 	if err != nil {
 		log.Fatal(fmt.Errorf("opening local authentication: %w", err))
+	}
+	if localAuth.PendingInitialization() {
+		// Said out loud because the hub is now refusing every human request:
+		// an operator who only sees a login screen they cannot pass needs to
+		// know the remaining step is on this server, not in their browser.
+		log.Printf("bitacora-hub: local authentication is enabled but not initialized; run `bitacora-hub auth local init` on this server (credential: %s, key: %s)", localConfig.StatePath(), localConfig.KeyStatePath())
 	}
 	h, err := newHubWithLocalAuth(*dataDir, localAuth, hubpipeline.Config{
 		ExtractionRulesDir: *extractionRulesDir,

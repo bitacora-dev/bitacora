@@ -1,10 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useTranslation } from "../i18n";
-
-interface LoginSources {
-  local_enabled: boolean;
-  oidc_enabled: boolean;
-}
+import { authSessionFallback, fetchAuthSession, loginScreen, type AuthSession } from "../login";
 
 interface LoginError {
   error?: string;
@@ -18,17 +14,14 @@ function returnTo(): string {
 
 export default function LoginPanel() {
   const { t, intlTag } = useTranslation();
-  const [sources, setSources] = useState<LoginSources | null>(null);
+  const [session, setSession] = useState<AuthSession | null>(null);
   const [recovery, setRecovery] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<LoginError | null>(null);
   const expired = new URLSearchParams(window.location.search).get("expired") === "1";
 
   useEffect(() => {
-    fetch("/auth/me")
-      .then(async (response) => response.json() as Promise<LoginSources>)
-      .then(setSources)
-      .catch(() => setSources({ local_enabled: false, oidc_enabled: false }));
+    fetchAuthSession().then(setSession).catch(() => setSession(authSessionFallback()));
   }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -59,7 +52,9 @@ export default function LoginPanel() {
     }
   };
 
-  if (sources === null) return <main className="auth-shell"><p className="loading-text">{t.loading}</p></main>;
+  if (session === null) return <main className="auth-shell"><p className="loading-text">{t.loading}</p></main>;
+
+  const screen = loginScreen(session);
 
   return (
     <main className="auth-shell">
@@ -68,15 +63,16 @@ export default function LoginPanel() {
         <div><h2 id="sign-in-heading">{t.signInHeading}</h2><p>{t.signInIntro}</p></div>
         {expired && <div className="notice-panel" role="status">{t.sessionExpired}</div>}
         {error && <div className="error-panel" role="alert">{error.locked_until ? t.accountLockedUntil(new Date(error.locked_until).toLocaleTimeString(intlTag)) : t.invalidCredentials}</div>}
-        {sources.local_enabled && <form className="host-form" onSubmit={submit}>
+        {screen.localForm && <form className="host-form" onSubmit={submit}>
           <label htmlFor="login-password">{t.passwordLabel}</label>
           <input id="login-password" name="password" type="password" autoComplete="current-password" required />
           {recovery ? <><label htmlFor="login-recovery-code">{t.recoveryCodeLabel}</label><input id="login-recovery-code" name="recovery_code" autoComplete="one-time-code" required /><p>{t.recoveryCodeHint}</p></> : <><label htmlFor="login-totp">{t.authenticationCodeLabel}</label><input id="login-totp" name="totp" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]*" required /><p>{t.authenticationCodeHint}</p></>}
           <button className="link-button" type="button" onClick={() => setRecovery((value) => !value)}>{recovery ? t.useAuthenticatorCode : t.useRecoveryCode}</button>
           <button className="primary-button" type="submit" disabled={submitting}>{submitting ? t.signingIn : t.signInButton}</button>
         </form>}
-        {sources.oidc_enabled && <a className="secondary-button" href={`/auth/oidc/login?return_to=${encodeURIComponent(returnTo())}`}>{t.signInWithOIDC}</a>}
-        {!sources.local_enabled && !sources.oidc_enabled && <div className="error-panel" role="alert">{t.loginUnavailable}</div>}
+        {screen.oidcLink && <a className="secondary-button" href={`/auth/oidc/login?return_to=${encodeURIComponent(returnTo())}`}>{t.signInWithOIDC}</a>}
+        {screen.notice === "pending_initialization" && <div className="notice-panel" role="status">{t.localAuthPendingInitialization}</div>}
+        {screen.notice === "unavailable" && <div className="error-panel" role="alert">{t.loginUnavailable}</div>}
       </section>
     </main>
   );

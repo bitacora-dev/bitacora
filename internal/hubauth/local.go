@@ -38,6 +38,7 @@ const (
 
 var (
 	ErrLocalAuthNotConfigured  = errors.New("local authentication is not configured")
+	ErrLocalAuthNotInitialized = errors.New("local authentication is not initialized")
 	ErrLocalAuthDisabled       = errors.New("local authentication is disabled")
 	ErrLocalAuthLocked         = errors.New("local authentication is temporarily locked")
 	ErrInvalidLocalCredentials = errors.New("invalid local credentials")
@@ -50,8 +51,11 @@ var (
 type LocalStore struct {
 	path    string
 	keyPath string
-	mu      sync.Mutex
-	now     func() time.Time
+	// required records the operator's explicit switch. It is set once, at
+	// construction, and never mutated, so it needs no lock.
+	required bool
+	mu       sync.Mutex
+	now      func() time.Time
 }
 
 type localAuthState struct {
@@ -105,6 +109,54 @@ func OpenLocalStore(path, keyPath string) (*LocalStore, error) {
 	}
 	zero(key)
 	return store, nil
+}
+
+// LoadLocalStore resolves the operator's configuration into the store the hub
+// should run with.
+//
+// A configured local source produces a store even when the credential does not
+// exist yet. Returning nil there would leave the human boundary entirely
+// disabled until someone remembered to run the CLI, and the hub would hand its
+// dashboard to whoever reached the origin first — the exact hole ADR-0023
+// exists to close. An unconfigured hub with an initialized credential still
+// activates, so installations that predate this switch keep working.
+func LoadLocalStore(cfg LocalConfig) (*LocalStore, error) {
+	path, keyPath := cfg.StatePath(), cfg.KeyStatePath()
+	store, err := OpenLocalStore(path, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	if store != nil {
+		store.required = cfg.Required
+		return store, nil
+	}
+	if !cfg.Required {
+		return nil, nil
+	}
+	store = NewLocalStore(path, keyPath)
+	store.required = true
+	return store, nil
+}
+
+// IsRequired reports whether the operator switched the local source on. Unlike
+// IsEnabled it stays true while the credential is still uninitialized, which
+// is what keeps the hub from serving itself anonymously during that window.
+func (s *LocalStore) IsRequired() bool {
+	return s != nil && s.required
+}
+
+// PendingInitialization reports the window between switching the local source
+// on and running `bitacora-hub auth local init`. During it the boundary denies
+// everyone: ADR-0023 keeps credential creation on the server's TTY, so there
+// is no request a first visitor can make to claim the operator account.
+func (s *LocalStore) PendingInitialization() bool {
+	if !s.IsRequired() {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.readState()
+	return errors.Is(err, ErrLocalAuthNotInitialized)
 }
 
 func (s *LocalStore) IsEnabled() bool {
@@ -602,6 +654,12 @@ func writePrivateFile(path string, data []byte) error {
 
 func requirePrivateFile(path string) error {
 	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// Distinguished from any other stat failure so the login boundary can
+		// say "nobody has run auth local init yet" instead of answering 500,
+		// which reads as a hub defect rather than a pending setup step.
+		return fmt.Errorf("%w: %s is missing", ErrLocalAuthNotInitialized, path)
+	}
 	if err != nil {
 		return fmt.Errorf("checking local authentication file: %w", err)
 	}

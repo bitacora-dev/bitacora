@@ -148,6 +148,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/jobs/", s.requireDeviceToken(s.handleJobPoll))
 	mux.HandleFunc("/v1/inventory", s.requireDeviceToken(s.handleInventory))
 	mux.HandleFunc("/v1/hosts", s.handleHosts)
+	// Unguarded on purpose: it is the route that answers "is there a login on
+	// this hub?", which has to be readable before there is a session.
+	mux.HandleFunc("/v1/auth/session", s.handleAuthSession)
 	mux.HandleFunc("/v1/devices/pair", s.handleDevicePair)
 	mux.HandleFunc("/v1/devices/claim", s.handleDeviceClaim)
 	mux.HandleFunc("/v1/actions/package-operations", s.handleActionToken)
@@ -167,6 +170,13 @@ func (s *Server) Handler() http.Handler {
 // local recovery path has no network or CDN dependency.
 func (s *Server) LoginHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A page, so only GET. Answering 200 to a POST here would make the
+		// login route look like it accepted a submission it never read.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", http.MethodGet)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		if s.WebUI == nil {
 			http.NotFound(w, r)
 			return

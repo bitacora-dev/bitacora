@@ -17,16 +17,24 @@ import (
 // runLocalAuthCommand deliberately accepts no credential arguments. The only
 // place a password enters this process is a terminal with echo disabled.
 func runLocalAuthCommand(args []string, in *os.File, out io.Writer) error {
+	// The same configuration the server reads. Resolving the paths twice from
+	// different sources is how you end up initializing a credential the hub
+	// will never look at.
+	config, err := hubauth.LocalConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	path, keyPath := config.StatePath(), config.KeyStatePath()
 	return runLocalAuthCommandWithDependencies(args, in, out, localAuthCommandDependencies{
 		newStore: func() *hubauth.LocalStore {
-			return hubauth.NewLocalStore(hubauth.DefaultLocalAuthPath, hubauth.DefaultLocalAuthKeyPath)
+			return hubauth.NewLocalStore(path, keyPath)
 		},
 		openStore: func() (*hubauth.LocalStore, error) {
-			return hubauth.OpenLocalStore(hubauth.DefaultLocalAuthPath, hubauth.DefaultLocalAuthKeyPath)
+			return hubauth.OpenLocalStore(path, keyPath)
 		},
 		promptNew:     promptNewPassword,
 		promptCurrent: promptCurrentPassword,
-		ensureOwner:   ensureLocalAuthOwner,
+		ensureOwner:   func() error { return ensureLocalAuthOwner(path, keyPath) },
 	})
 }
 
@@ -193,8 +201,8 @@ type localAuthOwnerDependencies struct {
 // Packaging creates the bitacora system user. The official container does not:
 // its root-owned volume needs private modes but has no service account to own
 // it. Systemd installations still require that account and retain the chown.
-func ensureLocalAuthOwner() error {
-	return ensureLocalAuthOwnerForPaths([]string{hubauth.DefaultLocalAuthPath, hubauth.DefaultLocalAuthKeyPath}, localAuthOwnerDependencies{
+func ensureLocalAuthOwner(paths ...string) error {
+	return ensureLocalAuthOwnerForPaths(paths, localAuthOwnerDependencies{
 		euid:   os.Geteuid,
 		lookup: user.Lookup,
 		chown:  os.Chown,

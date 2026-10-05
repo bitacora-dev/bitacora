@@ -2,6 +2,8 @@
 
 Implementa [ADR-0019](../adr/0019-autenticacion-humana.md). Es **opcional**: si no configuras nada, el hub se comporta exactamente igual que antes.
 
+> ADR-0023 añade una segunda fuente de identidad humana que convive con esta: la [autenticación local con contraseña y TOTP](autenticacion-local.md). Activar una no desactiva la otra.
+
 ## Por qué existe
 
 Los tokens de ingesta de ADR-0008 autentican máquinas y el emparejamiento de ADR-0014 identifica dispositivos lectores. Ninguno responde a la pregunta de quién es la persona que abre la interfaz.
@@ -65,6 +67,7 @@ Una persona con sesión no necesita además un token de dispositivo: preguntarle
 - `GET /auth/callback` — retorno del proveedor.
 - `GET /auth/logout` — cierra la sesión en el servidor, no solo en el navegador.
 - `GET /auth/me` — devuelve la identidad activa en JSON.
+- `GET /v1/auth/session` — estado de la frontera humana del hub; responde `200` con o sin sesión. Ver la [guía de autenticación local](autenticacion-local.md#comprobar-en-qué-estado-está-un-hub).
 
 ## Límites conocidos
 

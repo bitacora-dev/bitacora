@@ -354,7 +354,7 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 	a.mu.Lock()
 	a.sweepLocked()
 	a.sessions[sid] = session{
-		identity:        Identity{Source: "local", Subject: "local:operator", Name: "Local operator"},
+		identity:        Identity{Source: sourceLocal, Subject: localOperatorSubject, Name: "Local operator"},
 		expiresAt:       a.now().Add(DefaultSessionTTL),
 		localGeneration: &generation,
 	}
@@ -365,7 +365,7 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(Identity{Source: "local", Subject: "local:operator", Name: "Local operator"})
+	_ = json.NewEncoder(w).Encode(Identity{Source: sourceLocal, Subject: localOperatorSubject, Name: "Local operator"})
 }
 
 func localLoginInput(r *http.Request) (password, factor, returnTo string, err error) {
@@ -511,7 +511,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.sweepLocked()
 	a.sessions[sid] = session{
-		identity:  Identity{Source: "oidc", Subject: idToken.Subject, Email: claims.Email, Name: claims.Name},
+		identity:  Identity{Source: sourceOIDC, Subject: idToken.Subject, Email: claims.Email, Name: claims.Name},
 		expiresAt: a.now().Add(a.ttl),
 	}
 	a.mu.Unlock()

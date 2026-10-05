@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/bitacora-dev/bitacora/internal/actionconfirm"
+	"github.com/bitacora-dev/bitacora/internal/hubauth"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
 
@@ -52,6 +53,9 @@ func (s *Server) handleActionToken(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "host_id and a fixed package operation are required")
 		return
 	}
+	if s.hostOutOfOperateScope(w, r, body.HostID) {
+		return
+	}
 	issued, err := s.Actions.Issue(r.Context(), actionconfirm.IssueInput{
 		Subject: identity.Subject, HostID: body.HostID, Operation: operation, NetworkOrigin: r.RemoteAddr,
 	})
@@ -87,6 +91,9 @@ func (s *Server) handleActionConfirmation(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, http.StatusBadRequest, "host_id, operation, request_id and action_token are required")
 		return
 	}
+	if s.hostOutOfOperateScope(w, r, body.HostID) {
+		return
+	}
 	err := s.Actions.Confirm(r.Context(), actionconfirm.ConfirmInput{
 		Subject: identity.Subject, HostID: body.HostID, Operation: operation, RequestID: body.RequestID,
 		Token: body.ActionToken, NetworkOrigin: r.RemoteAddr,
@@ -110,17 +117,17 @@ func (s *Server) handleActionConfirmation(w http.ResponseWriter, r *http.Request
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
 }
 
-func (s *Server) actionIdentity(w http.ResponseWriter, r *http.Request) (identity struct{ Subject string }, ok bool) {
+func (s *Server) actionIdentity(w http.ResponseWriter, r *http.Request) (hubauth.Identity, bool) {
 	if s.Actions == nil || s.Humans == nil {
 		writeJSONError(w, http.StatusNotFound, "package actions are disabled")
-		return identity, false
+		return hubauth.Identity{}, false
 	}
 	human, ok := s.Humans.Identity(r)
 	if !ok || human.Subject == "" {
 		writeJSONError(w, http.StatusUnauthorized, "human authentication required")
-		return identity, false
+		return hubauth.Identity{}, false
 	}
-	return struct{ Subject string }{Subject: human.Subject}, true
+	return human, true
 }
 
 func strictDecodeActionRequest(r *http.Request, target any) error {

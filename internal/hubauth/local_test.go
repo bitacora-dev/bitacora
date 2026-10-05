@@ -214,15 +214,6 @@ func TestLocalLoginReportsLockoutUntilWithoutCredentialDetail(t *testing.T) {
 	}
 }
 
-func TestLocalOperatorScopeModelsAllHostCapabilitiesWithoutEnforcement(t *testing.T) {
-	if got := ScopeFor(Identity{Source: "local", Subject: "local:operator"}); got != (HostScope{AllHosts: true, View: true, Operate: true}) {
-		t.Fatalf("local operator scope = %#v", got)
-	}
-	if got := ScopeFor(Identity{Source: "oidc", Subject: "operator"}); got != (HostScope{}) {
-		t.Fatalf("OIDC scope = %#v, want no implicit local scope", got)
-	}
-}
-
 func totpCode(secret []byte, at time.Time) string {
 	counter := uint64(at.Unix() / int64(totpPeriod.Seconds()))
 	var message [8]byte

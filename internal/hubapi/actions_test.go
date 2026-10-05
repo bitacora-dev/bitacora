@@ -12,6 +12,9 @@ import (
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
 
+// fakeHumanIdentity is a session that is already signed in. Its identity is a
+// real one on purpose: ADR-0023 resolves scope from the source and subject, so
+// a made-up identity shape would be authorized by nothing.
 type fakeHumanIdentity struct{ identity hubauth.Identity }
 
 func (f fakeHumanIdentity) HasSession(*http.Request) bool { return f.identity.Subject != "" }
@@ -35,7 +38,7 @@ func TestPackageActionEndpointsRequireHumanIdentityBeforeIssuingOrConfirming(t *
 }
 
 func TestPackageActionsAreDisabledWithoutTheProductionActionStore(t *testing.T) {
-	srv := &Server{Humans: fakeHumanIdentity{identity: hubauth.Identity{Subject: "human-a"}}}
+	srv := &Server{Humans: fakeHumanIdentity{identity: localOperator}}
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/actions/package-operations/token", bytes.NewBufferString(`{"host_id":"host-a","operation":"REFRESH_PACKAGE_CACHE"}`)))
 	if rec.Code != http.StatusNotFound {
@@ -45,7 +48,7 @@ func TestPackageActionsAreDisabledWithoutTheProductionActionStore(t *testing.T) 
 
 func TestPackageActionConfirmationUsesOnlyHumanBoundActionTokenAndClosedOrder(t *testing.T) {
 	actions := actionconfirm.NewStore()
-	srv := &Server{Actions: actions, Humans: fakeHumanIdentity{identity: hubauth.Identity{Subject: "human-a"}}}
+	srv := &Server{Actions: actions, Humans: fakeHumanIdentity{identity: localOperator}}
 
 	issue := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(issue, httptest.NewRequest(http.MethodPost, "/v1/actions/package-operations/token", bytes.NewBufferString(`{"host_id":"host-a","operation":"REFRESH_PACKAGE_CACHE"}`)))
@@ -73,7 +76,7 @@ func TestPackageActionConfirmationUsesOnlyHumanBoundActionTokenAndClosedOrder(t 
 
 func TestPackageActionBarrierRejectsObservedDataAndFreeText(t *testing.T) {
 	actions := actionconfirm.NewStore()
-	srv := &Server{Actions: actions, Humans: fakeHumanIdentity{identity: hubauth.Identity{Subject: "human-a"}}}
+	srv := &Server{Actions: actions, Humans: fakeHumanIdentity{identity: localOperator}}
 	payload := `{"host_id":"host-a","operation":"REFRESH_PACKAGE_CACHE","inventory":"x","logs":"x","alerts":"x","tags":["x"],"text":"refresh","command":"apt update"}`
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/actions/package-operations/token", bytes.NewBufferString(payload)))

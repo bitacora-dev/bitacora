@@ -174,6 +174,11 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "listing hosts")
 		return
 	}
+	// ADR-0023: a signed-in person sees only the hosts their relation grants
+	// view on. This is the aggregate route, so an unfiltered answer here would
+	// hand over the full inventory of someone else's servers before any
+	// per-host route was even called.
+	hosts = s.visibleHosts(r, hosts)
 	// The web UI consumes this endpoint as an array. A nil Go slice encodes as
 	// JSON null, which is not an empty collection to JavaScript callers.
 	if hosts == nil {

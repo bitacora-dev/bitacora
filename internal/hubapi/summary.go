@@ -134,6 +134,11 @@ type Server struct {
 	// Actions is nil by default, leaving package actions disabled. Production
 	// wires it only when human authentication is configured.
 	Actions ActionConfirmationService
+	// HostScopes resolves the ADR-0023 per-host relation of a signed-in
+	// person. Nil uses the installation default, hubauth.ScopeFor, which is
+	// what grants the single local:operator every host. It never widens a
+	// device token's reach: scope applies to human sessions only.
+	HostScopes HostScopeResolver
 }
 
 // Handler returns the http.Handler serving /v1/summary (device-token
@@ -515,6 +520,9 @@ func (s *Server) handleJobPoll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host_id is required", http.StatusBadRequest)
 		return
 	}
+	if s.hostOutOfViewScope(w, r, hostID) {
+		return
+	}
 	after := int64(0)
 	var err error
 	if raw := r.URL.Query().Get("after"); raw != "" {
@@ -573,6 +581,9 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	hostID := q.Get("host_id")
 	if hostID == "" {
 		http.Error(w, "host_id is required", http.StatusBadRequest)
+		return
+	}
+	if s.hostOutOfViewScope(w, r, hostID) {
 		return
 	}
 	from, err := time.Parse(time.RFC3339, q.Get("from"))
@@ -634,6 +645,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host_id is required", http.StatusBadRequest)
 		return
 	}
+	if s.hostOutOfViewScope(w, r, hostID) {
+		return
+	}
 	from, err := time.Parse(time.RFC3339, q.Get("from"))
 	if err != nil {
 		http.Error(w, "from must be an RFC3339 timestamp", http.StatusBadRequest)
@@ -685,6 +699,9 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host_id")
 	if hostID == "" {
 		http.Error(w, "host_id is required", http.StatusBadRequest)
+		return
+	}
+	if s.hostOutOfViewScope(w, r, hostID) {
 		return
 	}
 
@@ -880,6 +897,9 @@ func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host_id")
 	if hostID == "" {
 		http.Error(w, "host_id is required", http.StatusBadRequest)
+		return
+	}
+	if s.hostOutOfViewScope(w, r, hostID) {
 		return
 	}
 	kind := r.URL.Query().Get("kind")

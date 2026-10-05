@@ -18,6 +18,7 @@ export const es: Dictionary = {
   invalidCredentials: "Las credenciales no son válidas.",
   accountLockedUntil: (time) => `La cuenta está bloqueada hasta las ${time}. Vuelve a intentarlo entonces.`,
   loginUnavailable: "No hay un método de acceso configurado en este hub.",
+  localAuthPendingInitialization: "La autenticación local está activada pero todavía no se ha inicializado. Ejecuta «bitacora-hub auth local init» en el servidor para crear la credencial del operador y dar de alta el TOTP.",
   pairingDevice: "Emparejando dispositivo…",
   notPaired: "Este dispositivo aún no está emparejado.",
   pairButton: "Emparejar este dispositivo",

@@ -20,6 +20,7 @@ export interface Dictionary {
   invalidCredentials: string;
   accountLockedUntil: (time: string) => string;
   loginUnavailable: string;
+  localAuthPendingInitialization: string;
   pairingDevice: string;
   notPaired: string;
   pairButton: string;

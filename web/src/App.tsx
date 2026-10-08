@@ -585,7 +585,7 @@ export default function App() {
         <>
           <section className="processor-layout">
             <div className="processor-identity">
-              <CPUCorePanel cores={summary.cpu_cores} topology={cpuTopology} identity={hardwareIdentity} />
+              <CPUCorePanel cores={summary.cpu_cores} topology={cpuTopology} identity={hardwareIdentity} total={summary.cpu} temperatures={summary.temperatures} generatedAt={summary.generated_at} />
               <MotherboardPanel identity={hardwareIdentity} temperatures={summary.temperatures} />
             </div>
             <div className="processor-summary">

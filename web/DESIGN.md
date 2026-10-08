@@ -280,6 +280,43 @@ When adding a chart, define what the current value means before choosing the
 series shape. A chart without a readable current value is incomplete for this
 dashboard.
 
+## Processor Panel
+
+`CPUCorePanel` answers "what are the cores doing right now" at a glance, in the
+shape of a hardware dashboard rather than a catalogue. Its contract:
+
+- One compact row per physical core, one thin bar plus its percentage per
+  logical CPU inside that row. The earlier card-per-core grid spent a bordered
+  box on every core, so a sixteen-core host could not be read without
+  scrolling, and the panel defaulted to collapsed to hide that cost.
+- The row list never scrolls inside the panel. A clipped half-row reads as a
+  rendering fault, and seeing every core at once is the panel's whole purpose.
+- The header carries total load with its own wide bar, plus RAPL power and the
+  CPU temperature when the host reports them. A host that exposes no package
+  sensor shows its hottest core sensor and says so; it never passes a core
+  reading off as the package.
+- The averaging window selector governs the bars and the readouts. It is a
+  trailing window anchored on the newest sample, not an epoch bucket: bucketing
+  made a selected "30 s average" collapse to one sample at every boundary, so
+  the bar jumped and the label was wrong while it did.
+- Bars animate with a CSS width transition between two measured samples. The
+  cpu collector runs every ten seconds and the dashboard polls on the same
+  cadence, so movement is interpolation between real values and never invented
+  data. Raising either cadence to animate would spend the agent's ADR-0024
+  budget on a visual effect. `prefers-reduced-motion` removes the transition
+  and the refresh pulse.
+- A refresh line states the age of the newest sample and pairs it with a dot.
+  Past six collector cycles the pair takes the gold stale treatment and the dot
+  stops animating: an animated dot over a silent agent asserts freshness the
+  page cannot know.
+- Offline and isolated CPUs are tracked per thread, not per core. A core whose
+  second hyperthread was taken offline still runs on the first one. An offline
+  thread is dimmed, labelled in words, and keeps its empty track; it is never
+  dropped from the list and never drawn as 0 %.
+- The history strip under the rows is a compact uPlot chart with no axes and no
+  cursor. Its readable current value lives in its own header, and the full
+  inspectable CPU history stays in the `TimeSeriesChart` beside the panel.
+
 ## Accessibility
 
 The current baseline comes from [`index.css`](src/index.css),

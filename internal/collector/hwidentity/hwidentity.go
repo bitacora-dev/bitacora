@@ -207,6 +207,12 @@ func cpuTopologyItems(sysRoot string) []schema.InventoryItem {
 		if topo.IsolatedAvailable {
 			attrs["isolated"] = strconv.FormatBool(topo.Isolated[cpu])
 		}
+		// An offline CPU publishes no topology of its own, so its core was
+		// reconstructed from its neighbours. Say so rather than presenting it
+		// as something the kernel reported.
+		if topo.CoreIDInferred[cpu] {
+			attrs["core_id_inferred"] = "true"
+		}
 		items = append(items, schema.InventoryItem{
 			ID:    fmt.Sprintf("cpu%d", cpu),
 			Name:  fmt.Sprintf("cpu%d", cpu),

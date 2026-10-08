@@ -8,7 +8,13 @@ export const CPU_AVERAGING_WINDOWS = [30, 60, 300, 900] as const;
 // isolated lists the logical CPUs the kernel reports in its authoritative
 // isolcpus set. It stays empty when the kernel exposes no such list, which is
 // a different state from "nothing is isolated" and must not be drawn as one.
-interface CoreGroup { id: string; type: string; online: boolean; cpus: CPUSeries[]; isolated: string[]; }
+//
+// key identifies the group for rendering. It is deliberately not id: two
+// groups can share an id (a core_id and a bare CPU number are both plain
+// integers) and reusing it as a React key makes them collide into one card.
+// offline lists the threads the kernel has taken down, which is a different
+// state from a thread that simply has no samples yet.
+interface CoreGroup { key: string; id: string; type: string; online: boolean; cpus: CPUSeries[]; isolated: string[]; offline: string[]; }
 export interface CPUAggregate { ts: string; mean: number; max: number; count: number; }
 export interface CPUPanelPreferences { expanded: boolean; averagingWindowSeconds: typeof CPU_AVERAGING_WINDOWS[number]; }
 const defaultPreferences: CPUPanelPreferences = { expanded: false, averagingWindowSeconds: 60 };
@@ -27,15 +33,36 @@ function topologyByCPU(inventory: Inventory | null): Map<string, InventoryItem> 
   return topology;
 }
 
+// withTopologyOnlyCPUs appends an empty series for every CPU the topology
+// knows about but the metrics do not. An offlined core reports no samples at
+// all, so without this it would silently disappear from the panel as soon as
+// the last samples it produced while it was still running fall out of
+// retention — exactly the core an operator most needs to still see.
+//
+// It only fills in around CPUs that are reporting. With no load reported at
+// all the panel still has to say so rather than drawing a grid of cores that
+// all read "no samples".
+function withTopologyOnlyCPUs(series: CPUSeries[], topology: Map<string, InventoryItem>): CPUSeries[] {
+  if (series.length === 0) return series;
+  const sampled = new Set(series.map((cpu) => cpu.cpu));
+  const extra: CPUSeries[] = [];
+  for (const cpu of topology.keys()) if (!sampled.has(cpu)) extra.push({ cpu, points: [] });
+  return extra.length === 0 ? series : [...series, ...extra];
+}
+
 export function groupCPUCores(series: CPUSeries[], inventory: Inventory | null): CoreGroup[] {
   const topology = topologyByCPU(inventory);
   const groups = new Map<string, CoreGroup>();
-  for (const cpu of series) {
+  for (const cpu of withTopologyOnlyCPUs(series, topology)) {
     const item = topology.get(cpu.cpu);
     const coreID = item?.attrs.core_id;
     const key = coreID === undefined ? `cpu-${cpu.cpu}` : `core-${coreID}`;
-    const group = groups.get(key) ?? { id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", online: item?.attrs.online !== "false", cpus: [], isolated: [] };
-    group.online = group.online && item?.attrs.online !== "false";
+    const group = groups.get(key) ?? { key, id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", online: false, cpus: [], isolated: [], offline: [] };
+    // A core is down only once every one of its threads is. One offline
+    // thread next to a running sibling is marked on the thread, not on the
+    // core, so a live core is never drawn as if it had stopped.
+    if (item?.attrs.online === "false") group.offline.push(cpu.cpu);
+    else group.online = true;
     if (group.type === "unknown" && item?.attrs.core_type) group.type = item.attrs.core_type;
     if (item?.attrs.isolated === "true") group.isolated.push(cpu.cpu);
     group.cpus.push(cpu);
@@ -43,7 +70,9 @@ export function groupCPUCores(series: CPUSeries[], inventory: Inventory | null):
   }
   return [...groups.values()]
     .map((group) => ({ ...group, cpus: group.cpus.sort((left, right) => cpuNumber(left.cpu) - cpuNumber(right.cpu)) }))
-    .sort((left, right) => Number(left.id) - Number(right.id));
+    // Ordered by lowest thread, not by core id: a core id is only unique, not
+    // ordered, and a reconstructed one can land past every real core.
+    .sort((left, right) => cpuNumber(left.cpus[0].cpu) - cpuNumber(right.cpus[0].cpu));
 }
 
 // How many logical CPUs the kernel has reserved. The panel is collapsed by
@@ -130,11 +159,12 @@ export default function CPUCorePanel({ cores, topology, identity }: Props) {
         <button type="button" className="cpu-details-toggle" aria-expanded={preferences.expanded} aria-controls={detailsID} onClick={() => setPreferences((current) => ({ ...current, expanded: !current.expanded }))}>{preferences.expanded ? t.cpuDetailsHide : t.cpuDetailsShow}</button>
       </div>
       {preferences.expanded && <div className="cpu-core-grid" id={detailsID} aria-label={t.cpuCoresTitle}>
-        {groups.map((group) => <section className="cpu-core" key={group.id}>
-          <div className="cpu-core-heading"><strong>{t.cpuCoreLabel(group.id)}</strong>{group.type !== "unknown" && <span>{t.cpuCoreType(group.type)}</span>}{!group.online && <span>{t.cpuOffline}</span>}{group.isolated.length === group.cpus.length && <span>{t.cpuIsolated}</span>}</div>
+        {groups.map((group) => <section className={`cpu-core${group.online ? "" : " cpu-core--offline"}`} key={group.key}>
+          <div className="cpu-core-heading"><strong>{t.cpuCoreLabel(group.id)}</strong>{group.type !== "unknown" && <span>{t.cpuCoreType(group.type)}</span>}{!group.online && <span className="cpu-core-offline">{t.cpuOffline}</span>}{group.isolated.length === group.cpus.length && <span>{t.cpuIsolated}</span>}</div>
           <div className="cpu-thread-list">{group.cpus.map((cpu) => {
             const aggregate = latestAggregate(cpu, preferences.averagingWindowSeconds);
             const isolated = group.isolated.includes(cpu.cpu);
+            const offline = group.offline.includes(cpu.cpu);
             const mean = aggregate?.mean ?? null;
             const peak = aggregate?.max ?? null;
             const peakWidth = Math.max(0, Math.min(1, peak ?? 0)) * 100;
@@ -146,6 +176,7 @@ export default function CPUCorePanel({ cores, topology, identity }: Props) {
               </div>
               <strong>{mean === null ? t.noSamples : percentage.format(mean)}</strong>
               {peak !== null && <small>{t.cpuPeakLabel(percentage.format(peak))}</small>}
+              {offline && group.online && <small className="cpu-thread-offline">{t.cpuOffline}</small>}
               {isolated && <small className="cpu-thread-isolated"><span className="sr-only">{t.cpuIsolatedThread(cpu.cpu)}</span><span aria-hidden="true">{t.cpuIsolated}</span></small>}
             </div>;
           })}</div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cpuTemperature, groupCPUCores, isolatedCPUCount, offlineCPUCount, readCPUPanelPreferences, severity, totalLoadSeries, windowStats } from "./CPUCorePanel";
+import { cpuTemperature, groupCPUCores, isolatedCPUCount, offlineCPUCount, powerWatts, readCPUPanelPreferences, severity, totalLoadSeries, windowStats } from "./CPUCorePanel";
 import { sparklineData } from "./CPULoadSparkline";
 
 const topology = (attrs: Record<string, Record<string, string>>) => ({
@@ -184,6 +184,27 @@ describe("readCPUPanelPreferences", () => {
   it("rejects a window the selector does not offer", () => {
     const storage = { getItem: () => JSON.stringify({ averagingWindowSeconds: 7 }) } as unknown as Storage;
     expect(readCPUPanelPreferences(storage)).toEqual({ averagingWindowSeconds: 30 });
+  });
+});
+
+describe("powerWatts", () => {
+  it("reads a formatted RAPL draw", () => {
+    expect(powerWatts("29.74")).toBe(29.74);
+  });
+
+  it("reports a measured zero as a reading", () => {
+    expect(powerWatts("0.00")).toBe(0);
+  });
+
+  it("rejects an absent or blank reading instead of drawing it as no power", () => {
+    expect(powerWatts(undefined)).toBeNull();
+    expect(powerWatts("")).toBeNull();
+    expect(powerWatts("   ")).toBeNull();
+  });
+
+  it("rejects a reading it cannot describe", () => {
+    expect(powerWatts("not-a-number")).toBeNull();
+    expect(powerWatts("-3.5")).toBeNull();
   });
 });
 

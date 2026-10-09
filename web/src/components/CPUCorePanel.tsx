@@ -149,6 +149,18 @@ export function cpuTemperature(series: TemperatureSeries[]): CPUTemperatureReadi
   return candidates.reduce((hottest, reading) => (reading.value > hottest.value ? reading : hottest));
 }
 
+// RAPL arrives as a formatted string, so it is a string to this panel like
+// every other inventory attribute. Number("") is 0, so a blank reading has to
+// be rejected before the parse rather than drawn as a CPU drawing no power:
+// "the host reports no RAPL domain" and "the package is idle at 0 W" are
+// different answers, and only one of them is a measurement. A negative draw is
+// not a reading this panel can describe either.
+export function powerWatts(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === "") return null;
+  const watts = Number(value);
+  return Number.isFinite(watts) && watts >= 0 ? watts : null;
+}
+
 export function readCPUPanelPreferences(storage?: Storage | null): CPUPanelPreferences {
   try {
     const target = storage === undefined && typeof window !== "undefined" ? window.localStorage : storage;
@@ -200,8 +212,7 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
   const offlineCount = offlineCPUCount(groups);
   const system = identity?.items.find((item) => item.id === "system");
   const model = system?.attrs.cpu_model;
-  const power = Number(system?.attrs.cpu_power_watts);
-  const hasPower = system?.attrs.cpu_power_watts !== undefined && Number.isFinite(power);
+  const power = powerWatts(system?.attrs.cpu_power_watts);
   const temperature = cpuTemperature(temperatures);
   const totalPoints = totalLoadSeries(total, cores);
   const totalStats = windowStats(totalPoints, preferences.averagingWindowSeconds);
@@ -228,7 +239,7 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
         {model && <p className="cpu-core-model">{model}</p>}
       </div>
       <dl className="cpu-core-header-meta">
-        {hasPower && <div><dt>{t.cpuPowerHeading}</dt><dd className="cpu-core-power">{t.cpuPowerWatts(decimal.format(power))}</dd></div>}
+        {power !== null && <div><dt>{t.cpuPowerHeading}</dt><dd className="cpu-core-power">{t.cpuPowerWatts(decimal.format(power))}</dd></div>}
         {temperature && <div>
           <dt>{t.cpuTemperatureHeading}</dt>
           <dd className="cpu-core-temperature" title={temperature.package ? t.cpuTemperatureSource(temperature.chip, temperature.sensor) : t.cpuTemperatureHottestCore(temperature.chip, temperature.sensor)}>

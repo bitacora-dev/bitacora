@@ -6,7 +6,7 @@ import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
 import LogsList from "./components/LogsList";
 import AddServerPanel from "./components/AddServerPanel";
-import InventoryPanel from "./components/InventoryPanel";
+import DiskArrayPanel from "./components/DiskArrayPanel";
 import PackageUpdatePanel from "./components/PackageUpdatePanel";
 import JobsList from "./components/JobsList";
 import CPUCorePanel from "./components/CPUCorePanel";
@@ -667,7 +667,7 @@ export default function App() {
           </section>
 
           <section className="inventory-grid" aria-label={t.inventorySectionLabel}>
-            <InventoryPanel inventory={disks} kind="disk" />
+            <DiskArrayPanel inventory={disks} />
             <PackageUpdatePanel hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
             <SharesPanel shares={shares} usage={shareUsage} users={shareUsers} />
           </section>

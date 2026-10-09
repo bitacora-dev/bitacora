@@ -1,6 +1,9 @@
 package capabilities
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestParseMDStat_HealthyDegradedAndMultipleArrays(t *testing.T) {
 	arrays := ParseMDStat([]byte(`Personalities : [raid1] [raid5]
@@ -31,5 +34,19 @@ content /var/snapraid.content
 `))
 	if array.ParityDisks != 2 || len(array.Locations) != 4 {
 		t.Fatalf("unexpected SnapRAID topology: %+v", array)
+	}
+	want := []string{"/mnt/parity1/snapraid.parity", "/mnt/parity2/snapraid.parity"}
+	if !slices.Equal(array.ParityLocations, want) {
+		t.Fatalf("expected only the parity declarations kept apart, got %+v", array.ParityLocations)
+	}
+}
+
+func TestParseSnapraidConfig_DataOnlyConfigDeclaresNoParityLocation(t *testing.T) {
+	array := ParseSnapraidConfig([]byte("data disk-a /mnt/disk1/\ndata disk-b /mnt/disk2/\n"))
+	if array.ParityDisks != 0 || len(array.ParityLocations) != 0 {
+		t.Fatalf("expected no parity locations, got %+v", array)
+	}
+	if len(array.Locations) != 2 {
+		t.Fatalf("expected both data locations, got %+v", array.Locations)
 	}
 }

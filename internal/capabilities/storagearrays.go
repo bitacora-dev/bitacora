@@ -65,9 +65,15 @@ func ParseMDStat(data []byte) []MDArray {
 // SnapraidArray describes the data and parity locations declared in a
 // SnapRAID configuration file. It intentionally does not claim a health
 // state: that requires a SnapRAID sync/status run, which ADR-0012 forbids.
+//
+// Locations lists every declared location in file order; ParityLocations
+// lists the subset declared with the "parity" keyword. Keeping the role
+// instead of only counting it is what lets a panel group parity and data
+// disks apart the way ADR-0016 describes, without re-reading the config.
 type SnapraidArray struct {
-	Locations   []string
-	ParityDisks int
+	Locations       []string
+	ParityLocations []string
+	ParityDisks     int
 }
 
 // ParseSnapraidConfig extracts data and parity locations from snapraid.conf.
@@ -83,8 +89,10 @@ func ParseSnapraidConfig(data []byte) SnapraidArray {
 		if len(fields) < 2 || (fields[0] != "data" && fields[0] != "parity") {
 			continue
 		}
-		array.Locations = append(array.Locations, fields[len(fields)-1])
+		location := fields[len(fields)-1]
+		array.Locations = append(array.Locations, location)
 		if fields[0] == "parity" {
+			array.ParityLocations = append(array.ParityLocations, location)
 			array.ParityDisks++
 		}
 	}

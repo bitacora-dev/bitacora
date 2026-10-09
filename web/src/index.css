@@ -1598,22 +1598,166 @@ body {
   gap: 0.65rem;
 }
 
-.disk-list { gap: 0; }
-
-.disk-row {
-  gap: 0.7rem !important;
-  padding-block: 0.8rem !important;
+.disk-array-panel {
+  display: grid;
+  gap: 1rem;
 }
 
-.disk-row:first-child { padding-top: 0 !important; }
+.disk-group {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
 
-.disk-row-heading {
+.disk-group-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem 0.75rem;
+  align-items: baseline;
+  gap: 0.4rem 0.6rem;
 }
+
+.disk-group-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.disk-group-summary {
+  margin: 0;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Each function group renders its own table, so the columns only line up
+   down the panel if their widths are declared rather than measured from
+   the content of one group. */
+.disk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+}
+
+.disk-col-device { width: 30%; }
+.disk-col-state { width: 18%; }
+.disk-col-temperature { width: 8%; }
+.disk-col-smart { width: 15%; }
+.disk-col-usage { width: 29%; }
+
+.disk-table th,
+.disk-table td {
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.disk-table thead th {
+  border-bottom: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.disk-table tbody tr + tr th,
+.disk-table tbody tr + tr td { border-top: 1px solid var(--line-soft); }
+
+.disk-table-row--critical th,
+.disk-table-row--critical td { background: color-mix(in srgb, var(--red) 8%, transparent); }
+
+.disk-cell-device {
+  display: table-cell;
+  min-width: 0;
+  font-weight: 400;
+}
+
+.disk-cell-device strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.disk-cell-identity,
+.disk-cell-mounts {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.disk-mounts { font-size: 0.74rem; }
+.disk-mounts summary { color: var(--cyan); cursor: pointer; }
+
+.disk-mounts ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.disk-mounts li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
+  color: var(--muted);
+}
+
+.disk-mounts code { color: var(--text); overflow-wrap: anywhere; }
+
+/* Both labels wrap rather than run under the next column: "Atención
+   requerida" and "Fallo detectado" do not fit on one line while the panel
+   shares a row with another one. Neither cell may become a flex container:
+   `display: flex` on a `<td>` takes it out of the table box model, and the
+   column stops lining up with its header. */
+.disk-cell-state,
+.disk-cell-smart {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.disk-cell-numeric {
+  color: var(--text);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+/* The status light reports the health state the collectors actually
+   reported, so "unknown" has to look like absence of data and not like a
+   verdict: a dim grey dot next to an em dash, never a reassuring green. */
+.disk-status-light {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  flex: 0 0 auto;
+  margin-right: 0.4rem;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.disk-status-light--ok { background: var(--green); }
+.disk-status-light--critical { background: var(--red); }
+.disk-status-light--unknown { background: var(--line); border: 1px solid var(--dim); }
+
+.disk-usage-cell { display: grid; gap: 0.3rem; }
+
+.disk-usage-cell-values {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.45rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.disk-usage-cell-values b { color: var(--text); font-size: 0.84rem; }
+.disk-usage-warning { color: var(--gold); font-style: normal; font-weight: 700; }
 
 .array-badge {
   border: 1px solid var(--line);
@@ -1625,13 +1769,6 @@ body {
 }
 
 .array-badge--degraded { border-color: var(--red); color: var(--red); }
-
-.disk-usage {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0.75rem;
-}
 
 .usage-ring {
   display: grid;
@@ -1657,21 +1794,12 @@ body {
 
 .usage-ring span { z-index: 1; }
 
-.usage-ring--compact { width: 2rem; height: 2rem; font-size: 0.62rem; }
-.usage-ring--compact::before { width: 1.55rem; height: 1.55rem; }
-
-.disk-usage-main { display: grid; gap: 0.42rem; min-width: 0; }
-
-.disk-usage-values {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.6rem;
-  color: var(--muted);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.disk-usage-values b { color: var(--text); font-size: 0.9rem; }
+/* Sized around its widest label rather than around the glyphs that happen
+   to fit: "100 %" is five characters and a separator, and at 2rem across
+   it spilled over the arc on both sides. The hole has to hold the text,
+   not the other way round. */
+.usage-ring--compact { width: 2.5rem; height: 2.5rem; font-size: 0.58rem; }
+.usage-ring--compact::before { width: 2.05rem; height: 2.05rem; }
 
 .usage-bar { height: 0.42rem; overflow: hidden; border-radius: 999px; background: var(--line-soft); }
 .usage-bar span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); }
@@ -1681,21 +1809,7 @@ body {
    well" colour is the wrong signal during a power cut. */
 .usage-bar--battery span { background: var(--red); }
 
-.disk-state,
-.disk-usage-unavailable { margin: 0; font-size: 0.75rem; }
-.disk-state--critical { color: var(--red); }
-.disk-state--warning { color: var(--gold); }
-.disk-usage-unavailable { color: var(--muted); }
-
-.disk-details {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.5rem 1rem;
-  margin: 0;
-}
-
-.disk-details dt { color: var(--dim); font-size: 0.72rem; text-transform: uppercase; }
-.disk-details dd { margin: 0.18rem 0 0; overflow-wrap: anywhere; color: var(--text); font-size: 0.82rem; }
+.disk-usage-unavailable { margin: 0; color: var(--muted); font-size: 0.75rem; }
 
 .events-empty {
   display: grid;
@@ -2163,7 +2277,49 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .disk-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .disk-table { table-layout: auto; }
+  .disk-table colgroup { display: none; }
+  .disk-table thead { display: none; }
+
+  .disk-table,
+  .disk-table tbody,
+  .disk-table-row,
+  .disk-table-row th,
+  .disk-table-row td { display: block; }
+
+  .disk-table-row {
+    padding-block: 0.6rem;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .disk-table tbody tr + tr th,
+  .disk-table tbody tr + tr td { border-top: 0; }
+
+  .disk-table-row th,
+  .disk-table-row td { padding-inline: 0; }
+
+  /* The header row is gone, so each stacked cell names itself: two bare
+     em dashes under one another say nothing about which is temperature
+     and which is the SMART verdict. */
+  /* Qualified by `td` on purpose: the `display: block` above is written
+     as `.disk-table-row td`, which outranks a lone class and would leave
+     these cells stacked without their label column. */
+  .disk-table-row td.disk-cell-state,
+  .disk-table-row td.disk-cell-smart,
+  .disk-table-row td.disk-cell-numeric { display: flex; align-items: baseline; gap: 0.4rem; }
+
+  .disk-cell-state::before,
+  .disk-cell-smart::before,
+  .disk-cell-numeric::before {
+    min-width: 5rem;
+    color: var(--dim);
+    content: attr(data-label);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .disk-group-summary { margin-left: 0; }
 
   .power-runtime strong { font-size: 1.6rem; }
 

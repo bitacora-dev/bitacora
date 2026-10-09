@@ -293,3 +293,109 @@ func TestCollector_RespectsContextCancellation(t *testing.T) {
 		t.Fatal("expected cancellation error")
 	}
 }
+
+func TestCollector_CarriesSMARTTemperatureAndHealthStatus(t *testing.T) {
+	dir := t.TempDir()
+	mountsFile := filepath.Join(dir, "mounts")
+	spoolDir := filepath.Join(dir, "spool")
+	healthyMount := t.TempDir()
+	failingMount := t.TempDir()
+	silentMount := t.TempDir()
+
+	writeFile(t, mountsFile,
+		"/dev/sdc1 "+healthyMount+" ext4 rw 0 0\n"+
+			"/dev/sdd1 "+failingMount+" ext4 rw 0 0\n"+
+			"/dev/sde1 "+silentMount+" ext4 rw 0 0\n")
+
+	smartData := map[string]any{
+		"devices": map[string]any{
+			"sdc": map[string]any{
+				"model_name":   "ST18000NM004J",
+				"temperature":  map[string]any{"current": 34},
+				"smart_status": map[string]any{"passed": true},
+			},
+			"sdd": map[string]any{
+				"temperature":  map[string]any{"current": 51},
+				"smart_status": map[string]any{"passed": false},
+			},
+			// A device smartctl answered for, but without a temperature
+			// sensor or an overall health verdict.
+			"sde": map[string]any{"model_name": "WDC WD40EFRX"},
+		},
+	}
+	if err := spool.WriteAtomic(spoolDir, "smart", 1, smartData, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"mounts_file": mountsFile,
+		"spool_dir":   spoolDir,
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	byDevice := make(map[string]schema.Labels)
+	for _, item := range sink.inventories[0].Items {
+		byDevice[item.Attrs["device"]] = item.Attrs
+	}
+	if got := byDevice["/dev/sdc1"]; got["temperature_celsius"] != "34" || got["smart_status"] != "passed" {
+		t.Fatalf("unexpected healthy disk attrs: %+v", got)
+	}
+	if got := byDevice["/dev/sdd1"]; got["temperature_celsius"] != "51" || got["smart_status"] != "failed" {
+		t.Fatalf("expected a failing verdict to be reported as such: %+v", got)
+	}
+	got := byDevice["/dev/sde1"]
+	if _, ok := got["temperature_celsius"]; ok {
+		t.Fatalf("invented a temperature for a disk that reports none: %+v", got)
+	}
+	if _, ok := got["smart_status"]; ok {
+		t.Fatalf("invented a SMART verdict for a disk that reports none: %+v", got)
+	}
+	if got["model"] != "WDC WD40EFRX" {
+		t.Fatalf("lost the identity of a disk without temperature data: %+v", got)
+	}
+}
+
+func TestCollector_DistinguishesSnapRAIDParityFromDataMembers(t *testing.T) {
+	dir := t.TempDir()
+	dataMount := t.TempDir()
+	parityMount := t.TempDir()
+	mountsFile := filepath.Join(dir, "mounts")
+	snapraidConf := filepath.Join(dir, "snapraid.conf")
+
+	writeFile(t, mountsFile,
+		"/dev/sdb1 "+dataMount+" ext4 rw 0 0\n"+
+			"/dev/sdc1 "+parityMount+" ext4 rw 0 0\n")
+	writeFile(t, snapraidConf,
+		"parity "+parityMount+"/snapraid.parity\n"+
+			"data disk-a "+dataMount+"/\n")
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"mounts_file":   mountsFile,
+		"spool_dir":     filepath.Join(dir, "spool"),
+		"snapraid_conf": snapraidConf,
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	byDevice := make(map[string]schema.Labels)
+	for _, item := range sink.inventories[0].Items {
+		byDevice[item.Attrs["device"]] = item.Attrs
+	}
+	if got := byDevice["/dev/sdc1"]; got["array_role"] != "parity" {
+		t.Fatalf("expected the parity member tagged as parity: %+v", got)
+	}
+	if got := byDevice["/dev/sdb1"]; got["array_role"] != "data" {
+		t.Fatalf("expected the data member tagged as data: %+v", got)
+	}
+}

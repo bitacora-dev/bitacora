@@ -200,10 +200,17 @@ export interface Dictionary {
   diskUsedLabel: string;
   diskCapacityLabel: (capacity: string) => string;
   diskAvailableLabel: (available: string) => string;
-  diskNearlyFull: string;
   diskArrayType: (type: string) => string;
   diskArrayMembership: (type: string, level: string, members: string) => string;
   diskArrayHealth: Record<"healthy" | "degraded" | "unknown", string>;
+  diskTableHeading: Record<"device" | "state" | "temperature" | "smart" | "usage", string>;
+  diskStateLabel: Record<"ok" | "warning" | "critical" | "unknown", string>;
+  diskSmartVerdict: Record<"passed" | "failed", string>;
+  diskTemperatureValue: (celsius: string) => string;
+  diskValueUnknown: string;
+  diskMountpointsSummary: (count: string) => string;
+  diskGroupLabel: (group: string) => string;
+  diskGroupSummary: (used: string, capacity: string, percentage: string) => string;
   sharesHeading: string;
   shareProtocol: (protocol: string) => string;
   shareMode: (mode: string) => string;

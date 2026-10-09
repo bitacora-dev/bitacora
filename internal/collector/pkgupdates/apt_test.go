@@ -188,13 +188,11 @@ func TestAptCacheRefreshedAt_PrefersTheNewestUpdateSignal(t *testing.T) {
 	now := time.Now()
 	dir := t.TempDir()
 	listsDir := filepath.Join(dir, "lists")
-	partialDir := filepath.Join(listsDir, "partial")
 	stamp := filepath.Join(dir, "periodic", "update-success-stamp")
+	dailyStamp := filepath.Join(dir, "periodic", "update-stamp")
 	writeFile(t, filepath.Join(listsDir, "repo_Packages"), "Package: bash\nVersion: 2.0\n")
-	if err := os.MkdirAll(partialDir, 0o755); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 	writeFile(t, stamp, "")
+	writeFile(t, dailyStamp, "")
 
 	for _, tc := range []struct {
 		name  string
@@ -203,17 +201,17 @@ func TestAptCacheRefreshedAt_PrefersTheNewestUpdateSignal(t *testing.T) {
 	}{
 		{
 			name:  "post-invoke stamp is the newest",
-			times: map[string]time.Time{stamp: now.Add(-time.Minute), listsDir: now.Add(-72 * time.Hour), partialDir: now.Add(-72 * time.Hour)},
+			times: map[string]time.Time{stamp: now.Add(-time.Minute), dailyStamp: now.Add(-72 * time.Hour), listsDir: now.Add(-72 * time.Hour)},
+			want:  now.Add(-time.Minute),
+		},
+		{
+			name:  "apt's own daily update stamp is the newest",
+			times: map[string]time.Time{stamp: now.Add(-72 * time.Hour), dailyStamp: now.Add(-time.Minute), listsDir: now.Add(-72 * time.Hour)},
 			want:  now.Add(-time.Minute),
 		},
 		{
 			name:  "a replaced index is newer than the last recorded success",
-			times: map[string]time.Time{stamp: now.Add(-72 * time.Hour), listsDir: now.Add(-time.Minute), partialDir: now.Add(-72 * time.Hour)},
-			want:  now.Add(-time.Minute),
-		},
-		{
-			name:  "partial downloads are newer than both",
-			times: map[string]time.Time{stamp: now.Add(-72 * time.Hour), listsDir: now.Add(-72 * time.Hour), partialDir: now.Add(-time.Minute)},
+			times: map[string]time.Time{stamp: now.Add(-72 * time.Hour), dailyStamp: now.Add(-72 * time.Hour), listsDir: now.Add(-time.Minute)},
 			want:  now.Add(-time.Minute),
 		},
 	} {
@@ -228,6 +226,43 @@ func TestAptCacheRefreshedAt_PrefersTheNewestUpdateSignal(t *testing.T) {
 				t.Fatalf("got %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// apt creates and removes a privilege-test file in lists/partial/ at the start
+// of every run as root, before it fetches anything — so an `apt update` that
+// fails offline still moves partial/. Neither that nor an InRelease the server
+// stamped with a recent Last-Modified, nor a pkgcache.bin rebuilt by any apt
+// run, may make the cache look fresh.
+func TestAptCacheRefreshedAt_IgnoresSignalsAFailedUpdateAlsoMoves(t *testing.T) {
+	now := time.Now()
+	dir := t.TempDir()
+	listsDir := filepath.Join(dir, "lists")
+	partialDir := filepath.Join(listsDir, "partial")
+	inRelease := filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-updates_InRelease")
+	pkgcache := filepath.Join(dir, "cache", "pkgcache.bin")
+	writeFile(t, filepath.Join(listsDir, "repo_Packages"), "Package: bash\nVersion: 2.0\n")
+	writeFile(t, inRelease, "Suite: noble-updates\n")
+	writeFile(t, pkgcache, "")
+	if err := os.MkdirAll(partialDir, 0o755); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	lastSuccess := now.Add(-72 * time.Hour)
+	for path, timestamp := range map[string]time.Time{
+		partialDir: now.Add(-time.Minute),
+		inRelease:  now.Add(-time.Minute),
+		pkgcache:   now.Add(-time.Minute),
+		listsDir:   lastSuccess,
+	} {
+		if err := os.Chtimes(path, timestamp, timestamp); err != nil {
+			t.Fatalf("setting time for %s: %v", path, err)
+		}
+	}
+
+	got := aptCacheRefreshedAt(listsDir)
+	if diff := got.Sub(lastSuccess); diff > time.Second || diff < -time.Second {
+		t.Fatalf("got %s, want the last replaced index %s", got, lastSuccess)
 	}
 }
 
@@ -350,6 +385,52 @@ func TestAptItemsForSources_MarksNotAutomaticSuiteCandidate(t *testing.T) {
 	}
 	if got := items[0].Attrs["candidate_automatic"]; got != "false" {
 		t.Fatalf("candidate_automatic: got %q, want false for a NotAutomatic suite", got)
+	}
+}
+
+// cockpit with both an automatic candidate (noble-updates) and a higher one in
+// noble-backports: `apt upgrade` installs the noble-updates version, so that is
+// the pending update — not the backports one, and not "nothing pending".
+func TestAptItemsForSources_PendingUpdateIsTheAutomaticCandidateBelowBackports(t *testing.T) {
+	dir := t.TempDir()
+	dpkgStatus := filepath.Join(dir, "status")
+	listsDir := filepath.Join(dir, "lists")
+	sourcesDir := filepath.Join(dir, "sources.list.d")
+	writeFile(t, dpkgStatus, "Package: cockpit\nStatus: install ok installed\nVersion: 314-1\n\n")
+	writeFile(t, filepath.Join(sourcesDir, "ubuntu.sources"), "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates noble-backports\nComponents: universe\n\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble_universe_binary-amd64_Packages"), "Package: cockpit\nVersion: 314-1\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-updates_universe_binary-amd64_Packages"), "Package: cockpit\nVersion: 314-1ubuntu0.1\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-backports_universe_binary-amd64_Packages"), "Package: cockpit\nVersion: 362-1~bpo24.04.1\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble_InRelease"), "Suite: noble\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-updates_InRelease"), "Suite: noble-updates\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-backports_InRelease"), "Suite: noble-backports\nNotAutomatic: yes\nButAutomaticUpgrades: yes\n")
+
+	items := aptItemsForSources(dpkgStatus, listsDir, filepath.Join(dir, "sources.list"), sourcesDir, time.Now())
+	if len(items) != 1 {
+		t.Fatalf("expected cockpit to be reported once, got %+v", items)
+	}
+	attrs := items[0].Attrs
+	if attrs["candidate_version"] != "314-1ubuntu0.1" || attrs["candidate_suite"] != "noble-updates" || attrs["candidate_automatic"] != "true" {
+		t.Fatalf("expected the noble-updates candidate as the pending update, got %+v", attrs)
+	}
+}
+
+// When the installed version already matches what apt would take, a higher
+// NotAutomatic version is reported as not automatic — never as pending.
+func TestAptItemsForSources_BackportsAboveAnUpToDateAutomaticCandidateIsNotPending(t *testing.T) {
+	dir := t.TempDir()
+	dpkgStatus := filepath.Join(dir, "status")
+	listsDir := filepath.Join(dir, "lists")
+	sourcesDir := filepath.Join(dir, "sources.list.d")
+	writeFile(t, dpkgStatus, "Package: cockpit\nStatus: install ok installed\nVersion: 314-1ubuntu0.1\n\n")
+	writeFile(t, filepath.Join(sourcesDir, "ubuntu.sources"), "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble-updates noble-backports\nComponents: universe\n\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-updates_universe_binary-amd64_Packages"), "Package: cockpit\nVersion: 314-1ubuntu0.1\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-backports_universe_binary-amd64_Packages"), "Package: cockpit\nVersion: 362-1~bpo24.04.1\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-backports_InRelease"), "Suite: noble-backports\nNotAutomatic: yes\n")
+
+	items := aptItemsForSources(dpkgStatus, listsDir, filepath.Join(dir, "sources.list"), sourcesDir, time.Now())
+	if len(items) != 1 || items[0].Attrs["candidate_automatic"] != "false" || items[0].Attrs["candidate_version"] != "362-1~bpo24.04.1" {
+		t.Fatalf("expected one not-automatic backports candidate, got %+v", items)
 	}
 }
 

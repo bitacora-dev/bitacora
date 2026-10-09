@@ -33,7 +33,8 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 	}
 
 	sources, filterLists := activeAptSources(sourcesList, sourcesDir)
-	candidates, err := candidateVersionsForSources(listsDir, sources, filterLists)
+	suites := newAptSuitePolicy(listsDir)
+	candidates, err := candidateVersionsForSources(listsDir, sources, filterLists, suites)
 	if err != nil || len(candidates) == 0 {
 		// No usable cache — `apt update` has never run on this host, or
 		// the lists directory doesn't exist. Nothing to compare against,
@@ -42,12 +43,11 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 	}
 
 	refreshedAt := aptCacheRefreshedAt(listsDir)
-	suites := newAptSuitePolicy(listsDir)
 
 	items := make([]schema.InventoryItem, 0, len(installed))
 	for name, installedVersion := range installed {
-		candidate, ok := candidates[name]
-		if !ok || debversion.Compare(candidate.version, installedVersion) <= 0 {
+		candidate, automatic, ok := candidates[name].pending(installedVersion)
+		if !ok {
 			continue
 		}
 
@@ -61,7 +61,7 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 		}
 		if candidate.source.suite != "" {
 			attrs["candidate_suite"] = candidate.source.suite
-			attrs["candidate_automatic"] = strconv.FormatBool(suites.automatic(candidate.source))
+			attrs["candidate_automatic"] = strconv.FormatBool(automatic)
 		}
 		items = append(items, schema.InventoryItem{
 			ID:    "apt:" + name,
@@ -85,21 +85,41 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 // number was the age of noble's frozen index, not of the cache.
 //
 // Three signals are read instead, all pure reads (ADR-0012), newest wins
-// because each one only moves forward when apt itself does work:
+// because each one only moves forward when an update actually succeeded or
+// actually replaced an index:
 //
 //   - <state>/periodic/update-success-stamp, touched by
 //     APT::Update::Post-Invoke-Success (/etc/apt/apt.conf.d/15update-stamp,
 //     shipped by update-notifier-common), so it marks the end of a
 //     successful `apt update` exactly. Absent when that package is not
 //     installed, which is why it is not the only signal.
-//   - the lists directory itself, and its partial/ subdirectory: apt
-//     downloads into partial/ and renames the result into lists/, so both
-//     move whenever an index is actually replaced.
+//   - <state>/periodic/update-stamp, touched by apt's own apt.systemd.daily
+//     only after its `apt-get update` exits successfully. Present on hosts
+//     with APT::Periodic::Update-Package-Lists enabled, with or without
+//     update-notifier-common.
+//   - the lists directory itself: apt downloads into partial/ and renames
+//     each replaced index into lists/, which moves the directory's mtime.
 //
-// The remaining blind spot is honest and bounded: on a host without
-// update-notifier-common whose every configured suite is frozen, no index is
-// ever replaced and the age keeps growing. That reports the cache as old,
-// which is the safe direction — it never claims a stale cache is fresh.
+// Signals deliberately NOT used, checked against apt's source:
+//
+//   - lists/partial/: pkgAcquire creates and removes a
+//     .apt-acquire-privs-test file there at the start of every run as root
+//     (CheckDropPrivsMustBeDisabled), before anything is fetched, so it moves
+//     even when the update then fails offline. Using it would report a stale
+//     cache as fresh.
+//   - lists/*_InRelease mtimes: on an If-Modified-Since hit apt keeps the
+//     existing file untouched, and a replaced one gets the server's
+//     Last-Modified as its mtime. It never says more than the lists
+//     directory, which the same replacement already moved.
+//   - /var/cache/apt/pkgcache.bin: `apt update` rebuilds it whether or not the
+//     download succeeded, and so does any apt run after dpkg's status changed
+//     (an `apt install` with no update at all). Same false-fresh problem.
+//
+// The remaining blind spot is honest and bounded: on a host with neither
+// stamp whose every configured suite is unchanged since the last fetch, a
+// successful `apt update` replaces nothing and records nothing, so the age
+// keeps growing. That reports the cache as old, which is the safe direction —
+// it never claims a stale cache is fresh.
 func aptCacheRefreshedAt(listsDir string) time.Time {
 	var newest time.Time
 	consider := func(path string) {
@@ -112,9 +132,10 @@ func aptCacheRefreshedAt(listsDir string) time.Time {
 		}
 	}
 	// apt's own layout: Dir::State is the parent of Dir::State::lists.
-	consider(filepath.Join(filepath.Dir(listsDir), "periodic", "update-success-stamp"))
+	periodic := filepath.Join(filepath.Dir(listsDir), "periodic")
+	consider(filepath.Join(periodic, "update-success-stamp"))
+	consider(filepath.Join(periodic, "update-stamp"))
 	consider(listsDir)
-	consider(filepath.Join(listsDir, "partial"))
 	return newest
 }
 
@@ -167,13 +188,43 @@ func parseDpkgStatus(path string) (map[string]string, error) {
 	return installed, scanner.Err()
 }
 
-// aptCandidate is the highest version found for one package across every
-// readable list file, together with the configured source that carried it —
-// a package can appear in more than one enabled repo (e.g. both a distro's
-// main archive and its backports suite) at different versions.
+// aptCandidate is one version of a package found in a list file, together
+// with the configured source that carried it.
 type aptCandidate struct {
 	version string
 	source  aptSource
+}
+
+// aptCandidates keeps, per package, the highest version apt would install on
+// its own (automatic) and the highest one only reachable by asking for it
+// explicitly (from a NotAutomatic suite such as Ubuntu's backports) — a
+// package can appear in more than one enabled repo at different versions,
+// and a single "highest anywhere" hides which of the two apt will take.
+type aptCandidates struct {
+	automatic, notAutomatic *aptCandidate
+}
+
+// pending decides what, if anything, is an update for installedVersion.
+//
+// An automatic candidate newer than the installed version is the pending
+// update, even when a NotAutomatic suite offers something newer still: that
+// is what `apt upgrade` installs (noble-updates over noble-backports). Only
+// when no automatic candidate is newer does a newer NotAutomatic one get
+// reported, flagged automatic=false so it is never counted as pending.
+func (c aptCandidates) pending(installedVersion string) (aptCandidate, bool, bool) {
+	if c.automatic != nil && debversion.Compare(c.automatic.version, installedVersion) > 0 {
+		return *c.automatic, true, true
+	}
+	if c.notAutomatic != nil && debversion.Compare(c.notAutomatic.version, installedVersion) > 0 {
+		return *c.notAutomatic, false, true
+	}
+	return aptCandidate{}, false, false
+}
+
+func keepHighest(current **aptCandidate, candidate aptCandidate) {
+	if *current == nil || debversion.Compare(candidate.version, (*current).version) > 0 {
+		*current = &candidate
+	}
 }
 
 // candidateVersionsForSources reads only list files backed by currently
@@ -181,15 +232,15 @@ type aptCandidate struct {
 // source is removed; treating those as current makes the candidates lie. If
 // source configuration is unavailable, callers may deliberately retain the
 // old cache-only behavior by passing filterLists=false — the candidate then
-// carries no source, and the origin attributes are omitted rather than
-// guessed from the file name.
-func candidateVersionsForSources(listsDir string, sources map[string]aptSource, filterLists bool) (map[string]aptCandidate, error) {
+// carries no source, counts as automatic, and the origin attributes are
+// omitted rather than guessed from the file name.
+func candidateVersionsForSources(listsDir string, sources map[string]aptSource, filterLists bool, suites *aptSuitePolicy) (map[string]aptCandidates, error) {
 	entries, err := os.ReadDir(listsDir)
 	if err != nil {
 		return nil, err
 	}
 
-	candidates := map[string]aptCandidate{}
+	candidates := map[string]aptCandidates{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), "_Packages") {
 			continue
@@ -198,15 +249,20 @@ func candidateVersionsForSources(listsDir string, sources map[string]aptSource, 
 		if filterLists && !matched {
 			continue
 		}
+		automatic := suites.automatic(source)
 
 		pkgs, err := parsePackagesFile(filepath.Join(listsDir, e.Name()))
 		if err != nil {
 			continue
 		}
 		for name, version := range pkgs {
-			if current, ok := candidates[name]; !ok || debversion.Compare(version, current.version) > 0 {
-				candidates[name] = aptCandidate{version: version, source: source}
+			current := candidates[name]
+			if automatic {
+				keepHighest(&current.automatic, aptCandidate{version: version, source: source})
+			} else {
+				keepHighest(&current.notAutomatic, aptCandidate{version: version, source: source})
 			}
+			candidates[name] = current
 		}
 	}
 	return candidates, nil
@@ -239,9 +295,8 @@ func matchingAptSource(listName string, sources map[string]aptSource) (aptSource
 // yes`, which Ubuntu also sets, only re-enables upgrades for packages whose
 // installed version already came from that suite — which is not knowable from
 // dpkg's database, so it is not claimed here.) The newer version is really
-// there, so it is still reported; what the suite attributes add is where it
-// comes from and that apt will not take it by itself, instead of presenting
-// an unactionable version jump as a pending update.
+// there, so it is still reported when nothing apt would take is newer — but
+// as automatic=false, never as a pending update.
 type aptSuitePolicy struct {
 	listsDir string
 	known    map[string]bool

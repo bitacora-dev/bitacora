@@ -15,14 +15,19 @@ Four independent sources, each degrading on its own:
   ordering rules (`internal/debversion`), not plain string comparison,
   so "1.9" is correctly older than "1.10". Reports `cache_age_seconds`
   alongside each result — a stale `apt update` means a stale answer, and
-  that's surfaced, not hidden. The age comes from the signals apt moves
-  when it refreshes (`periodic/update-success-stamp`, the lists directory
-  and its `partial/`), never from the `*_Packages` mtimes: apt preserves
-  each index's remote `Last-Modified`, so a suite that never republishes
-  keeps its publication date forever. Each item also reports
-  `candidate_suite` and `candidate_automatic`, because a candidate coming
-  from a `NotAutomatic` suite (Ubuntu's backports) is pinned below the
-  release pocket and `apt upgrade` will not install it.
+  that's surfaced, not hidden. The age comes from signals that only move
+  when an update succeeded or replaced an index
+  (`periodic/update-success-stamp`, `periodic/update-stamp`, the lists
+  directory), never from the `*_Packages` mtimes: apt preserves each
+  index's remote `Last-Modified`, so a suite that never republishes keeps
+  its publication date forever. `lists/partial/`, `*_InRelease` mtimes and
+  `pkgcache.bin` are deliberately not used — apt moves them on failed runs
+  too, or they add nothing (see `aptCacheRefreshedAt`). Each item also
+  reports `candidate_suite` and `candidate_automatic`: the pending update
+  is the highest candidate apt would install on its own, and a newer one
+  from a `NotAutomatic` suite (Ubuntu's backports, which `apt upgrade`
+  never installs) is only reported, as `candidate_automatic=false`, when
+  nothing automatic is newer than the installed version.
 - **dnf** (`dnf.go`): reads the spool entry the new `bitacora-dnf`
   helper writes after running `dnf check-update` (ADR-0005) — parsing
   DNF's repository metadata format directly isn't reasonable without a

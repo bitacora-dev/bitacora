@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aggregateCPUPoints, groupCPUCores, isolatedCPUCount, readCPUPanelPreferences } from "./CPUCorePanel";
+import type { Inventory } from "../api";
+import { aggregateCPUPoints, groupCPUCores, isolatedCPUCount, readCPUPanelPreferences, withTopologyOnlyCPUs } from "./CPUCorePanel";
 
 describe("groupCPUCores", () => {
   it("groups hyperthread siblings by core_id without losing their individual series", () => {
@@ -20,6 +21,129 @@ describe("groupCPUCores", () => {
     expect(groups[0].cpus.map((series) => series.cpu)).toEqual(["0", "1"]);
     expect(groups[0].type).toBe("p-core");
     expect(groups[1].cpus.map((series) => series.cpu)).toEqual(["2"]);
+  });
+});
+
+describe("offline CPUs", () => {
+  // The real icloudserver layout: eight SMT P-cores numbered 0,4,8,...,28
+  // over cpu0..cpu15, then single-thread E-cores from core 32 over
+  // cpu16..cpu31. cpu8 and cpu9 are the two threads of core 16, offlined
+  // because that P-core is degraded.
+  const raptorLake = (offline: string[]): Inventory => ({
+    host_id: "host-a", kind: "cpu_topology", reported_at: "2026-10-08T10:00:00Z", schema: 1,
+    items: Array.from({ length: 32 }, (_unused, cpu) => ({
+      id: `cpu${cpu}`,
+      name: `cpu${cpu}`,
+      attrs: {
+        core_id: String(cpu < 16 ? 4 * Math.floor(cpu / 2) : 16 + cpu),
+        core_type: cpu < 16 ? "p-core" : "e-core",
+        online: offline.includes(String(cpu)) ? "false" : "true",
+        ...(offline.includes(String(cpu)) ? { core_id_inferred: "true" } : {}),
+      },
+    })),
+  });
+  const series = (cpus: string[]) => cpus.map((cpu) => ({ cpu, points: [{ ts: "2026-10-08T10:00:00Z", value: 0.1 }] }));
+
+  it("keeps an offline core's threads together and off every other core", () => {
+    const groups = groupCPUCores(series(["4", "5", "8", "9", "10", "11"]), raptorLake(["8", "9"]));
+
+    const offline = groups.filter((group) => !group.online);
+    expect(offline).toHaveLength(1);
+    expect(offline[0].id).toBe("16");
+    expect(offline[0].cpus.map((cpu) => cpu.cpu)).toEqual(["8", "9"]);
+    expect(offline[0].type).toBe("p-core");
+
+    // cpu4 and cpu5 are alive at 15.6% and 6%: their core is core 8, which
+    // is also the number cpu8 carries. It must stay online and keep exactly
+    // its own two threads.
+    const core8 = groups.find((group) => group.id === "8" && group.online);
+    expect(core8?.cpus.map((cpu) => cpu.cpu)).toEqual(["4", "5"]);
+    expect(core8?.offline).toEqual([]);
+  });
+
+  it("draws an offline core even once its last samples have aged out", () => {
+    const groups = groupCPUCores(series(["4", "5"]), raptorLake(["8", "9"]));
+
+    const core16 = groups.find((group) => group.id === "16");
+    expect(core16?.online).toBe(false);
+    expect(core16?.cpus.map((cpu) => cpu.cpu)).toEqual(["8", "9"]);
+    expect(core16?.cpus.every((cpu) => cpu.points.length === 0)).toBe(true);
+  });
+
+  it("marks a single downed thread on the thread, not on its running core", () => {
+    const groups = groupCPUCores(series(["4", "5"]), raptorLake(["5"]));
+
+    const core8 = groups.find((group) => group.id === "8");
+    expect(core8?.online).toBe(true);
+    expect(core8?.offline).toEqual(["5"]);
+  });
+
+  it("gives every group its own render key even when two share an id", () => {
+    // A CPU with no topology row at all falls back to its own number as id,
+    // which is also some other core's core_id. Distinct keys are what keeps
+    // the two from being drawn as one card.
+    const groups = groupCPUCores(series(["4", "5", "8"]), {
+      host_id: "host-a", kind: "cpu_topology", reported_at: "2026-10-08T10:00:00Z", schema: 1,
+      items: [
+        { id: "cpu4", name: "cpu4", attrs: { core_id: "8", core_type: "p-core", online: "true" } },
+        { id: "cpu5", name: "cpu5", attrs: { core_id: "8", core_type: "p-core", online: "true" } },
+      ],
+    });
+
+    expect(groups.map((group) => group.id)).toEqual(["8", "8"]);
+    expect(new Set(groups.map((group) => group.key)).size).toBe(2);
+    expect(groups[0].cpus.map((cpu) => cpu.cpu)).toEqual(["4", "5"]);
+    expect(groups[1].cpus.map((cpu) => cpu.cpu)).toEqual(["8"]);
+  });
+
+  it("does not present a reconstructed core id as one the kernel reported", () => {
+    const groups = groupCPUCores(series(["4", "5"]), raptorLake(["8", "9"]));
+
+    expect(groups.find((group) => group.id === "16")?.reportedID).toBe(false);
+    expect(groups.find((group) => group.id === "8")?.reportedID).toBe(true);
+    // One real sibling is enough: core 8 keeps its kernel id with cpu5 down.
+    expect(groupCPUCores(series(["4", "5"]), raptorLake(["5"])).find((group) => group.id === "8")?.reportedID).toBe(true);
+  });
+
+  it("draws a CPU the agent could not place as its own switched-off card", () => {
+    // cpu30 is offline with nothing to reconstruct its core from: the agent
+    // leaves core_id out instead of publishing a placeholder like 48.
+    const topology = raptorLake([]);
+    topology.items[30] = { id: "cpu30", name: "cpu30", attrs: { core_type: "unknown", online: "false" } };
+    const groups = groupCPUCores(series(["0", "1"]), topology);
+
+    const cpu30 = groups.find((group) => group.cpus.some((cpu) => cpu.cpu === "30"));
+    expect(cpu30?.key).toBe("cpu-30");
+    expect(cpu30?.online).toBe(false);
+    expect(cpu30?.reportedID).toBe(false);
+    expect(cpu30?.cpus.map((cpu) => cpu.cpu)).toEqual(["30"]);
+  });
+
+  it("orders cores by their lowest thread so a reconstructed core stays in place", () => {
+    const groups = groupCPUCores(series(["0", "1", "10", "11"]), raptorLake(["8", "9"]));
+
+    // 24 cores: 8 P + 16 E, in thread order, with the offlined one between
+    // its neighbours rather than wherever its core id happens to sort.
+    expect(groups).toHaveLength(24);
+    expect(groups.slice(0, 8).map((group) => group.id)).toEqual(["0", "4", "8", "12", "16", "20", "24", "28"]);
+    expect(groups[8].id).toBe("32");
+    expect(groups.map((group) => group.cpus[0].cpu)).toEqual(
+      Array.from({ length: 8 }, (_unused, core) => String(core * 2)).concat(Array.from({ length: 16 }, (_unused, core) => String(16 + core))),
+    );
+  });
+});
+
+describe("withTopologyOnlyCPUs", () => {
+  const topology = new Map([["0", { id: "cpu0", name: "cpu0", attrs: { core_id: "0", online: "true" } }], ["1", { id: "cpu1", name: "cpu1", attrs: { core_id: "0", online: "false" } }]]);
+
+  it("draws nothing when no CPU reports load at all", () => {
+    const empty: { cpu: string; points: { ts: string; value: number }[] }[] = [];
+    expect(withTopologyOnlyCPUs(empty, topology)).toBe(empty);
+  });
+
+  it("adds an empty series for every topology CPU the metrics lack", () => {
+    const sampled = [{ cpu: "0", points: [{ ts: "2026-10-08T10:00:00Z", value: 0.5 }] }];
+    expect(withTopologyOnlyCPUs(sampled, topology)).toEqual([...sampled, { cpu: "1", points: [] }]);
   });
 });
 

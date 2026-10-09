@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { JobOutputLine } from "../api";
-import { INVENTORY_STALE_AFTER_SECONDS, inventoryIsStale, linesForJob, packageActionVisibility, phaseAfterSuccessfulCacheRefresh } from "./PackageUpdatePanel";
+import { INVENTORY_STALE_AFTER_SECONDS, inventoryIsStale, linesForJob, packageActionVisibility, packageAttributeValue, phaseAfterSuccessfulCacheRefresh, splitPackageItems } from "./PackageUpdatePanel";
+import { en } from "../i18n/locales/en";
+import { es } from "../i18n/locales/es";
 
 describe("phaseAfterSuccessfulCacheRefresh", () => {
-  it("records an explicit recoverable state when a configured APT source remains stale", () => {
+  it("records an explicit recoverable state when the reported cache is still past the limit", () => {
     const staleInventory = {
       host_id: "host-a",
       kind: "package_update",
@@ -72,5 +74,29 @@ describe("inventoryIsStale", () => {
     expect(inventoryIsStale(undefined, now)).toBe(false);
     expect(inventoryIsStale("", now)).toBe(false);
     expect(inventoryIsStale("0001-01-01T00:00:00Z", now)).toBe(false);
+  });
+});
+
+describe("splitPackageItems", () => {
+  const item = (name: string, attrs: Record<string, string>) => ({ id: `apt:${name}`, name, attrs: { source: "apt", ...attrs } });
+
+  it("keeps NotAutomatic candidates out of the pending updates", () => {
+    const { pending, notAutomatic } = splitPackageItems([
+      item("bash", { candidate_suite: "noble-updates", candidate_automatic: "true" }),
+      item("cockpit", { candidate_suite: "noble-backports", candidate_automatic: "false" }),
+      item("legacy", {}),
+    ]);
+
+    expect(pending.map((entry) => entry.name)).toEqual(["bash", "legacy"]);
+    expect(notAutomatic.map((entry) => entry.name)).toEqual(["cockpit"]);
+  });
+});
+
+describe("packageAttributeValue", () => {
+  it("translates booleans instead of printing true/false", () => {
+    expect(packageAttributeValue("true", es)).toBe("Sí");
+    expect(packageAttributeValue("false", es)).toBe("No");
+    expect(packageAttributeValue("true", en)).toBe("Yes");
+    expect(packageAttributeValue("noble-updates", es)).toBe("noble-updates");
   });
 });

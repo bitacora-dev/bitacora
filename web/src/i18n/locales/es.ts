@@ -192,7 +192,7 @@ export const es: Dictionary = {
   actionRunning: "Operación en curso",
   actionRunningBody: "El host ha informado de que la operación está en curso.",
   refreshCompletedReviewPlan: "Caché refrescada. Revisa el plan actualizado y confírmalo de nuevo para aplicar.",
-  refreshCompletedStillStale: "El refresco terminó, pero al menos una fuente APT configurada sigue desactualizada (por ejemplo, por un refresco parcial o un fallo del servidor de la fuente). Aplicar actualizaciones continúa bloqueado. Reintenta el refresco después de resolver esa fuente.",
+  refreshCompletedStillStale: "El refresco terminó, pero la caché de paquetes informada sigue siendo más antigua que el límite: o este host todavía no ha informado de un inventario más reciente, o nada en él registró el refresco (sin marca de apt update y sin índices reemplazados). Aplicar actualizaciones continúa bloqueado. Reintenta el refresco cuando llegue un inventario más reciente.",
   packageActionComplete: "Operación completada correctamente.",
   packageActionFailed: "La operación falló",
   packageOperation: (operation) => operation === "REFRESH_PACKAGE_CACHE" ? "Refrescar caché de paquetes" : "Aplicar actualizaciones pendientes",

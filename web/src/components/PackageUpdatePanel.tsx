@@ -43,10 +43,13 @@ export function inventoryIsStale(reportedAt: string | undefined | null, now = Da
   return age !== null && age > INVENTORY_STALE_AFTER_SECONDS;
 }
 
-// A successful apt update can still leave one active source stale (for
-// example, a repository that failed during a partial update). Return to the
-// recoverable state so the stale explanation and refresh action remain
-// available; never silently strand the operator in a success notice.
+// A successful apt update can still leave the reported age above the limit.
+// The age no longer tracks per-source staleness — it tracks when apt last
+// refreshed, so this means the inventory on screen predates the refresh, or
+// nothing on the host recorded it (the update stamp ships with
+// update-notifier-common, and an index nobody republished is never replaced).
+// Return to the recoverable state so the stale explanation and refresh action
+// remain available; never silently strand the operator in a success notice.
 export function phaseAfterSuccessfulCacheRefresh(inventory: Inventory | null, maxAge: number): Phase {
   const age = cacheAge(inventory);
   return age !== null && age > maxAge ? "refresh_still_stale" : "refreshed";

@@ -192,7 +192,7 @@ export const en: Dictionary = {
   actionRunning: "Operation running",
   actionRunningBody: "The host has reported that the operation is running.",
   refreshCompletedReviewPlan: "Cache refreshed. Review the updated plan and confirm again to apply it.",
-  refreshCompletedStillStale: "The refresh completed, but at least one configured APT source is still stale (for example, because of a partial refresh or source-server failure). Applying updates remains blocked. Retry the refresh after resolving that source.",
+  refreshCompletedStillStale: "The refresh completed, but the reported package cache is still older than the limit: either this host has not reported a newer inventory yet, or nothing on it recorded the refresh (no apt update stamp, and no index replaced). Applying updates remains blocked. Retry the refresh once a newer inventory arrives.",
   packageActionComplete: "Operation completed successfully.",
   packageActionFailed: "The operation failed",
   packageOperation: (operation) => operation === "REFRESH_PACKAGE_CACHE" ? "Refresh package cache" : "Apply pending updates",

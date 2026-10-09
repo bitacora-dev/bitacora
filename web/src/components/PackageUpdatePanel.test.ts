@@ -3,7 +3,7 @@ import type { JobOutputLine } from "../api";
 import { INVENTORY_STALE_AFTER_SECONDS, inventoryIsStale, linesForJob, packageActionVisibility, phaseAfterSuccessfulCacheRefresh } from "./PackageUpdatePanel";
 
 describe("phaseAfterSuccessfulCacheRefresh", () => {
-  it("records an explicit recoverable state when a configured APT source remains stale", () => {
+  it("records an explicit recoverable state when the reported cache is still past the limit", () => {
     const staleInventory = {
       host_id: "host-a",
       kind: "package_update",

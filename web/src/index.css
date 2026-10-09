@@ -445,44 +445,168 @@ body {
 
 .cpu-core-panel {
   display: grid;
+  align-content: start;
+  gap: 0.75rem;
   min-width: 0;
   padding: 1rem;
 }
 
 .cpu-core-panel .panel-title-row {
-  margin-bottom: 0.85rem;
+  margin-bottom: 0;
 }
 
-.cpu-core-panel-header,
-.cpu-core-header-meta,
-.cpu-core-controls,
+.cpu-core-panel-header {
+  display: flex;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.cpu-core-identity {
+  min-width: 0;
+}
+
+.cpu-core-header-meta {
+  display: flex;
+  justify-content: end;
+  gap: 1.1rem;
+  margin: 0;
+}
+
+.cpu-core-header-meta div {
+  display: grid;
+  justify-items: end;
+  gap: 0.1rem;
+}
+
+.cpu-core-header-meta dt {
+  color: var(--dim);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cpu-core-header-meta dd {
+  margin: 0;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cpu-core-power { color: var(--gold); }
+.cpu-core-temperature { color: var(--cyan); }
+
+.cpu-core-temperature small {
+  display: block;
+  color: var(--dim);
+  font-size: 0.62rem;
+  font-weight: 400;
+  text-transform: none;
+}
+
+/* Total load is the first answer the panel owes: one wide bar and one number
+   above the per-core detail, as the reference dashboard does. */
+.cpu-total-load {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.cpu-total-load-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.cpu-total-load-head strong {
+  color: var(--text);
+  font-size: 1.45rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.cpu-core-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
 .cpu-core-controls label {
   display: flex;
   align-items: center;
+  min-width: 0;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
-.cpu-core-header-meta { justify-content: end; gap: 0.5rem; }
-
-/* Reserved so a later real temperature reading does not reflow the header. */
-.cpu-temperature-slot { display: block; width: 3.5rem; min-height: 1rem; }
-
-.cpu-core-controls { justify-content: space-between; gap: 0.65rem; margin-bottom: 0.85rem; }
-
-.cpu-core-controls label { min-width: 0; gap: 0.45rem; color: var(--muted); font-size: 0.78rem; }
-
-.cpu-core-controls select,
-.cpu-details-toggle {
+.cpu-core-controls select {
   min-height: 2rem;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-strong);
   color: var(--text);
   font: inherit;
+  padding: 0 0.45rem;
 }
 
-.cpu-core-controls select { padding: 0 0.45rem; }
-.cpu-details-toggle { cursor: pointer; padding: 0.25rem 0.65rem; font-size: 0.78rem; }
+/* Shared disclosure button style; ContainerPanel reuses it. */
+.cpu-details-toggle {
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.65rem;
+}
+
 .cpu-details-toggle:hover { border-color: var(--cyan); }
+
+/* The dot says "this panel is receiving samples" and the sentence beside it
+   says how old the newest one is. Colour alone would claim freshness the page
+   cannot know once the agent goes quiet. */
+.cpu-core-refresh {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--dim);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cpu-core-pulse {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 99px;
+  background: var(--green);
+  animation: cpu-pulse 2s ease-in-out infinite;
+}
+
+.cpu-core-refresh--stale { color: var(--gold); }
+.cpu-core-refresh--stale .cpu-core-pulse { background: var(--gold); animation: none; }
+
+@keyframes cpu-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+.cpu-core-reservations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
 
 .cpu-core-model,
 .cpu-core-empty {
@@ -554,106 +678,204 @@ body {
 .motherboard-temperatures li { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; color: var(--muted); font-size: 0.8rem; }
 .motherboard-temperatures li strong { color: var(--cyan); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.cpu-core-grid {
+/* One compact row per physical core, one thin bar per logical CPU inside it.
+   The previous card grid spent a whole bordered box on each core, so a
+   sixteen-core host could not be read without scrolling. */
+/* No inner scroll: a clipped half-row reads as a rendering fault, and the
+   whole point of this panel is seeing every core at once. */
+.cpu-core-rows {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
   align-content: start;
-  gap: 0.65rem;
-  max-height: 28.5rem;
-  overflow: auto;
-  padding-right: 0.2rem;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.cpu-core {
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-strong);
-  padding: 0.65rem;
-}
-
-.cpu-core-heading,
-.cpu-thread {
-  display: flex;
+.cpu-core-row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 11rem) minmax(0, 1fr);
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.6rem;
+  border-radius: 6px;
+  padding: 0.25rem 0.35rem;
 }
 
-.cpu-core-heading {
-  justify-content: space-between;
+.cpu-core-row:nth-child(odd) {
+  background: var(--panel-strong);
+}
+
+/* A core the kernel took offline is dimmed and labelled, never hidden: a
+   missing row reads as a CPU that never existed. */
+.cpu-core-row--offline {
+  opacity: 0.45;
+}
+
+.cpu-core-row-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
   min-width: 0;
+  gap: 0.3rem;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.7rem;
 }
 
-.cpu-core-heading strong {
-  overflow: hidden;
+.cpu-core-row-label strong {
   color: var(--text);
-  font-size: 0.82rem;
-  text-overflow: ellipsis;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.cpu-thread-list {
+.cpu-core-row-type,
+.cpu-core-row-ht {
+  color: var(--dim);
+}
+
+.cpu-core-row-ht {
+  font-variant-numeric: tabular-nums;
+}
+
+.cpu-core-row-state {
+  color: var(--gold);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cpu-core-row-threads {
   display: grid;
-  gap: 0.4rem;
-  margin-top: 0.65rem;
+  gap: 0.22rem;
+  min-width: 0;
 }
 
-.cpu-thread {
-  color: var(--muted);
-  font-size: 0.72rem;
+.cpu-thread-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.45rem;
 }
 
-.cpu-thread > span:first-child {
-  flex: 0 0 auto;
-}
-
-.cpu-thread-meter {
+/* Only a host with isolated CPUs pays for the tag column. Reserving it for
+   every host would shorten every bar on the dashboard to label a state most
+   machines never reach, and leaving it unreserved shortens exactly the one
+   bar that carries the tag. */
+.cpu-core-rows--reserved .cpu-thread-row {
   position: relative;
-  height: 0.42rem;
+  padding-right: 5rem;
+}
+
+.cpu-core-rows--reserved .cpu-thread-isolated {
+  position: absolute;
+  right: 0;
+}
+
+/* Always rendered, empty on a core with a single thread, so the bars of a
+   P-core row and an E-core row start on the same vertical line. */
+.cpu-thread-id {
+  flex: 0 0 auto;
+  min-width: 1.6rem;
+  color: var(--dim);
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.cpu-thread-value {
+  flex: 0 0 auto;
+  min-width: 3.2rem;
+  color: var(--text);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.cpu-thread-row--offline .cpu-thread-value {
+  color: var(--dim);
+}
+
+.cpu-meter {
+  position: relative;
+  height: 0.5rem;
   flex: 1 1 auto;
-  min-width: 1rem;
+  min-width: 1.5rem;
   overflow: hidden;
   border-radius: 99px;
   background: var(--line-soft);
 }
 
-.cpu-thread-meter > span {
+.cpu-meter--total {
+  height: 0.85rem;
+}
+
+/* An offline thread inside an otherwise running core needs the dim treatment
+   on its own; a fully offline core already carries it on the row, and
+   stacking both made the empty track disappear altogether. */
+.cpu-meter--offline {
+  opacity: 0.4;
+}
+
+.cpu-core-row--offline .cpu-meter--offline {
+  opacity: 1;
+}
+
+/* The width transition interpolates between two measured samples so the bar
+   travels instead of snapping. transition-duration comes from the component
+   so the value stays next to the comment that explains the cadence. */
+.cpu-meter-fill {
   display: block;
   height: 100%;
   border-radius: inherit;
   background: var(--cyan);
+  transition-property: width;
+  transition-timing-function: ease-out;
 }
 
-.cpu-thread-peak {
+.cpu-meter--high .cpu-meter-fill { background: var(--gold); }
+.cpu-meter--critical .cpu-meter-fill { background: var(--red); }
+
+.cpu-meter-peak {
   position: absolute;
-  top: -0.22rem;
-  bottom: -0.22rem;
+  top: -0.25rem;
+  bottom: -0.25rem;
   left: min(calc(var(--cpu-peak) - 1px), calc(100% - 2px));
   width: 2px;
   background: var(--gold);
   box-shadow: 0 0 0 1px var(--panel-strong);
 }
 
-.cpu-thread-meter--high > span,
-.cpu-thread-meter--critical > span { background: var(--gold); }
-.cpu-thread-meter--critical > span { background: var(--red); }
-
-.cpu-thread strong {
-  min-width: 3.6rem;
-  color: var(--text);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
+.cpu-load-history {
+  display: grid;
+  gap: 0.3rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
 }
 
-.cpu-thread small {
-  min-width: 4.5rem;
+.cpu-load-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.72rem;
+}
+
+.cpu-load-history-head strong {
+  color: var(--text);
+  font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
-  text-align: right;
+}
+
+.cpu-load-history-canvas {
+  height: 3.75rem;
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cpu-meter-fill { transition-property: none; }
+  .cpu-core-pulse { animation: none; }
 }
 
 .container-panel {
@@ -1813,34 +2035,19 @@ body {
 /* Reserved CPUs read as permanently idle unless they are labelled. */
 .cpu-core-isolated {
   color: var(--gold);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
+}
+
+.cpu-core-offline-count {
+  color: var(--dim);
 }
 
 .cpu-thread-isolated {
+  flex: 0 0 auto;
   color: var(--gold);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   font-weight: 700;
-}
-
-/* A core the kernel has taken down reads as switched off rather than as a
-   core that is merely idle or still waiting for its first samples. */
-.cpu-core--offline {
-  border-style: dashed;
-  background: transparent;
-  opacity: 0.6;
-}
-
-.cpu-core-offline,
-.cpu-thread-offline {
-  color: var(--dim);
-  text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 0.68rem;
-  font-weight: 700;
-  white-space: nowrap;
+  text-transform: uppercase;
 }
 
 .host-metadata--stale,
@@ -2119,6 +2326,25 @@ body {
   .power-charge { min-width: 0; }
 
   .tunnel-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .cpu-core-panel-header,
+  .cpu-core-controls {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .cpu-core-header-meta {
+    justify-content: start;
+  }
+
+  .cpu-core-header-meta div {
+    justify-items: start;
+  }
+
+  .cpu-core-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+  }
 }
 
 @media (orientation: portrait) and (min-width: 900px) and (min-height: 1500px) {

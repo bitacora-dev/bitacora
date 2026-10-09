@@ -26,6 +26,7 @@ package pkgupdates
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/collector"
@@ -35,6 +36,8 @@ import (
 const (
 	defaultDpkgStatus       = "/var/lib/dpkg/status"
 	defaultAptListsDir      = "/var/lib/apt/lists"
+	defaultAptSourcesList   = "/etc/apt/sources.list"
+	defaultAptSourcesDir    = "/etc/apt/sources.list.d"
 	defaultSpoolDir         = "/var/lib/bitacora/spool"
 	defaultUnraidPluginsDir = "/boot/config/plugins"
 )
@@ -43,18 +46,33 @@ const (
 type Collector struct {
 	dpkgStatus        string
 	aptListsDir       string
+	aptSourcesList    string
+	aptSourcesDir     string
 	spoolDir          string
 	unraidPluginsDir  string
 	dockerMetadataURL string
 	httpClient        *http.Client
 	registry          *registryClient
 	hostID            string
+	actions           ActionAvailability
+}
+
+// ActionAvailability is local configuration reported only so the UI can omit
+// controls the host will reject. It is descriptive metadata, never an order.
+type ActionAvailability struct {
+	RefreshPackageCache        bool
+	ApplyPendingPackageUpdates bool
+	PackageCacheMaxAgeSeconds  int
 }
 
 // New returns a collector with production defaults.
-func New() *Collector {
+func New(actionAvailability ...ActionAvailability) *Collector {
 	client := &http.Client{Timeout: 10 * time.Second}
-	return &Collector{httpClient: client, registry: &registryClient{HTTPClient: client}}
+	collector := &Collector{httpClient: client, registry: &registryClient{HTTPClient: client}}
+	if len(actionAvailability) > 0 {
+		collector.actions = actionAvailability[0]
+	}
+	return collector
 }
 
 // Name implements collector.Collector.
@@ -73,6 +91,19 @@ func (c *Collector) Requires() []collector.Capability { return nil }
 func (c *Collector) Init(ctx context.Context, cfg collector.Config, host *collector.HostInfo) error {
 	c.dpkgStatus = configuredPath(cfg, "dpkg_status", defaultDpkgStatus)
 	c.aptListsDir = configuredPath(cfg, "apt_lists_dir", defaultAptListsDir)
+	c.aptSourcesList = configuredPath(cfg, "apt_sources_list", defaultAptSourcesList)
+	c.aptSourcesDir = configuredPath(cfg, "apt_sources_dir", defaultAptSourcesDir)
+	// A caller overriding only the lists directory (the existing test and
+	// embedding contract) has not supplied a matching APT root. Keep the
+	// cache-only behavior in that case rather than accidentally reading the
+	// machine's /etc/apt configuration against a synthetic cache directory.
+	if _, listsOverridden := cfg["apt_lists_dir"]; listsOverridden {
+		_, sourcesListOverridden := cfg["apt_sources_list"]
+		_, sourcesDirOverridden := cfg["apt_sources_dir"]
+		if !sourcesListOverridden && !sourcesDirOverridden {
+			c.aptSourcesList, c.aptSourcesDir = "", ""
+		}
+	}
 	c.spoolDir = configuredPath(cfg, "spool_dir", defaultSpoolDir)
 	c.unraidPluginsDir = configuredPath(cfg, "unraid_plugins_dir", defaultUnraidPluginsDir)
 	if v, ok := cfg["docker_socket_proxy_url"].(string); ok {
@@ -94,10 +125,17 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 
 	now := time.Now()
 	var items []schema.InventoryItem
-	items = append(items, aptItems(c.dpkgStatus, c.aptListsDir, now)...)
+	items = append(items, aptItemsForSources(c.dpkgStatus, c.aptListsDir, c.aptSourcesList, c.aptSourcesDir, now)...)
 	items = append(items, dnfItems(c.spoolDir)...)
 	items = append(items, unraidItems(ctx, c.unraidPluginsDir, c.httpClient)...)
 	items = append(items, dockerItems(ctx, c.dockerMetadataURL, c.registry)...)
+	if c.actions.RefreshPackageCache || c.actions.ApplyPendingPackageUpdates || c.actions.PackageCacheMaxAgeSeconds > 0 {
+		items = append(items, schema.InventoryItem{ID: "package-actions", Name: "package-actions", Attrs: schema.Labels{
+			"refresh_package_cache":         strconv.FormatBool(c.actions.RefreshPackageCache),
+			"apply_pending_package_updates": strconv.FormatBool(c.actions.ApplyPendingPackageUpdates),
+			"package_cache_max_age_seconds": strconv.Itoa(c.actions.PackageCacheMaxAgeSeconds),
+		}})
+	}
 
 	sink.Inventory(schema.Inventory{
 		HostID:     c.hostID,

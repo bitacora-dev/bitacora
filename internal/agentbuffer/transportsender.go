@@ -27,6 +27,19 @@ func TransportSender(client *transport.Client, hostID string) Sender {
 	}
 }
 
+// TransportPoller sends an empty, valid ingest batch to receive an
+// IngestResponse when no telemetry is buffered. It keeps the existing
+// agent-initiated channel and cannot execute a received operation.
+func TransportPoller(client *transport.Client, hostID string) func(context.Context) error {
+	return func(ctx context.Context) error {
+		_, err := client.Send(ctx, ItemsToBatch(hostID, nil))
+		if err != nil {
+			return fmt.Errorf("polling ingest response: %w", err)
+		}
+		return nil
+	}
+}
+
 func ItemsToBatch(hostID string, items []Item) *bitacorapb.Batch {
 	batch := &bitacorapb.Batch{
 		BatchId: ulid.Make().String(),
@@ -42,9 +55,19 @@ func ItemsToBatch(hostID string, items []Item) *bitacorapb.Batch {
 			batch.LogLines = append(batch.LogLines, logLineToProto(it.LogLine))
 		case it.Inventory != nil:
 			batch.Inventories = append(batch.Inventories, inventoryToProto(it.Inventory))
+		case it.Job != nil:
+			batch.Jobs = append(batch.Jobs, jobToProto(it.Job))
 		}
 	}
 	return batch
+}
+
+func jobToProto(job *schema.Job) *bitacorapb.Job {
+	return &bitacorapb.Job{Id: job.ID, JobName: job.JobName, HostId: job.HostID,
+		StartedAtMs: job.StartedAt.UnixMilli(), FinishedAtMs: job.FinishedAt.UnixMilli(),
+		DurationMs: int64(job.DurationSecond * 1000), Status: string(job.Status),
+		ExitCode: int32(job.ExitCode), Signal: job.Signal, PeerHostId: job.PeerHostID,
+		Trigger: job.Trigger, NextExpectedMs: job.NextExpected.UnixMilli(), Schema: int32(job.Schema)}
 }
 
 func metricToProto(m *schema.Metric) *bitacorapb.Metric {

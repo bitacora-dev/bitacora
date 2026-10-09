@@ -1,0 +1,4 @@
+# Generated frontend assets are retained for go:embed (ADR-0001). When both
+# sides rebuild them, keep the current branch's artifact and regenerate after
+# the merge rather than resolving hashed files by hand (ADR-0020).
+internal/webui/dist/** merge=bitacora-ours-dist

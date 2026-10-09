@@ -5,6 +5,7 @@
 package extraction
 
 import (
+	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,13 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// defaultRuleFS contains the extraction rules shipped with the hub. Keeping
+// them embedded makes the production binary independent of its source tree;
+// operator-supplied rules are loaded separately from /etc/bitacora/rules.
+//
+//go:embed rules/*.yaml
+var defaultRuleFS embed.FS
 
 // EmitSpec is the "emit" block of a rule: what Event to build from a
 // match.
@@ -121,6 +129,38 @@ func LoadDir(dir string) ([]*Rule, error) {
 		rule, err := Parse(data)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		rules = append(rules, rule)
+	}
+	return rules, nil
+}
+
+// LoadDefaults returns the extraction rules shipped with Bitacora, in stable
+// filename order. Callers may append LoadDir's operator-owned rules after
+// these; user files are never written or overwritten by the hub.
+func LoadDefaults() ([]*Rule, error) {
+	entries, err := defaultRuleFS.ReadDir("rules")
+	if err != nil {
+		return nil, fmt.Errorf("reading embedded rules: %w", err)
+	}
+
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() && (strings.HasSuffix(entry.Name(), ".yaml") || strings.HasSuffix(entry.Name(), ".yml")) {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+
+	rules := make([]*Rule, 0, len(names))
+	for _, name := range names {
+		data, err := defaultRuleFS.ReadFile(filepath.Join("rules", name))
+		if err != nil {
+			return nil, fmt.Errorf("reading embedded rule %s: %w", name, err)
+		}
+		rule, err := Parse(data)
+		if err != nil {
+			return nil, fmt.Errorf("embedded rule %s: %w", name, err)
 		}
 		rules = append(rules, rule)
 	}

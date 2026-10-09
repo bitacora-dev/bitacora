@@ -34,12 +34,93 @@ func sampleEvent(id string, ts time.Time, hostID string) schema.Event {
 	}
 }
 
+func sampleRunningJob(id string, startedAt time.Time, hostID string) schema.Job {
+	return schema.Job{
+		ID:        id,
+		JobName:   "nightly-backup",
+		HostID:    hostID,
+		StartedAt: startedAt,
+		Status:    schema.JobRunning,
+		Schema:    schema.CurrentSchemaVersion,
+	}
+}
+
 // runConformanceTests exercises the Relational contract itself, so every
 // backend is held to exactly the same behavior (ADR-0003: "misma
 // interfaz... cobertura en CI equivalente"). newStore must return a fresh,
 // empty store — sqlite_test.go and postgres_test.go each supply their own
 // way of getting one.
 func runConformanceTests(t *testing.T, newStore func(t *testing.T) Relational) {
+	t.Run("JobLifecycleAndIncrementalOutput", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		startedAt := time.Date(2026, 9, 19, 1, 5, 12, 0, time.UTC)
+		running := sampleRunningJob("job-live", startedAt, "host-a")
+		if err := s.CreateJob(ctx, running); err != nil {
+			t.Fatalf("creating running job: %v", err)
+		}
+
+		got, ok, err := s.GetJob(ctx, "host-a", running.ID)
+		if err != nil || !ok {
+			t.Fatalf("getting running job: job=%+v ok=%t err=%v", got, ok, err)
+		}
+		if got.Status != schema.JobRunning || !got.FinishedAt.IsZero() {
+			t.Fatalf("unexpected running job: %+v", got)
+		}
+
+		for _, line := range []schema.JobOutputLine{
+			{JobID: running.ID, Sequence: 1, TS: startedAt, Stream: "stdout", Message: "started"},
+			{JobID: running.ID, Sequence: 2, TS: startedAt.Add(time.Second), Stream: "stderr", Message: "progress"},
+		} {
+			if err := s.AppendJobOutput(ctx, "host-a", line); err != nil {
+				t.Fatalf("appending output: %v", err)
+			}
+		}
+
+		first, next, err := s.ListJobOutput(ctx, "host-a", running.ID, 0, 1)
+		if err != nil || len(first) != 1 || first[0].Sequence != 1 || next != 1 {
+			t.Fatalf("first output page=%+v next=%d err=%v", first, next, err)
+		}
+		second, next, err := s.ListJobOutput(ctx, "host-a", running.ID, next, 10)
+		if err != nil || len(second) != 1 || second[0].Sequence != 2 || next != 2 {
+			t.Fatalf("incremental output page=%+v next=%d err=%v", second, next, err)
+		}
+
+		finished := running
+		finished.Status = schema.JobSuccess
+		finished.FinishedAt = startedAt.Add(2 * time.Minute)
+		finished.DurationSecond = 120
+		if err := s.FinishJob(ctx, finished); err != nil {
+			t.Fatalf("finishing job: %v", err)
+		}
+		if err := s.AppendJobOutput(ctx, "host-a", schema.JobOutputLine{JobID: running.ID, Sequence: 3, TS: finished.FinishedAt, Stream: "stdout", Message: "late"}); err == nil {
+			t.Fatal("expected output after terminal transition to be rejected")
+		}
+		if err := s.FinishJob(ctx, finished); err != nil {
+			t.Fatalf("replaying same terminal result must be idempotent: %v", err)
+		}
+		changed := finished
+		changed.Status = schema.JobFailed
+		if err := s.FinishJob(ctx, changed); err == nil {
+			t.Fatal("expected a different terminal result to be rejected")
+		}
+	})
+
+	t.Run("InsertJobKeepsHistoricalTerminalCompatibility", func(t *testing.T) {
+		s := newStore(t)
+		startedAt := time.Date(2026, 9, 19, 2, 0, 0, 0, time.UTC)
+		job := sampleRunningJob("historical-job", startedAt, "host-a")
+		job.Status = schema.JobSuccess
+		job.FinishedAt = startedAt.Add(time.Minute)
+		job.DurationSecond = 60
+		if err := s.InsertJob(context.Background(), job); err != nil {
+			t.Fatalf("inserting historical terminal job: %v", err)
+		}
+		got, ok, err := s.GetJob(context.Background(), "host-a", job.ID)
+		if err != nil || !ok || got.Status != schema.JobSuccess {
+			t.Fatalf("historical job was not persisted: job=%+v ok=%t err=%v", got, ok, err)
+		}
+	})
 	t.Run("InsertAndListEvents", func(t *testing.T) {
 		s := newStore(t)
 		ctx := context.Background()
@@ -102,6 +183,194 @@ func runConformanceTests(t *testing.T, newStore func(t *testing.T) Relational) {
 		}
 		if len(got) != 1 || got[0].ID != "evt-a" {
 			t.Fatalf("expected only host-a's event, got %+v", got)
+		}
+	})
+
+	// The dashboard's events panel asks for "the newest N", not "the last
+	// N minutes". These cases pin the part that makes that possible: no
+	// lower time bound at all, so an event from months ago is still the
+	// most recent event when nothing newer exists.
+	t.Run("ListLatestEventsHasNoLowerTimeBound", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		// Three distinct months, so the SQLite backend has to look past
+		// the newest month file to fill the limit.
+		instants := []time.Time{
+			time.Date(2025, 12, 31, 23, 59, 0, 0, time.UTC),
+			time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC),
+			time.Date(2026, 3, 2, 11, 0, 0, 0, time.UTC),
+			time.Date(2026, 7, 14, 6, 30, 0, 0, time.UTC),
+		}
+		for i, ts := range instants {
+			if err := s.InsertEvent(ctx, sampleEvent(fmt.Sprintf("latest-%d", i), ts, "host-a")); err != nil {
+				t.Fatalf("inserting event %d: %v", i, err)
+			}
+		}
+
+		got, err := s.ListLatestEvents(ctx, "host-a", 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"latest-3", "latest-2", "latest-1"}
+		if len(got) != len(want) {
+			t.Fatalf("expected %d events, got %d: %+v", len(want), len(got), got)
+		}
+		for i, id := range want {
+			if got[i].ID != id {
+				t.Fatalf("event %d = %q, want %q (order must be newest first): %+v", i, got[i].ID, id, got)
+			}
+		}
+		// The oldest event is over half a year older than the newest and
+		// still reachable: nothing here filters on "recent enough".
+		all, err := s.ListLatestEvents(ctx, "host-a", 10)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(all) != len(instants) {
+			t.Fatalf("expected every event with a limit above the row count, got %d", len(all))
+		}
+	})
+
+	t.Run("ListLatestEventsFiltersByHostAndBoundsTheLimit", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		ts := time.Date(2026, 8, 25, 1, 5, 12, 0, time.UTC)
+		if err := s.InsertEvent(ctx, sampleEvent("recent-a", ts, "host-a")); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := s.InsertEvent(ctx, sampleEvent("recent-b", ts.Add(time.Minute), "host-b")); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		got, err := s.ListLatestEvents(ctx, "host-a", 5)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 || got[0].ID != "recent-a" {
+			t.Fatalf("expected only host-a's event, got %+v", got)
+		}
+
+		every, err := s.ListLatestEvents(ctx, "", 5)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(every) != 2 {
+			t.Fatalf("an empty host id must mean every host, got %+v", every)
+		}
+
+		none, err := s.ListLatestEvents(ctx, "host-a", 0)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(none) != 0 {
+			t.Fatalf("a non-positive limit must return nothing, got %+v", none)
+		}
+	})
+
+	t.Run("ListLatestEventsOnAnEmptyStoreIsEmptyNotAnError", func(t *testing.T) {
+		got, err := newStore(t).ListLatestEvents(context.Background(), "host-a", 5)
+		if err != nil {
+			t.Fatalf("a freshly installed hub must not error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("expected no events, got %+v", got)
+		}
+	})
+
+	t.Run("ListLatestJobsOrdersByWhenTheOperationLastMoved", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		base := time.Date(2026, 5, 4, 2, 0, 0, 0, time.UTC)
+
+		// Two finished jobs and one still running. ListJobs keys off
+		// finished_at and cannot see the running one at all; the recent
+		// panel has to, and it sorts by started_at for that row.
+		for i, at := range []time.Time{base, base.Add(2 * time.Hour)} {
+			job := sampleRunningJob(fmt.Sprintf("done-%d", i), at, "host-a")
+			job.Status = schema.JobSuccess
+			job.FinishedAt = at.Add(10 * time.Minute)
+			job.DurationSecond = 600
+			if err := s.InsertJob(ctx, job); err != nil {
+				t.Fatalf("inserting finished job %d: %v", i, err)
+			}
+		}
+		if err := s.CreateJob(ctx, sampleRunningJob("in-flight", base.Add(5*time.Hour), "host-a")); err != nil {
+			t.Fatalf("creating running job: %v", err)
+		}
+		if err := s.CreateJob(ctx, sampleRunningJob("other-host", base.Add(6*time.Hour), "host-b")); err != nil {
+			t.Fatalf("creating other host's job: %v", err)
+		}
+
+		got, err := s.ListLatestJobs(ctx, "host-a", 5)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"in-flight", "done-1", "done-0"}
+		if len(got) != len(want) {
+			t.Fatalf("expected %d jobs, got %d: %+v", len(want), len(got), got)
+		}
+		for i, id := range want {
+			if got[i].ID != id {
+				t.Fatalf("job %d = %q, want %q: %+v", i, got[i].ID, id, got)
+			}
+		}
+
+		capped, err := s.ListLatestJobs(ctx, "host-a", 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(capped) != 1 || capped[0].ID != "in-flight" {
+			t.Fatalf("expected only the newest job, got %+v", capped)
+		}
+	})
+
+	t.Run("ListLatestJobsOnAFreshlyInstalledHostIsEmptyNotAnError", func(t *testing.T) {
+		got, err := newStore(t).ListLatestJobs(context.Background(), "host-a", 5)
+		if err != nil {
+			t.Fatalf("a host that has never run an operation must not error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("expected no jobs, got %+v", got)
+		}
+	})
+
+	t.Run("ListEventPageFiltersAndPaginates", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		ts := time.Date(2026, 8, 25, 1, 5, 12, 0, time.UTC)
+		for _, id := range []string{"page-a", "page-b", "page-c"} {
+			event := sampleEvent(id, ts, "host-a")
+			if err := s.InsertEvent(ctx, event); err != nil {
+				t.Fatalf("inserting %s: %v", id, err)
+			}
+		}
+		otherHost := sampleEvent("page-other-host", ts, "host-b")
+		if err := s.InsertEvent(ctx, otherHost); err != nil {
+			t.Fatalf("inserting other host event: %v", err)
+		}
+
+		page, total, err := s.ListEventPage(ctx, ts.Add(-time.Minute), ts.Add(time.Minute), "host-a", "", "", 2, 0)
+		if err != nil {
+			t.Fatalf("listing first page: %v", err)
+		}
+		if total != 3 || len(page) != 2 || page[0].ID != "page-c" || page[1].ID != "page-b" {
+			t.Fatalf("unexpected newest-first first page: events=%+v total=%d", page, total)
+		}
+
+		page, total, err = s.ListEventPage(ctx, ts.Add(-time.Minute), ts.Add(time.Minute), "host-a", "", "", 2, 2)
+		if err != nil {
+			t.Fatalf("listing offset page: %v", err)
+		}
+		if total != 3 || len(page) != 1 || page[0].ID != "page-a" {
+			t.Fatalf("unexpected offset page: events=%+v total=%d", page, total)
+		}
+
+		page, total, err = s.ListEventPage(ctx, ts.Add(-time.Minute), ts.Add(time.Minute), "host-a", "", "", 2, 4)
+		if err != nil {
+			t.Fatalf("listing empty page: %v", err)
+		}
+		if total != 3 || len(page) != 0 {
+			t.Fatalf("expected empty page after final offset: events=%+v total=%d", page, total)
 		}
 	})
 
@@ -275,6 +544,29 @@ func runConformanceTests(t *testing.T, newStore func(t *testing.T) Relational) {
 		invalid := schema.Inventory{HostID: "host-a"} // missing kind, reported_at, schema
 		if err := s.UpsertInventory(context.Background(), invalid); err == nil {
 			t.Fatal("expected an invalid inventory to be rejected before it touches storage")
+		}
+	})
+
+	t.Run("CreatesListsAndUpdatesHostMetadata", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		seenAt := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+		if err := s.CreateHost(ctx, "host-a", "Production"); err != nil {
+			t.Fatalf("creating host: %v", err)
+		}
+		if err := s.RecordHostManifest(ctx, "host-a", "web-01", "1.2.3", seenAt); err != nil {
+			t.Fatalf("recording manifest: %v", err)
+		}
+		hosts, err := s.ListHosts(ctx)
+		if err != nil {
+			t.Fatalf("listing hosts: %v", err)
+		}
+		if len(hosts) != 1 {
+			t.Fatalf("host count = %d, want 1", len(hosts))
+		}
+		got := hosts[0]
+		if got.ID != "host-a" || got.Name != "Production" || got.Hostname != "web-01" || got.AgentVersion != "1.2.3" || !got.LastSeenAt.Equal(seenAt) {
+			t.Fatalf("unexpected host: %+v", got)
 		}
 	})
 }

@@ -29,6 +29,11 @@ func (s JobStatus) valid() bool {
 	}
 }
 
+// Terminal reports whether the status permanently completes a Job.
+func (s JobStatus) Terminal() bool {
+	return s.valid() && s != JobRunning
+}
+
 // JobStats holds the extractor-populated statistics for a Job. Keys are
 // canonical when an extractor recognizes them (files_transferred,
 // bytes_transferred, files_deleted, files_checked, errors) and free-form
@@ -51,6 +56,29 @@ type JobLogRef struct {
 	BlockID string `json:"block_id"`
 	From    int    `json:"from"`
 	To      int    `json:"to"`
+}
+
+// JobOutputLine is one ordered line emitted while a Job is running. Sequence
+// is assigned by the producer and makes polling lossless across retries.
+type JobOutputLine struct {
+	JobID    string    `json:"job_id"`
+	Sequence int64     `json:"sequence"`
+	TS       time.Time `json:"ts"`
+	Stream   string    `json:"stream"`
+	Message  string    `json:"message"`
+}
+
+func (l JobOutputLine) Validate() error {
+	if l.JobID == "" {
+		return fmt.Errorf("job output: job_id is required")
+	}
+	if l.Sequence < 1 {
+		return fmt.Errorf("job output for %q: sequence must be positive", l.JobID)
+	}
+	if l.TS.IsZero() {
+		return fmt.Errorf("job output for %q: ts is required", l.JobID)
+	}
+	return nil
 }
 
 // Job is the canonical model for anything periodic: backups, syncs, scrubs,
@@ -89,6 +117,17 @@ func (j Job) Validate() error {
 	}
 	if !j.Status.valid() {
 		return fmt.Errorf("job %q: invalid status %q", j.ID, j.Status)
+	}
+	if j.Status == JobRunning && !j.FinishedAt.IsZero() {
+		return fmt.Errorf("job %q: running job cannot have finished_at", j.ID)
+	}
+	if j.Status.Terminal() {
+		if j.FinishedAt.IsZero() {
+			return fmt.Errorf("job %q: terminal job requires finished_at", j.ID)
+		}
+		if j.FinishedAt.Before(j.StartedAt) {
+			return fmt.Errorf("job %q: finished_at precedes started_at", j.ID)
+		}
 	}
 	if j.Schema < 1 {
 		return fmt.Errorf("job %q: schema must be >= 1", j.ID)

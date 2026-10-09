@@ -87,6 +87,31 @@ func TestStatfsUsage_RealMountpoint(t *testing.T) {
 	}
 }
 
+// Two directories on one filesystem are what a bind mount looks like to
+// statfs: they must report the same filesystem id, so a reader folds them
+// into one disk instead of counting the filesystem twice.
+func TestStatfsUsage_SameFilesystemSameID(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "a")
+	second := filepath.Join(root, "b")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	a, okA := statfsUsage(first)
+	b, okB := statfsUsage(second)
+	if !okA || !okB {
+		t.Fatal("expected statfs to succeed against real directories")
+	}
+	if a.fsID != b.fsID {
+		t.Fatalf("expected one filesystem id for one filesystem, got %q and %q", a.fsID, b.fsID)
+	}
+	if a.fsID != "" && len(a.fsID) != 16 {
+		t.Fatalf("expected a 16-hex-digit filesystem id, got %q", a.fsID)
+	}
+}
+
 func TestStatfsUsage_MissingPathFails(t *testing.T) {
 	_, ok := statfsUsage("/this/path/does/not/exist/anywhere")
 	if ok {
@@ -142,6 +167,9 @@ func TestCollector_CombinesMountsAndSMARTIdentity(t *testing.T) {
 	if attrs["capacity_bytes"] == "" || attrs["used_bytes"] == "" {
 		t.Fatalf("expected real statfs usage attrs, got %+v", attrs)
 	}
+	if want, _ := statfsUsage(realMount); attrs["fs_id"] != want.fsID {
+		t.Fatalf("expected fs_id %q from statfs, got %q", want.fsID, attrs["fs_id"])
+	}
 }
 
 func TestCollector_NoSMARTSpoolStillReportsMounts(t *testing.T) {
@@ -168,6 +196,98 @@ func TestCollector_NoSMARTSpoolStillReportsMounts(t *testing.T) {
 	}
 	if _, ok := items[0].Attrs["model"]; ok {
 		t.Fatalf("expected no model attr without SMART data, got %+v", items[0].Attrs)
+	}
+}
+
+func TestCollector_AnnotatesMDRAIDAndSnapRAIDMembers(t *testing.T) {
+	dir := t.TempDir()
+	rootMount := t.TempDir()
+	degradedMount := t.TempDir()
+	dataMount := t.TempDir()
+	parityMount := t.TempDir()
+	standaloneMount := t.TempDir()
+	mountsFile := filepath.Join(dir, "mounts")
+	mdstatFile := filepath.Join(dir, "mdstat")
+	snapraidConf := filepath.Join(dir, "snapraid.conf")
+	writeFile(t, mountsFile,
+		"/dev/md0 "+rootMount+" ext4 rw 0 0\n"+
+			"/dev/sdb1 "+dataMount+" ext4 rw 0 0\n"+
+			"/dev/sdc1 "+parityMount+" ext4 rw 0 0\n"+
+			"/dev/sdd1 "+standaloneMount+" ext4 rw 0 0\n"+
+			"/dev/md1 "+degradedMount+" ext4 rw 0 0\n")
+	writeFile(t, mdstatFile, `Personalities : [raid1] [raid5]
+md0 : active raid1 nvme0n1p2[0] nvme1n1p2[1]
+      976630336 blocks super 1.2 [2/2] [UU]
+md1 : active raid5 sda1[0] sdb1[1] sdc1[2](F)
+      3906762752 blocks super 1.2 level 5, 512k chunk, algorithm 2 [3/2] [UU_]
+unused devices: <none>
+`)
+	writeFile(t, snapraidConf, "# representative SnapRAID configuration\n"+
+		"parity "+parityMount+"/snapraid.parity\n"+
+		"parity 2 /mnt/second-parity/snapraid.parity\n"+
+		"data disk-a "+dataMount+"/\n"+
+		"data disk-b /mnt/second-data/\n")
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"mounts_file":   mountsFile,
+		"spool_dir":     filepath.Join(dir, "spool"),
+		"mdstat_file":   mdstatFile,
+		"snapraid_conf": snapraidConf,
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	items := sink.inventories[0].Items
+	byDevice := make(map[string]schema.Labels, len(items))
+	for _, item := range items {
+		byDevice[item.Attrs["device"]] = item.Attrs
+	}
+	if got := byDevice["/dev/md0"]; got["array_type"] != "storage.mdraid" || got["array_level"] != "raid1" || got["array_member_count"] != "2" || got["array_health"] != "healthy" {
+		t.Fatalf("unexpected healthy mdraid attrs: %+v", got)
+	}
+	if got := byDevice["/dev/md1"]; got["array_type"] != "storage.mdraid" || got["array_level"] != "raid5" || got["array_member_count"] != "3" || got["array_health"] != "degraded" {
+		t.Fatalf("unexpected degraded mdraid attrs: %+v", got)
+	}
+	for _, device := range []string{"/dev/sdb1", "/dev/sdc1"} {
+		got := byDevice[device]
+		if got["array_type"] != "storage.snapraid" || got["array_level"] != "2 parity disks" || got["array_member_count"] != "4" || got["array_health"] != "unknown" {
+			t.Fatalf("unexpected SnapRAID attrs for %s: %+v", device, got)
+		}
+	}
+	if got := byDevice["/dev/sdd1"]; got["array_type"] != "" || got["array_level"] != "" || got["array_member_count"] != "" || got["array_health"] != "" {
+		t.Fatalf("standalone disk gained array attrs: %+v", got)
+	}
+}
+
+func TestCollector_MissingArraySourcesStillReportsMounts(t *testing.T) {
+	dir := t.TempDir()
+	mount := t.TempDir()
+	mountsFile := filepath.Join(dir, "mounts")
+	writeFile(t, mountsFile, "/dev/sdz1 "+mount+" ext4 rw 0 0\n")
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"mounts_file":   mountsFile,
+		"spool_dir":     filepath.Join(dir, "spool"),
+		"mdstat_file":   filepath.Join(dir, "missing-mdstat"),
+		"snapraid_conf": filepath.Join(dir, "missing-snapraid.conf"),
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sink.inventories) != 1 || len(sink.inventories[0].Items) != 1 {
+		t.Fatalf("expected disk inventory despite missing array sources, got %+v", sink.inventories)
+	}
+	if attrs := sink.inventories[0].Items[0].Attrs; attrs["array_type"] != "" {
+		t.Fatalf("missing sources must not add array attrs: %+v", attrs)
 	}
 }
 
@@ -199,5 +319,111 @@ func TestCollector_RespectsContextCancellation(t *testing.T) {
 	cancel()
 	if err := c.Collect(ctx, &recordingSink{}); err == nil {
 		t.Fatal("expected cancellation error")
+	}
+}
+
+func TestCollector_CarriesSMARTTemperatureAndHealthStatus(t *testing.T) {
+	dir := t.TempDir()
+	mountsFile := filepath.Join(dir, "mounts")
+	spoolDir := filepath.Join(dir, "spool")
+	healthyMount := t.TempDir()
+	failingMount := t.TempDir()
+	silentMount := t.TempDir()
+
+	writeFile(t, mountsFile,
+		"/dev/sdc1 "+healthyMount+" ext4 rw 0 0\n"+
+			"/dev/sdd1 "+failingMount+" ext4 rw 0 0\n"+
+			"/dev/sde1 "+silentMount+" ext4 rw 0 0\n")
+
+	smartData := map[string]any{
+		"devices": map[string]any{
+			"sdc": map[string]any{
+				"model_name":   "ST18000NM004J",
+				"temperature":  map[string]any{"current": 34},
+				"smart_status": map[string]any{"passed": true},
+			},
+			"sdd": map[string]any{
+				"temperature":  map[string]any{"current": 51},
+				"smart_status": map[string]any{"passed": false},
+			},
+			// A device smartctl answered for, but without a temperature
+			// sensor or an overall health verdict.
+			"sde": map[string]any{"model_name": "WDC WD40EFRX"},
+		},
+	}
+	if err := spool.WriteAtomic(spoolDir, "smart", 1, smartData, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"mounts_file": mountsFile,
+		"spool_dir":   spoolDir,
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	byDevice := make(map[string]schema.Labels)
+	for _, item := range sink.inventories[0].Items {
+		byDevice[item.Attrs["device"]] = item.Attrs
+	}
+	if got := byDevice["/dev/sdc1"]; got["temperature_celsius"] != "34" || got["smart_status"] != "passed" {
+		t.Fatalf("unexpected healthy disk attrs: %+v", got)
+	}
+	if got := byDevice["/dev/sdd1"]; got["temperature_celsius"] != "51" || got["smart_status"] != "failed" {
+		t.Fatalf("expected a failing verdict to be reported as such: %+v", got)
+	}
+	got := byDevice["/dev/sde1"]
+	if _, ok := got["temperature_celsius"]; ok {
+		t.Fatalf("invented a temperature for a disk that reports none: %+v", got)
+	}
+	if _, ok := got["smart_status"]; ok {
+		t.Fatalf("invented a SMART verdict for a disk that reports none: %+v", got)
+	}
+	if got["model"] != "WDC WD40EFRX" {
+		t.Fatalf("lost the identity of a disk without temperature data: %+v", got)
+	}
+}
+
+func TestCollector_DistinguishesSnapRAIDParityFromDataMembers(t *testing.T) {
+	dir := t.TempDir()
+	dataMount := t.TempDir()
+	parityMount := t.TempDir()
+	mountsFile := filepath.Join(dir, "mounts")
+	snapraidConf := filepath.Join(dir, "snapraid.conf")
+
+	writeFile(t, mountsFile,
+		"/dev/sdb1 "+dataMount+" ext4 rw 0 0\n"+
+			"/dev/sdc1 "+parityMount+" ext4 rw 0 0\n")
+	writeFile(t, snapraidConf,
+		"parity "+parityMount+"/snapraid.parity\n"+
+			"data disk-a "+dataMount+"/\n")
+
+	c := New()
+	if err := c.Init(context.Background(), collector.Config{
+		"mounts_file":   mountsFile,
+		"spool_dir":     filepath.Join(dir, "spool"),
+		"snapraid_conf": snapraidConf,
+	}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	byDevice := make(map[string]schema.Labels)
+	for _, item := range sink.inventories[0].Items {
+		byDevice[item.Attrs["device"]] = item.Attrs
+	}
+	if got := byDevice["/dev/sdc1"]; got["array_role"] != "parity" {
+		t.Fatalf("expected the parity member tagged as parity: %+v", got)
+	}
+	if got := byDevice["/dev/sdb1"]; got["array_role"] != "data" {
+		t.Fatalf("expected the data member tagged as data: %+v", got)
 	}
 }

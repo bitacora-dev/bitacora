@@ -1,0 +1,29 @@
+[Unit]
+Description=Bitácora package executor — runs one fixed ADR-0022 operation and exits
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bitacora/bitacora-package-executor
+
+# The agent never starts this unit and cannot invoke a command. systemd-path
+# starts this ephemeral root helper after the agent atomically stages a request.
+# apt needs repository network access and its own package-state paths; no other
+# filesystem writes are available under ProtectSystem=strict.
+User=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/bitacora/package-actions /var/lib/apt /var/cache/apt /var/lib/dpkg /var/log/apt /var/log/dpkg /etc/apt
+TimeoutStartSec=30min

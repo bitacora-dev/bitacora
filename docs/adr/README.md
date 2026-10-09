@@ -38,6 +38,15 @@ consecuencias, incluidas las malas.
 | [0015](0015-ampliacion-de-superficie.md) | Ampliación de superficie: compartidos, VMs, usuarios, red y alimentación | Aceptado |
 | [0016](0016-identidad-de-hardware-y-desglose-de-almacenamiento.md) | Identidad de hardware y desglose de almacenamiento | Aceptado |
 | [0017](0017-actualizaciones-pendientes.md) | Paquetes, plugins y contenedores desactualizados | Aceptado |
+| [0018](0018-frontera-licencia-bitacora-run.md) | Frontera de licencia de bitacora-run | Propuesto |
+| [0019](0019-autenticacion-humana.md) | Autenticación humana del hub | Aceptado |
+| [0020](0020-distribucion-agente-journald-cgo.md) | Distribución del agente Linux con soporte de journald | Aceptado |
+| [0021](0021-artefactos-web-generados-y-merge.md) | Artefactos web generados y resolución de merges | Aceptado |
+| [0022](0022-actualizaciones-con-confirmacion-humana.md) | Actualizaciones con confirmación humana | Aceptado |
+| [0023](0023-autenticacion-local-y-alcance-por-servidor.md) | Autenticación local limitada y alcance por servidor | Aceptado |
+| [0024](0024-evidencia-presupuesto-recursos-agente.md) | Evidencia reproducible del presupuesto de recursos del agente | Aceptado |
+| [0025](0025-instalacion-y-recuperacion-local-de-credencial.md) | Instalación y recuperación local de la credencial | Propuesto |
+| [0026](0026-canal-de-ordenes-de-recoleccion.md) | Canal de órdenes de recolección bajo demanda | Propuesto |
 
 ## Estado del proyecto
 
@@ -52,3 +61,11 @@ consecuencias, incluidas las malas.
 - **Aceptado** — vinculante. El código debe cumplirlo.
 - **Rechazado** — se documenta para no volver a discutirlo.
 - **Superseded** — reemplazado por otro ADR, que se cita.
+
+## Nota de numeración para la PR
+
+La decisión de evidencia del presupuesto del agente se movió de ADR-0023 a
+ADR-0024 para resolver una numeración duplicada. ADR-0023 conserva la decisión
+de autenticación local, a la que ya apuntaba ADR-0019; el movimiento evita que
+los enlaces y referencias futuras asignen dos decisiones distintas al mismo
+número.

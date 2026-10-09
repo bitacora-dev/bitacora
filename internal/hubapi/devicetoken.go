@@ -8,12 +8,18 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
-	"github.com/bitacora-dev/bitacora/internal/transport"
 )
 
 // pairingTTL bounds how long a QR pairing code stays claimable (ADR-0014).
 const pairingTTL = 5 * time.Minute
+
+// DeviceTokenBackend stores device-token hashes independently of ingest
+// credentials, which must remain bound to a host_id.
+type DeviceTokenBackend interface {
+	AddDeviceToken(plaintextToken string) error
+	HasAnyDeviceToken(ctx context.Context) (bool, error)
+	LookupDeviceToken(ctx context.Context, token string) (bool, error)
+}
 
 // DeviceTokenStore holds device tokens (ADR-0014: "token de dispositivo,
 // distinto del token de agente ... transferible por código QR"). Unlike
@@ -24,8 +30,7 @@ const pairingTTL = 5 * time.Minute
 // Lookup mirrors transport.MemoryTokenStore: hashes can't be indexed, so
 // it linearly scans and verifies each with Argon2id.
 type DeviceTokenStore struct {
-	mu     sync.RWMutex
-	hashes []string
+	backend DeviceTokenBackend
 
 	pmu      sync.Mutex
 	pairings map[string]*pairing
@@ -37,32 +42,21 @@ type pairing struct {
 	claimed   bool
 }
 
-// NewDeviceTokenStore returns an empty store.
-func NewDeviceTokenStore() *DeviceTokenStore {
-	return &DeviceTokenStore{pairings: make(map[string]*pairing)}
+// NewDeviceTokenStore returns an empty store. Without a backend it uses an
+// in-memory backend, which keeps isolated API tests lightweight. Production
+// injects the SQLite-backed implementation when constructing the hub.
+func NewDeviceTokenStore(backend ...DeviceTokenBackend) *DeviceTokenStore {
+	b := DeviceTokenBackend(newMemoryDeviceTokenBackend())
+	if len(backend) > 0 && backend[0] != nil {
+		b = backend[0]
+	}
+	return &DeviceTokenStore{backend: b, pairings: make(map[string]*pairing)}
 }
 
 // Lookup implements the same linear-scan-and-verify pattern as
 // transport.MemoryTokenStore.Lookup.
 func (s *DeviceTokenStore) Lookup(ctx context.Context, token string) (bool, error) {
-	s.mu.RLock()
-	hashes := make([]string, len(s.hashes))
-	copy(hashes, s.hashes)
-	s.mu.RUnlock()
-
-	for _, h := range hashes {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		match, err := transport.VerifyToken(token, h)
-		if err != nil {
-			continue // a malformed stored hash shouldn't abort the whole lookup
-		}
-		if match {
-			return true, nil
-		}
-	}
-	return false, nil
+	return s.backend.LookupDeviceToken(ctx, token)
 }
 
 // HasAnyToken reports whether at least one device has ever been paired.
@@ -72,20 +66,14 @@ func (s *DeviceTokenStore) Lookup(ctx context.Context, token string) (bool, erro
 // through once — every pairing after that must be authenticated, or
 // anyone reaching the hub over the network could mint themselves a
 // device token for free.
-func (s *DeviceTokenStore) HasAnyToken() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.hashes) > 0
+func (s *DeviceTokenStore) HasAnyToken(ctx context.Context) (bool, error) {
+	return s.backend.HasAnyDeviceToken(ctx)
 }
 
 func (s *DeviceTokenStore) addToken(token string) error {
-	hash, err := transport.HashToken(token)
-	if err != nil {
-		return fmt.Errorf("hashing device token: %w", err)
+	if err := s.backend.AddDeviceToken(token); err != nil {
+		return fmt.Errorf("storing device token: %w", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.hashes = append(s.hashes, hash)
 	return nil
 }
 

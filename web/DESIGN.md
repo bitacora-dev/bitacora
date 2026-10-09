@@ -31,7 +31,8 @@ Current exceptions are transitional and should not spread:
 
 | Exception | Evidence | Rule |
 |---|---|---|
-| Chart series colors | [`App.tsx`](src/App.tsx) passes `#38bdf8` for CPU and `#f8d66d` for memory. | Keep CPU cyan and memory gold; move them behind named tokens when the chart API accepts tokens directly. |
+| Chart series colors | [`App.tsx`](src/App.tsx) passes `#38bdf8` for CPU and network receive, `#f8d66d` for memory, and `#4ade80` for network transmit. | Keep CPU and receive cyan, memory gold, and transmit green; move them behind named tokens when the chart API accepts tokens directly. |
+| Public surface chart color | [`PublicSurfacePanel.tsx`](src/components/PublicSurfacePanel.tsx) passes `#f8d66d` for the failed-SSH-login rate. | Security pressure is operational emphasis, not an error: reuse gold rather than red, so a permanently visible line does not read as a permanent alarm. |
 | uPlot axis/grid colors | [`TimeSeriesChart.tsx`](src/components/TimeSeriesChart.tsx) sets slate axis/grid colors. | Keep chart chrome muted and lower priority than the active series. |
 | Severity text colors | [`EventsList.tsx`](src/components/EventsList.tsx) uses Tailwind severity classes. | Severity color may stay semantic, but new event severity styling must remain readable on the dark panel background. |
 | Enrollment panel Tailwind classes | [`AddServerPanel.tsx`](src/components/AddServerPanel.tsx) still uses inline Tailwind utilities. | Prefer the shared CSS panel/button vocabulary for new dashboard work; do not use this as a reason to fork the visual language. |
@@ -51,13 +52,13 @@ Use these hierarchy rules:
 | Role | Current evidence | Rule |
 |---|---|---|
 | Brand/page title | `.auth-panel h1`, `.dashboard-header h1` use large, heavy text. | Reserve this scale for Bitácora and major shells only. |
-| Primary operating numbers | `.status-strip strong` and `.chart-value strong` use larger text and tabular numerals. | Current CPU, memory, and latest/inspected chart values are the primary scan targets. |
+| Primary operating numbers | `.chart-value strong` uses larger text and tabular numerals. | Latest or inspected chart values are the primary scan targets. |
 | Panel titles | `.chart-head h2`, `.panel-title-row h2`, `.signal-panel h2` are compact and bold. | Panel headings label the signal; they should not compete with current values. |
 | Context text | Muted labels, timestamps, availability, and window text use small muted type. | Context explains the value after the user has already seen the state. |
 | Prose | Event empty states and signal coverage prose cap line length. | Text blocks must keep readable measures; wide screens are not permission to stretch paragraphs. |
 
 Use `font-variant-numeric: tabular-nums` for changing numeric readouts, as in
-`status-strip`, `chart-value`, and count badges. This keeps polling updates from
+`chart-value`, dashboard metadata, and count badges. This keeps polling updates from
 visually jumping.
 
 ## Grid And Responsive Behavior
@@ -68,32 +69,119 @@ space while text-heavy blocks keep readable line lengths.
 
 | Viewport | Current behavior | Rule |
 |---|---|---|
-| Phone, below `560px` | Header, status, charts, events, and signal coverage stack; values shrink; chart readout aligns left. | One-column scanning wins. Avoid side-by-side controls that create cramped touch targets. |
-| Tablet/small laptop, below `980px` | Header actions stack; metrics and lower grids become one column. | Preserve order: state strip, charts, events, signal coverage. |
-| Laptop/default | Status strip has three columns; CPU and memory charts sit side by side; events and signal coverage share the lower row. | Keep the current state visible without scrolling on ordinary laptop sizes when data is present. |
+| Phone, below `560px` | Header, metadata, charts, events, and signal coverage stack; values shrink; chart readout aligns left. | One-column scanning wins. Avoid side-by-side controls that create cramped touch targets. |
+| Tablet/small laptop, below `980px` | Header actions stack; metrics, public surface, and lower grids become one column. | Preserve order: header metadata, charts, public surface, events, signal coverage. |
+| Laptop/default | CPU and memory charts sit side by side; the public-surface rate chart and its totals share a row; events and signal coverage share the lower row. | Keep the current state visible without scrolling on ordinary laptop sizes when data is present. |
 | Wide desktop, `1920px+` | Charts use wider tracks, lower grid grows, and text blocks remain capped. | Widen plots and data grids; do not turn prose into long horizontal ribbons. |
+| Tall portrait, `900px+` wide and `1500px+` high in portrait orientation (including `1080×1920`) | Charts stack and each canvas uses `clamp(16rem, 18vh, 20rem)`: more than the default height, but capped at 320 px. | Preserve long-form signal reading without forcing narrow landscape charts or using a full screen to render low-variance series. |
 
-Use stable dimensions for fixed-format UI: chart height is `220px`, panel radius
-is `8px`, panel borders are `1px`, and normal dashboard gaps are `1rem` to
-`1.25rem`. Changing these values is a design change, not incidental cleanup.
+Use stable dimensions for fixed-format UI: the default chart height is `220px`,
+panel radius is `8px`, panel borders are `1px`, and normal dashboard gaps are
+`1rem` to `1.25rem`. Tall portrait is the intentional exception: its charts use
+more vertical space, bounded to 256–320 px so three stacked canvases remain
+scanable before the event and coverage panels. Changing these values is a design
+change, not incidental cleanup.
 
 ## Density And Information Order
 
 The dashboard's question is "is my server OK?" The answer order is:
 
-1. Can the page read this hub and host?
-2. What are CPU and memory doing now?
-3. What changed over the current window?
-4. Were any events emitted?
-5. Which signal areas are connected or pending?
+1. Is the server about to lose power?
+2. Can the page read this hub and host?
+3. What are CPU and memory doing now?
+4. What changed over the current window?
+5. Is anything attacking the public surface right now?
+6. Can the operator still reach this host?
+7. Were any events emitted?
+8. Which signal areas are connected or pending?
 
 This order is encoded in [`App.tsx`](src/App.tsx): auth and host selection
-states first, then `status-strip`, `metrics-grid`, `EventsList`, and signal
-coverage. Do not lead with setup prose, marketing copy, or secondary collector
-detail on the main dashboard.
+states first, then the power strip, header metadata, `metrics-grid`,
+`public-surface-grid`, `access-grid`, `EventsList`, and signal coverage. Do not
+lead with setup prose, marketing copy, or secondary collector detail on the
+main dashboard.
+
+Public surface sits with the window signals rather than under inventory
+because the host it describes is reachable from the internet. A brute-force
+run in progress is a current operating state, not a catalogue entry.
+
+Power outranks everything because it is the only signal with a countdown
+attached. [`PowerPanel`](src/components/PowerPanel.tsx) holds one fixed slot
+above the dashboard and outside the summary/events/logs switch, and it changes
+intensity in place rather than moving: a single quiet line while mains power is
+present, `power-panel--alarm` when the UPS reports battery. A panel that only
+appears during the emergency teaches the operator nothing about where to look;
+one that is always in the same place does. It renders nothing at all on a host
+without a UPS.
+
+Remote access sits with the public surface for the same reason it does: both
+describe how this host meets the outside world right now. The operator reaches
+this server over Tailscale when the public route fails, so "can I still get in"
+is asked precisely when the rest of the page is bad news.
+
+Shares, share sizes, and accounts are one subject, not three. `share`,
+`share_usage`, and `user` join into a single row per share in
+[`SharesPanel`](src/components/SharesPanel.tsx). Join them on the inventory
+item `id`, never on `name`: `share_usage` identifies an NFS export by its full
+path while `share` names it by the basename, so a name join drops every NFS
+size without an error.
+
+Account names and their per-share permissions stay behind a `<details>`
+disclosure. They are system usernames and declared privileges, and the screen
+this panel lives on is shared far more often than the server is. This is a
+default, not a secret: the disclosure is one click and its own copy says what
+is inside. Revisit the default when ADR-0023's per-server scope lands, not by
+loosening it silently.
+
+Events and operations are counted, not ranged. The metric charts are defined
+by their window and keep `t.windowLabel`; the events and operations panels ask
+the hub for the newest N rows with no lower time bound, because a panel that
+goes blank whenever the host has been quiet for fifteen minutes says "nothing
+is known", not "nothing happened". `window_secs` still means exactly what it
+meant, and still only governs the series.
+
+Because those rows can now be any age, every row carries its date as well as
+its clock time — but not on the row. Rows are grouped into consecutive runs of
+one calendar day and the date is stated once, in an `.event-day-heading` above
+the run: "Today", "Yesterday", or weekday/day/month, with the year only when it
+is not the current one. Repeating `29/9/2026` on five consecutive lines is
+noise the eye has to step over on each one; omitting it entirely makes an event
+from last March indistinguishable from one a minute old. The row's own `<time>`
+still carries the full instant in `title` and in its accessible name, so the
+unabbreviated answer is one hover or one screen reader away — which is the
+failure this rule exists for: two panels reading `10:14:49` and `14:14:50`
+looked adjacent and were four hours apart.
 
 Panels should be dense enough for repeated operations. Avoid decorative cards,
-oversized empty spacing, and hero-style composition inside the app shell.
+oversized empty spacing, and hero-style composition inside the app shell. The
+header carries the current time window and update time as discrete metadata;
+do not restore a separate summary-card row for those facts.
+
+The selected host's readable name is always visible in the header. Resolve it
+as `name`, then `hostname`, then the stable ULID. The ULID remains visible as
+copyable metadata even when only one host is enrolled, because its identity is
+not interchangeable with a mutable hostname (ADR-0004).
+
+## Correlation
+
+A single correlated timeline is the product's claim, so a field that carries
+correlation must be reachable, not merely received. Events and jobs carry
+`log_refs`: the durable block and lines they came from. Rules:
+
+- A row whose payload names its log lines exposes a control that opens the log
+  viewer on that block, through the `?block=` filter and the page holding the
+  first referenced line. Do not make the operator retype a time range.
+- Referenced rows in the log viewer are marked with a visible label, not colour
+  alone, and the active block filter stays visible with a control that clears
+  it. A filter the operator cannot see is a filter they cannot undo.
+- When the referenced lines are not on the current page, say so. Silence there
+  reads as "there were no logs", which is a different and wrong answer.
+
+The same rule applies to any field the hub already sends: declare it in
+[`api.ts`](src/api.ts) even before it is drawn, because an undeclared field is
+dropped with no compile error, then either render it or stop requesting it.
+Downloading a value every ten seconds and discarding it is a defect, not a
+neutral omission.
 
 ## Empty And Disabled States
 
@@ -108,8 +196,43 @@ Use explicit, dignified empty states:
   Keep the panel shape stable while data is missing.
 - Signal coverage in `App.tsx` describes optional collectors as pending
   capability, not as broken UI.
+- `PublicSurfacePanel` renders "not reported" in words when a public-surface
+  signal has no samples, and replaces the whole section with one explanatory
+  panel when the host has reported none of them. Never substitute `0` for an
+  absent security signal: a zero in "failed SSH logins" asserts that nobody
+  is knocking, which is a measurement the hub does not have. Absent optional
+  data and a measured zero are different answers, and this is the direction
+  where being wrong is dangerous.
 - Disabled controls must keep visible labels and use the existing disabled
   treatment: `cursor: not-allowed` plus reduced opacity on real buttons.
+
+- Optional inventory whose whole subject may not exist on a host renders
+  nothing rather than an empty panel. `PowerPanel`, `AccessTunnelsPanel`, and
+  `SharesPanel` return `null` when their inventory has no items: a server with
+  no UPS must not grow a UPS panel reading `0 %`, and a server with no shares
+  must not grow an empty shares panel. This is the opposite call from
+  `InventoryPanel`, whose subjects (disks, packages) exist on every host, so an
+  empty list there is news.
+- `Number("")` is `0`, so every inventory attribute must be rejected as absent
+  before it is parsed. Inventory attrs are strings that the collectors omit
+  when they have no value, and a size, a charge, or a runtime that silently
+  becomes zero is the same false answer as a zero in "failed SSH logins".
+- A figure computed on a slow cadence carries when it was computed.
+  `share_usage` is recalculated every 24 hours, so its size always appears with
+  `calculated_at` rendered as a relative age. Presenting yesterday's number as
+  current is the same defect as hiding the package cache's age.
+- An inventory collected on a slow cadence states its own age the same way.
+  `PackageUpdatePanel` renders `reported_at` as a relative age ("collected 4
+  hours ago"), not as a bare clock time, and keeps the exact instant in the
+  `<time>` element's `title` and accessible name. A timestamp is literal and
+  still silent: an operator read a four-hour-old package list as current
+  because nothing on screen did the subtraction for them. When the age passes
+  the collector's own cadence with margin, the line takes the same gold
+  `--stale` treatment `cache-age--stale` uses, paired with a sentence so the
+  state never rests on colour alone.
+- A boolean attribute has three states in the browser: `"true"`, `"false"`, and
+  absent. Never collapse absent into `false`. "The UPS did not report its power
+  source" and "the UPS is on mains" lead to opposite decisions.
 
 Do not communicate unavailable collectors as errors unless the backend reports a
 fault. Absence of optional data and hub/API failure are different states.
@@ -157,6 +280,49 @@ When adding a chart, define what the current value means before choosing the
 series shape. A chart without a readable current value is incomplete for this
 dashboard.
 
+## Processor Panel
+
+`CPUCorePanel` answers "what are the cores doing right now" at a glance, in the
+shape of a hardware dashboard rather than a catalogue. Its contract:
+
+- One compact row per physical core, one thin bar plus its percentage per
+  logical CPU inside that row. The earlier card-per-core grid spent a bordered
+  box on every core, so a sixteen-core host could not be read without
+  scrolling, and the panel defaulted to collapsed to hide that cost.
+- The row list never scrolls inside the panel. A clipped half-row reads as a
+  rendering fault, and seeing every core at once is the panel's whole purpose.
+- The header carries total load with its own wide bar, plus RAPL power and the
+  CPU temperature when the host reports them. A host that exposes no package
+  sensor shows its hottest core sensor and says so; it never passes a core
+  reading off as the package.
+- The averaging window selector governs the bars and the readouts. It is a
+  trailing window anchored on the newest sample, not an epoch bucket: bucketing
+  made a selected "30 s average" collapse to one sample at every boundary, so
+  the bar jumped and the label was wrong while it did.
+- Bars animate with a CSS width transition between two measured samples. The
+  cpu collector runs every ten seconds and the dashboard polls on the same
+  cadence, so movement is interpolation between real values and never invented
+  data. Raising either cadence to animate would spend the agent's ADR-0024
+  budget on a visual effect. `prefers-reduced-motion` removes the transition
+  and the refresh pulse.
+- A refresh line states the age of the newest sample and pairs it with a dot.
+  Past six collector cycles the pair takes the gold stale treatment and the dot
+  stops animating: an animated dot over a silent agent asserts freshness the
+  page cannot know.
+- Offline and isolated CPUs are tracked per thread, not per core. A core whose
+  second hyperthread was taken offline still runs on the first one. An offline
+  thread is dimmed, labelled in words, and keeps its empty track; it is never
+  dropped from the list and never drawn as 0 %. A core whose threads are all
+  offline stays in the list even after its last samples age out of retention
+  (the topology still names it), dimmed as a whole row. Rows are labelled by
+  their lowest CPU number and ordered by it, never by core id, which the agent
+  may have reconstructed for an offline core.
+- Only the refresh line re-renders every second (its own component); the rows,
+  meters and formatters update with the data, not with the clock.
+- The history strip under the rows is a compact uPlot chart with no axes and no
+  cursor. Its readable current value lives in its own header, and the full
+  inspectable CPU history stays in the `TimeSeriesChart` beside the panel.
+
 ## Accessibility
 
 The current baseline comes from [`index.css`](src/index.css),
@@ -166,8 +332,9 @@ The current baseline comes from [`index.css`](src/index.css),
   without replacing them with an equally visible focus treatment.
 - Icon-only buttons need an accessible label. The close buttons use
   `aria-label={t.closeAria}`.
+- The host-ID copy control has visible dictionary-backed text and announces its
+  success or failure through a polite live region.
 - Images need meaningful alt text. The pairing QR uses `alt={t.qrAlt}`.
-- The status strip has an accessible label from the dictionary.
 - Text and borders must keep contrast on `--bg`, `--panel`, and
   `--panel-strong`.
 - Interactive controls need stable hit areas. Existing primary buttons are at
@@ -180,7 +347,15 @@ The current baseline comes from [`index.css`](src/index.css),
 - [ ] The change follows ADR-0013: UI code and docs are English; ADRs remain Spanish.
 - [ ] New colors are either existing tokens or explicitly added to the minimum token set above.
 - [ ] Phone, laptop, and `1920px+` layouts keep the same information order and readable text measures.
+- [ ] Tall portrait (`1080×1920`) layouts stack charts and use available height.
 - [ ] Empty, disabled, and pending-collector states are explicit and not treated as broken UI.
+- [ ] Fields the hub already sends are declared in `api.ts` and either rendered or no longer requested.
+- [ ] Inventory kinds the agent emits are either requested and rendered, or deliberately and visibly out of scope.
+- [ ] Absent attributes are not parsed into zeros, and absent booleans are not read as `false`.
+- [ ] Optional inventory whose subject may not exist on a host renders nothing rather than an empty panel.
+- [ ] Figures computed on a slow cadence are shown with the age of the calculation.
+- [ ] A timestamp that can be older than the current window states its date, once per day group rather than once per row.
+- [ ] An inventory collected on a slow cadence shows its relative age, and looks different once that age passes the cadence.
 - [ ] Every user-facing string, including library-driven labels, comes from `web/src/i18n/`.
 - [ ] uPlot charts hide the native legend and expose a dictionary-backed current/inspected readout.
 - [ ] Focus, contrast, labels, alt text, and hit areas remain keyboard and touch usable.

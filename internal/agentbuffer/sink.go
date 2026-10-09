@@ -59,6 +59,25 @@ func WithLogger(logf Logger) SinkOption {
 	}
 }
 
+// BeginCycle implements collector.CycleSink: it returns a Sink that stamps
+// every emission with `now` instead of reading the clock again per
+// emission. The returned value is a shallow copy with a frozen clock — it
+// shares the same Buffer and flush channel, so buffering and flushing are
+// unchanged, and the receiver itself is untouched and still usable
+// concurrently by other collectors.
+//
+// Collectors that set a timestamp explicitly (journald's log lines carry
+// the journal's own instant, an Inventory its ReportedAt) keep it: the
+// frozen clock only fills in what would otherwise have been time.Now().
+func (s *Sink) BeginCycle(now time.Time) collector.Sink {
+	if s == nil {
+		return s
+	}
+	frozen := *s
+	frozen.Now = func() time.Time { return now }
+	return &frozen
+}
+
 func (s *Sink) Gauge(name string, value float64, labels collector.Labels) {
 	now := s.Now()
 	s.append(Item{
@@ -119,6 +138,19 @@ func (s *Sink) Inventory(inv collector.Inventory) {
 	s.append(Item{Priority: PriorityEvent, TS: inv.ReportedAt, Inventory: &inv})
 }
 
+// Job queues a completed operation with the same durable, non-discardable
+// priority as events. Stats deliberately remain nil when the source has no
+// trustworthy values rather than being populated with zeroes.
+func (s *Sink) Job(job collector.Job) {
+	if job.HostID == "" {
+		job.HostID = s.HostID
+	}
+	if job.Schema == 0 {
+		job.Schema = schema.CurrentSchemaVersion
+	}
+	s.append(Item{Priority: PriorityEvent, TS: job.FinishedAt, Job: &job})
+}
+
 func (s *Sink) append(item Item) {
 	if s == nil || s.Buffer == nil {
 		return
@@ -138,7 +170,14 @@ func (s *Sink) TriggerFlush() {
 }
 
 type FlushOptions struct {
-	Interval   time.Duration
+	Interval time.Duration
+	// PollInterval returns the delay to the next ingest poll. Nil preserves the
+	// configured interval. The action channel uses it only after locally
+	// accepting a pending order.
+	PollInterval func(time.Duration) time.Duration
+	// Poll runs when there is no buffered telemetry. Nil preserves the old
+	// behaviour of doing no network work for an empty buffer.
+	Poll       func(context.Context) error
 	BatchSize  int
 	MinBackoff time.Duration
 	MaxBackoff time.Duration
@@ -161,19 +200,33 @@ func (s *Sink) Run(ctx context.Context, sender Sender, opts FlushOptions) {
 		maxBackoff = MaxFlushBackoff
 	}
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
 	backoff := minBackoff
 	for {
+		pollInterval := interval
+		if opts.PollInterval != nil {
+			pollInterval = opts.PollInterval(interval)
+		}
+		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 		case <-s.flushCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
 
 		if s.Buffer == nil || s.Buffer.Len() == 0 {
+			if opts.Poll != nil {
+				if err := opts.Poll(ctx); err != nil {
+					s.Logf("bitacora-agent: polling ingest response failed: %v", err)
+				}
+			}
 			backoff = minBackoff
 			continue
 		}
@@ -216,4 +269,7 @@ func jitter(d time.Duration) time.Duration {
 	return spread + time.Duration(rand.Int63n(int64(spread)+1))
 }
 
-var _ collector.Sink = (*Sink)(nil)
+var (
+	_ collector.Sink      = (*Sink)(nil)
+	_ collector.CycleSink = (*Sink)(nil)
+)

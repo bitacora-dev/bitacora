@@ -8,48 +8,73 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/bitacora-dev/bitacora/internal/agentactions"
 	"github.com/bitacora-dev/bitacora/internal/agentbuffer"
+	"github.com/bitacora-dev/bitacora/internal/blackbox"
 	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
 	"github.com/bitacora-dev/bitacora/internal/collector/cpu"
 	"github.com/bitacora-dev/bitacora/internal/collector/diskarray"
 	"github.com/bitacora-dev/bitacora/internal/collector/docker"
 	"github.com/bitacora-dev/bitacora/internal/collector/hwidentity"
+	"github.com/bitacora-dev/bitacora/internal/collector/hwmon"
 	"github.com/bitacora-dev/bitacora/internal/collector/journald"
 	"github.com/bitacora-dev/bitacora/internal/collector/memory"
 	"github.com/bitacora-dev/bitacora/internal/collector/network"
+	"github.com/bitacora-dev/bitacora/internal/collector/operations"
+	"github.com/bitacora-dev/bitacora/internal/collector/packageactions"
 	"github.com/bitacora-dev/bitacora/internal/collector/pkgupdates"
 	"github.com/bitacora-dev/bitacora/internal/collector/publicsurface"
 	"github.com/bitacora-dev/bitacora/internal/collector/shares"
 	"github.com/bitacora-dev/bitacora/internal/collector/shareusage"
 	"github.com/bitacora-dev/bitacora/internal/collector/ups"
 	"github.com/bitacora-dev/bitacora/internal/collector/users"
+	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
+	"github.com/bitacora-dev/bitacora/internal/pstore"
+	"github.com/bitacora-dev/bitacora/internal/resourcebudget"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/transport"
+	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
+	"github.com/oklog/ulid/v2"
 )
 
 // agentVersion is set at build time via -ldflags; "dev" outside a release build.
 var agentVersion = "dev"
 
+// DefaultBlackboxPath is the durable mmap-backed ring required by ADR-0011.
+// It is kept with the agent's other persistent state, inside the directory
+// ADR-0005 permits the unprivileged daemon to write.
+const DefaultBlackboxPath = "/var/lib/bitacora/blackbox.dat"
+
 func main() {
+	logger := log.New(os.Stderr, "bitacora-agent: ", log.LstdFlags)
 	cfg, err := parseConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bitacora-agent: config: %v\n", err)
+		logger.Printf("config: %v", err)
 		os.Exit(2)
 	}
+	allowlist, actionConfigErr := agentactions.LoadAllowlist(cfg.actionsFile)
+	if actionConfigErr != nil {
+		logger.Printf("action configuration: %v", actionConfigErr)
+		// Actions are an optional, default-disabled capability. Keep the agent
+		// running with an empty allowlist so telemetry remains available.
+		allowlist = agentactions.Allowlist{}
+	}
+	actions := agentactions.NewManager(allowlist, logger.Printf)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	hostID, err := schema.LoadOrCreateHostID(schema.DefaultHostIDPath)
+	hostID, err := schema.LoadOrCreateHostID(cfg.hostIDPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bitacora-agent: loading host_id: %v\n", err)
+		logger.Printf("loading host_id: %v", err)
 		os.Exit(1)
 	}
 	hostname, err := os.Hostname()
@@ -61,41 +86,187 @@ func main() {
 	detectCfg := capabilities.DefaultConfig
 	detectCfg.PubliclyExposed = os.Getenv("BITACORA_PUBLIC_EXPOSED") == "1"
 	manifest := capabilities.Detect(detectCfg, hostID, hostname, agentVersion, time.Now())
-	reportManifest(ctx, manifest, cfg)
+	reportManifest(ctx, manifest, cfg, logger)
 
-	reg := buildRegistry()
+	rt := collector.Runtime{}
+	reg := buildRegistry(rt.RequestCollection, allowlist)
 
 	buffer, err := agentbuffer.Open(cfg.spoolDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bitacora-agent: opening outbound buffer: %v\n", err)
+		logger.Printf("opening outbound buffer: %v", err)
 		os.Exit(1)
 	}
 	defer buffer.Close()
 
-	sink := agentbuffer.NewSink(hostID, buffer, agentbuffer.WithLogger(func(format string, args ...any) {
-		fmt.Fprintf(os.Stderr, format+"\n", args...)
-	}))
+	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())
+	if cfg.hubURL == "" {
+		logger.Printf("sending to no configured hub as %s, %d collectors enabled; telemetry will remain buffered locally", hostID, len(regs))
+	} else {
+		logger.Printf("sending to %s as %s, %d collectors enabled", cfg.hubURL, hostID, len(regs))
+	}
+
+	sink := agentbuffer.NewSink(hostID, buffer, agentbuffer.WithLogger(logger.Printf))
+	rt.Sink = sink
+	consumePstoreAtStartup(sink, pstore.DefaultRoot, hostID, time.Now(), pstore.Consume, logger.Printf)
 	if cfg.hubURL != "" {
 		client := &transport.Client{BaseURL: cfg.hubURL, Token: cfg.token}
-		go sink.Run(ctx, agentbuffer.TransportSender(client, hostID), agentbuffer.FlushOptions{})
+		client.OnResponse = func(response *bitacorapb.IngestResponse) {
+			if order := response.GetPendingPackageOperation(); order != nil {
+				if actions.Handle(order) != agentactions.DecisionAccepted {
+					return
+				}
+				request, ok := packageActionRequest(order, hostID)
+				if !ok {
+					logger.Printf("rejected unsupported package operation after validation")
+					return
+				}
+				if err := packageexecutor.Enqueue(packageexecutor.DefaultRequestDir, request); err != nil {
+					logger.Printf("queueing package operation %s: %v", request.Operation, err)
+					return
+				}
+				sink.Job(schema.Job{ID: request.ID, JobName: string(request.Operation), HostID: hostID, StartedAt: time.Now().UTC(), Status: schema.JobRunning, Trigger: "systemd-path", Schema: schema.CurrentSchemaVersion})
+			}
+		}
+		flushOptions := agentbuffer.FlushOptions{
+			PollInterval: actions.PollInterval,
+		}
+		// Disabled hosts retain the pre-ADR-0022 behaviour: no empty ingest
+		// polls and therefore no added cadence or network cost.
+		if actions.Enabled() {
+			flushOptions.Poll = agentbuffer.TransportPoller(client, hostID)
+		}
+		go sink.Run(ctx, agentbuffer.TransportSender(client, hostID), flushOptions)
 	} else {
-		fmt.Fprintln(os.Stderr, "bitacora-agent: hub URL is not configured; telemetry will remain buffered locally")
+		logger.Printf("hub URL is not configured; telemetry will remain buffered locally")
 	}
-	regs, disabled := reg.Resolve(ctx, collector.Config{}, host, manifest.Available())
+	if event, ok := actionConfigurationDisabledEvent(hostID, cfg.actionsFile, actionConfigErr, time.Now()); ok {
+		sink.Event(event)
+	}
 	collector.EmitDisabledEvents(sink, hostID, disabled, time.Now())
 
-	rt := collector.Runtime{Sink: sink}
 	rt.Start(ctx, regs)
 	defer rt.Close()
+	go func() {
+		monitor := resourcebudget.Monitor{HostID: hostID, Sink: sink}
+		if err := monitor.Run(ctx, os.Getpid(), 10*time.Second); err != nil {
+			logger.Printf("resource budget monitor: %v", err)
+		}
+	}()
+	go func() {
+		syncFailureReported := false
+		err := runBlackbox(ctx.Done(), cfg.blackboxPath, func(err error) {
+			logger.Printf("blackbox recorder sync: %v", err)
+			if syncFailureReported {
+				return
+			}
+			syncFailureReported = true
+			sink.Event(blackboxFailureEvent(hostID, cfg.blackboxPath, "sync", err, time.Now()))
+		})
+		if err != nil {
+			logger.Printf("blackbox recorder disabled: %v", err)
+			sink.Event(blackboxFailureEvent(hostID, cfg.blackboxPath, "start", err, time.Now()))
+		}
+	}()
 
 	<-ctx.Done()
 }
 
-func buildRegistry() collector.Registry {
+type pstoreConsumer func(root, hostID string, now time.Time) ([]schema.Event, []error)
+
+// consumePstoreAtStartup recovers kernel crash dumps before collectors start.
+// pstore errors are diagnostic failures, so they must not prevent the agent
+// from starting its normal telemetry collection.
+func consumePstoreAtStartup(sink collector.Sink, root, hostID string, now time.Time, consume pstoreConsumer, logf func(string, ...any)) {
+	events, errs := consume(root, hostID, now)
+	for _, event := range events {
+		sink.Event(event)
+	}
+	for _, err := range errs {
+		logf("consuming pstore: %v", err)
+	}
+}
+
+// runBlackbox owns the recorder for the lifetime of one agent process. It is
+// intentionally outside collector.Runtime: ADR-0011 requires this diagnostic
+// path to keep recording even when collectors or their outbound sink degrade.
+func runBlackbox(stop <-chan struct{}, path string, onSyncError func(error)) error {
+	recorder, err := blackbox.Open(path, blackbox.DefaultCapacity)
+	if err != nil {
+		return err
+	}
+
+	sampler, err := blackbox.NewSampler("/proc", "/sys")
+	if err != nil {
+		_ = recorder.Close()
+		return err
+	}
+
+	blackbox.Run(
+		blackbox.SystemClock{},
+		sampler,
+		recorder,
+		blackbox.DefaultSampleInterval,
+		blackbox.DefaultSyncInterval,
+		onSyncError,
+	)(stop)
+	return recorder.Close()
+}
+
+// blackboxFailureEvent makes a recorder that cannot start or flush visible in
+// the timeline while allowing the rest of the agent to continue running.
+func blackboxFailureEvent(hostID, path, stage string, err error, now time.Time) schema.Event {
+	return schema.Event{
+		ID:       ulid.Make().String(),
+		TS:       now,
+		HostID:   hostID,
+		Source:   "agent",
+		Type:     "agent.blackbox_recorder_degraded",
+		Severity: schema.SeverityWarn,
+		Title:    fmt.Sprintf("blackbox recorder %s failed: %v", stage, err),
+		Attrs:    schema.Labels{"path": path, "stage": stage, "reason": err.Error()},
+		Schema:   schema.CurrentSchemaVersion,
+	}
+}
+
+// actionConfigurationDisabledEvent makes a failed optional action configuration
+// visible once during startup. The configuration is loaded only at startup, so
+// emitting here avoids repeating the same event during normal collection cycles.
+func actionConfigurationDisabledEvent(hostID, path string, loadErr error, now time.Time) (schema.Event, bool) {
+	if loadErr == nil {
+		return schema.Event{}, false
+	}
+	return schema.Event{
+		ID:       ulid.Make().String(),
+		TS:       now,
+		HostID:   hostID,
+		Source:   "agent",
+		Type:     "agent.action_configuration_disabled",
+		Severity: schema.SeverityWarn,
+		Title:    fmt.Sprintf("action configuration %q disabled: %v", path, loadErr),
+		Attrs:    schema.Labels{"path": path, "reason": loadErr.Error()},
+		Schema:   schema.CurrentSchemaVersion,
+	}, true
+}
+
+func buildRegistry(requestCollection func(string), actionLists ...agentactions.Allowlist) collector.Registry {
 	reg := collector.Registry{}
+	actions := agentactions.Allowlist{}
+	if len(actionLists) > 0 {
+		actions = actionLists[0]
+	}
 	reg.Register(cpu.New(), 10*time.Second, 5*time.Second)
 	reg.Register(memory.New(), 10*time.Second, 5*time.Second)
-	reg.Register(network.New(), 30*time.Second, 10*time.Second)
+	// network runs at the same 10s cadence as cpu and memory, not the 30s
+	// it used to: the traffic panel derives a rate from consecutive
+	// samples, so a third of the resolution meant a third of the detail
+	// and, over a 15-minute window, fewer samples than the frontend chart
+	// needs to draw a line instead of loose dots. The extra cost is a
+	// second /proc/net/dev read, and it is more than paid back by only
+	// reporting device-backed interfaces now (two on a typical Docker
+	// host, not nineteen): fewer metrics per cycle than before even at
+	// three times the frequency. The VPN inventory in the same collector
+	// keeps its own 30s cadence — see vpnReportInterval.
+	reg.Register(network.New(), 10*time.Second, 5*time.Second)
 	reg.Register(docker.New(), 30*time.Second, 10*time.Second)
 	reg.Register(journald.New(), 10*time.Second, 5*time.Second)
 	reg.Register(publicsurface.New(), 5*time.Minute, 30*time.Second)
@@ -103,6 +274,7 @@ func buildRegistry() collector.Registry {
 	reg.Register(users.New(), 5*time.Minute, 10*time.Second)
 	reg.Register(ups.New(), time.Minute, 10*time.Second)
 	reg.Register(hwidentity.New(), 5*time.Minute, 10*time.Second)
+	reg.Register(hwmon.New(), 10*time.Second, 5*time.Second)
 	reg.Register(diskarray.New(), 5*time.Minute, 10*time.Second)
 	// shareusage walks share directories (like `du -sh`), which can take
 	// minutes on large media shares — ADR-0016 calls for a low-frequency
@@ -112,15 +284,40 @@ func buildRegistry() collector.Registry {
 	// network round-trip per item — a long interval avoids hammering
 	// third-party plugin sources and container registries on every cycle,
 	// same reasoning as shareusage's cadence above.
-	reg.Register(pkgupdates.New(), 6*time.Hour, 2*time.Minute)
+	reg.Register(pkgupdates.New(pkgupdates.ActionAvailability{RefreshPackageCache: actions.RefreshPackageCache, ApplyPendingPackageUpdates: actions.ApplyPendingPackageUpdates, PackageCacheMaxAgeSeconds: actions.PackageCacheMaxAgeSeconds}), 6*time.Hour, 2*time.Minute)
+	// The privileged helper writes terminal results here; this collector only
+	// reads them and turns them into the job update and output log lines.
+	reg.Register(packageactions.New(requestCollection), 5*time.Second, time.Second)
+	// The operations outbox is producer-owned and append-only; importing it is
+	// cheap and gives scheduled backups a real end-to-end path to the hub.
+	reg.Register(operations.New(), 15*time.Second, 5*time.Second)
 	return reg
 }
 
+func packageActionRequest(order *bitacorapb.PendingPackageOperation, hostID string) (packageexecutor.Request, bool) {
+	if order == nil || order.GetRequestId() == "" || hostID == "" {
+		return packageexecutor.Request{}, false
+	}
+	var operation packageexecutor.Operation
+	switch order.GetOperation() {
+	case bitacorapb.PackageOperation_REFRESH_PACKAGE_CACHE:
+		operation = packageexecutor.RefreshPackageCache
+	case bitacorapb.PackageOperation_APPLY_PENDING_PACKAGE_UPDATES:
+		operation = packageexecutor.ApplyPendingPackageUpdates
+	default:
+		return packageexecutor.Request{}, false
+	}
+	return packageexecutor.Request{ID: order.GetRequestId(), Operation: operation, HostID: hostID}, true
+}
+
 type config struct {
-	hubURL    string
-	token     string
-	tokenFile string
-	spoolDir  string
+	hubURL       string
+	token        string
+	tokenFile    string
+	spoolDir     string
+	hostIDPath   string
+	actionsFile  string
+	blackboxPath string
 }
 
 func parseConfig() (config, error) {
@@ -128,6 +325,9 @@ func parseConfig() (config, error) {
 	flag.StringVar(&cfg.hubURL, "hub-url", os.Getenv("BITACORA_HUB_URL"), "hub base URL")
 	flag.StringVar(&cfg.tokenFile, "token-file", os.Getenv("BITACORA_TOKEN_FILE"), "path to the ingestion bearer token")
 	flag.StringVar(&cfg.spoolDir, "spool-dir", agentbuffer.DefaultOutboundDir, "outbound buffer directory")
+	flag.StringVar(&cfg.hostIDPath, "host-id-path", schema.DefaultHostIDPath, "path to the persistent host ID")
+	flag.StringVar(&cfg.actionsFile, "actions-file", os.Getenv("BITACORA_ACTIONS_FILE"), "path to local package action allowlist")
+	flag.StringVar(&cfg.blackboxPath, "blackbox-path", DefaultBlackboxPath, "path to the persistent blackbox recorder")
 	flag.Parse()
 
 	token, err := readToken(cfg.tokenFile, os.Getenv("BITACORA_TOKEN"))
@@ -152,7 +352,7 @@ func readToken(path, fallback string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func reportManifest(ctx context.Context, m capabilities.Manifest, cfg config) {
+func reportManifest(ctx context.Context, m capabilities.Manifest, cfg config, logger *log.Logger) {
 	if cfg.hubURL == "" {
 		return
 	}
@@ -161,6 +361,6 @@ func reportManifest(ctx context.Context, m capabilities.Manifest, cfg config) {
 	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := client.Send(sendCtx, m); err != nil {
-		fmt.Fprintf(os.Stderr, "bitacora-agent: sending manifest to hub: %v\n", err)
+		logger.Printf("sending manifest to hub: %v", err)
 	}
 }

@@ -19,6 +19,14 @@ type recordingReceiver struct {
 	batches []*bitacorapb.Batch
 }
 
+type staticOrderSource struct {
+	order *bitacorapb.PendingPackageOperation
+}
+
+func (s staticOrderSource) NextPendingOrder(_ context.Context, _ string) *bitacorapb.PendingPackageOperation {
+	return s.order
+}
+
 func (r *recordingReceiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitacorapb.Batch) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -96,6 +104,53 @@ func TestEndToEnd_AgentPushesToHubOverLoopback(t *testing.T) {
 
 	if receiver.count() != 1 {
 		t.Fatalf("expected the hub to have received exactly 1 batch, got %d", receiver.count())
+	}
+}
+
+func TestEndToEnd_IngestResponseCarriesOnlyPendingClosedOperation(t *testing.T) {
+	tokens := NewMemoryTokenStore()
+	if err := tokens.AddToken("host-a", "test-token"); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{
+		Tokens:      tokens,
+		Idempotency: NewMemoryIdempotencyStore(),
+		Receiver:    &recordingReceiver{},
+		Orders: staticOrderSource{order: &bitacorapb.PendingPackageOperation{
+			Operation:   bitacorapb.PackageOperation_REFRESH_PACKAGE_CACHE,
+			RequestId:   "human-request-1",
+			ExpiresAtMs: time.Now().Add(time.Minute).UnixMilli(),
+		}},
+	}
+	httpSrv := srv.NewH2CServer(ln.Addr().String())
+	go func() { _ = httpSrv.Serve(ln) }()
+	t.Cleanup(func() { _ = httpSrv.Close() })
+
+	response, err := (&Client{BaseURL: "http://" + ln.Addr().String(), Token: "test-token"}).Send(context.Background(), sampleBatch("host-a"))
+	if err != nil {
+		t.Fatalf("sending batch: %v", err)
+	}
+	if response.GetPendingPackageOperation().GetOperation() != bitacorapb.PackageOperation_REFRESH_PACKAGE_CACHE {
+		t.Fatalf("unexpected pending operation: %+v", response.GetPendingPackageOperation())
+	}
+}
+
+func TestEndToEnd_HubWithoutOrdersRemainsCompatible(t *testing.T) {
+	tokens := NewMemoryTokenStore()
+	if err := tokens.AddToken("host-a", "test-token"); err != nil {
+		t.Fatal(err)
+	}
+	baseURL := testServer(t, tokens, NewMemoryIdempotencyStore(), &recordingReceiver{})
+	response, err := (&Client{BaseURL: baseURL, Token: "test-token"}).Send(context.Background(), sampleBatch("host-a"))
+	if err != nil {
+		t.Fatalf("new agent must ingest successfully with an old-style hub: %v", err)
+	}
+	if response.GetPendingPackageOperation() != nil {
+		t.Fatalf("old-style hub unexpectedly sent an order: %+v", response.GetPendingPackageOperation())
 	}
 }
 

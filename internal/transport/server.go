@@ -26,11 +26,20 @@ type BatchReceiver interface {
 	ReceiveBatch(ctx context.Context, hostID string, batch *bitacorapb.Batch) error
 }
 
+// PendingOrderSource returns the next human-confirmed, unexpired order for a
+// host. It deliberately returns the closed protobuf type, not a command or
+// argument string.
+type PendingOrderSource interface {
+	NextPendingOrder(ctx context.Context, hostID string) *bitacorapb.PendingPackageOperation
+}
+
 // Server implements POST /v1/ingest (ADR-0008).
 type Server struct {
 	Tokens       TokenStore
 	Idempotency  IdempotencyStore
 	Receiver     BatchReceiver
+	Orders       PendingOrderSource
+	Manifests    HostManifestRecorder
 	Limiter      *PerTokenLimiter // nil disables rate limiting
 	MaxBodyBytes int64            // 0 = DefaultMaxBodyBytes
 }
@@ -39,6 +48,7 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/ingest", s.handleIngest)
+	mux.HandleFunc("/v1/manifest", s.handleManifest)
 	return mux
 }
 
@@ -133,6 +143,9 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := &bitacorapb.IngestResponse{LastOffset: batch.GetBatchId(), Duplicate: duplicate}
+	if s.Orders != nil {
+		resp.PendingPackageOperation = s.Orders.NextPendingOrder(r.Context(), hostID)
+	}
 	respBytes, err := proto.Marshal(resp)
 	if err != nil {
 		http.Error(w, "encoding response", http.StatusInternalServerError)

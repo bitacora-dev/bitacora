@@ -16,22 +16,22 @@ import (
 )
 
 type recordingSink struct {
-	gauges      map[string]float64
+	counters    map[string]float64
 	inventories []schema.Inventory
 }
 
-func newRecordingSink() *recordingSink { return &recordingSink{gauges: map[string]float64{}} }
+func newRecordingSink() *recordingSink { return &recordingSink{counters: map[string]float64{}} }
 
-func (s *recordingSink) Gauge(name string, value float64, labels collector.Labels) {
+func (s *recordingSink) Gauge(string, float64, collector.Labels) {}
+func (s *recordingSink) Counter(name string, value float64, labels collector.Labels) {
 	key := name
 	if iface, ok := labels["interface"]; ok {
 		key = name + "{" + iface + "}"
 	}
-	s.gauges[key] = value
+	s.counters[key] = value
 }
-func (s *recordingSink) Counter(string, float64, collector.Labels) {}
-func (s *recordingSink) Event(collector.Event)                     {}
-func (s *recordingSink) LogLines(string, []collector.LogLine)      {}
+func (s *recordingSink) Event(collector.Event)                {}
+func (s *recordingSink) LogLines(string, []collector.LogLine) {}
 func (s *recordingSink) Inventory(inv collector.Inventory) {
 	s.inventories = append(s.inventories, inv)
 }
@@ -88,7 +88,11 @@ func backdateSpoolEntry(t *testing.T, path string, ts time.Time) {
 	}
 }
 
-func TestCollector_FirstSampleNoRateYet(t *testing.T) {
+// TestCollector_FirstCycleEmitsCumulativeCounters is the behavior the old
+// two-cycle delta design couldn't offer: since traffic is now reported as
+// raw counters with no previous-sample state, the very first Collect call
+// already emits a sample instead of being skipped as a warm-up.
+func TestCollector_FirstCycleEmitsCumulativeCounters(t *testing.T) {
 	dir := t.TempDir()
 	procNetDev := filepath.Join(dir, "net_dev")
 	writeFile(t, procNetDev, procNetDevFixture(1000, 2000))
@@ -105,16 +109,26 @@ func TestCollector_FirstSampleNoRateYet(t *testing.T) {
 	if err := c.Collect(context.Background(), sink); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(sink.gauges) != 0 {
-		t.Fatalf("expected no rate gauges on the first sample, got %+v", sink.gauges)
+
+	rx := sink.counters["bitacora_net_rx_bytes_total{eth0}"]
+	tx := sink.counters["bitacora_net_tx_bytes_total{eth0}"]
+	if rx != 1000 {
+		t.Fatalf("expected the raw rx counter (1000), got %v", rx)
+	}
+	if tx != 2000 {
+		t.Fatalf("expected the raw tx counter (2000), got %v", tx)
 	}
 	// loopback must never appear even as a raw reading.
-	if _, ok := sink.gauges["bitacora_net_rx_bytes_per_second{lo}"]; ok {
+	if _, ok := sink.counters["bitacora_net_rx_bytes_total{lo}"]; ok {
 		t.Fatal("expected loopback to be excluded")
 	}
 }
 
-func TestCollector_SecondSampleComputesRate(t *testing.T) {
+// TestCollector_SubsequentCycleReportsNewCumulativeValue confirms the
+// collector stays stateless: it never remembers the previous cycle's
+// counters, so each call simply reports whatever /proc/net/dev currently
+// holds.
+func TestCollector_SubsequentCycleReportsNewCumulativeValue(t *testing.T) {
 	dir := t.TempDir()
 	procNetDev := filepath.Join(dir, "net_dev")
 	writeFile(t, procNetDev, procNetDevFixture(1000, 2000))
@@ -128,8 +142,6 @@ func TestCollector_SecondSampleComputesRate(t *testing.T) {
 	}
 	c.Collect(context.Background(), newRecordingSink())
 
-	// Simulate 1 second passing with 500 more rx bytes, 1000 more tx bytes.
-	c.prevAt = time.Now().Add(-time.Second)
 	writeFile(t, procNetDev, procNetDevFixture(1500, 3000))
 
 	sink := newRecordingSink()
@@ -137,17 +149,22 @@ func TestCollector_SecondSampleComputesRate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	rx := sink.gauges["bitacora_net_rx_bytes_per_second{eth0}"]
-	tx := sink.gauges["bitacora_net_tx_bytes_per_second{eth0}"]
-	if rx < 400 || rx > 600 {
-		t.Fatalf("expected rx rate around 500 B/s, got %v", rx)
+	rx := sink.counters["bitacora_net_rx_bytes_total{eth0}"]
+	tx := sink.counters["bitacora_net_tx_bytes_total{eth0}"]
+	if rx != 1500 {
+		t.Fatalf("expected the new raw rx counter (1500), got %v", rx)
 	}
-	if tx < 900 || tx > 1100 {
-		t.Fatalf("expected tx rate around 1000 B/s, got %v", tx)
+	if tx != 3000 {
+		t.Fatalf("expected the new raw tx counter (3000), got %v", tx)
 	}
 }
 
-func TestCollector_CounterResetSkipsThatCycle(t *testing.T) {
+// TestCollector_ReportsLowerCounterAfterReset confirms the collector
+// itself does no reset detection anymore — it just reports whatever value
+// it reads, even if lower than a previous cycle's. Recognizing a counter
+// reset (and skipping the resulting bogus rate point) is now the hub's
+// job, exercised in hubapi's rateSeries tests.
+func TestCollector_ReportsLowerCounterAfterReset(t *testing.T) {
 	dir := t.TempDir()
 	procNetDev := filepath.Join(dir, "net_dev")
 	writeFile(t, procNetDev, procNetDevFixture(5000, 5000))
@@ -161,17 +178,15 @@ func TestCollector_CounterResetSkipsThatCycle(t *testing.T) {
 	}
 	c.Collect(context.Background(), newRecordingSink())
 
-	// Interface counters went backwards (e.g. the NIC reset) — must not
-	// report a nonsensical negative-turned-huge-positive rate.
-	c.prevAt = time.Now().Add(-time.Second)
+	// Interface counters went backwards (e.g. the NIC reset).
 	writeFile(t, procNetDev, procNetDevFixture(100, 100))
 
 	sink := newRecordingSink()
 	if err := c.Collect(context.Background(), sink); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := sink.gauges["bitacora_net_rx_bytes_per_second{eth0}"]; ok {
-		t.Fatalf("expected the reset cycle to be skipped, got %+v", sink.gauges)
+	if got := sink.counters["bitacora_net_rx_bytes_total{eth0}"]; got != 100 {
+		t.Fatalf("expected the collector to report the raw value as-is (100), got %v", got)
 	}
 }
 

@@ -1,6 +1,7 @@
 package logstore
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,5 +155,103 @@ func TestStore_AppendRejectsInvalidLine(t *testing.T) {
 	invalid := schema.LogLine{Message: "no host_id, no source, no ts"}
 	if _, err := s.Append(invalid); err == nil {
 		t.Fatal("expected an invalid log line to be rejected")
+	}
+}
+
+func TestStore_QueryFiltersDurableBlocksAndPaginates(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	ts := time.Date(2026, 8, 25, 1, 0, 0, 0, time.UTC)
+	for _, line := range []schema.LogLine{
+		sampleLine("host-a", "journald", "first matching line", ts),
+		sampleLine("host-a", "journald", "second matching line", ts.Add(time.Second)),
+		sampleLine("host-a", "docker", "matching but another source", ts.Add(2*time.Second)),
+	} {
+		if _, err := s.Append(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Flush("host-a", "journald"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Flush("host-a", "docker"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.Query(context.Background(), Query{HostID: "host-a", From: ts.Add(-time.Minute), To: ts.Add(time.Minute), Source: "journald", Text: "matching", Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 2 || len(page.Entries) != 1 || page.Entries[0].Message != "second matching line" {
+		t.Fatalf("unexpected page: %+v", page)
+	}
+}
+
+func TestStore_QueryReachesTheExactBlockAndLineALogRefNames(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	ts := time.Date(2026, 8, 25, 1, 0, 0, 0, time.UTC)
+	if _, err := s.Append(sampleLine("host-a", "journald", "unrelated line", ts)); err != nil {
+		t.Fatal(err)
+	}
+	unrelated, err := s.Flush("host-a", "journald")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []string{"segfault preamble", "kernel: general protection fault"} {
+		if _, err := s.Append(sampleLine("host-a", "journald", message, ts.Add(time.Second))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	referenced, err := s.Flush("host-a", "journald")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := s.Query(context.Background(), Query{HostID: "host-a", From: ts.Add(-time.Minute), To: ts.Add(time.Minute), BlockID: referenced.BlockID, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("expected only the referenced block's lines, got %d", page.Total)
+	}
+	// schema.LogRef{BlockID: referenced.BlockID, Line: 1} must resolve to an
+	// entry the dashboard can identify without a second lookup.
+	want := referenced.BlockID + ":1"
+	if page.Entries[1].ID != want {
+		t.Fatalf("expected entry id %q, got %q", want, page.Entries[1].ID)
+	}
+	if page.Entries[1].Message != "kernel: general protection fault" {
+		t.Fatalf("unexpected referenced line: %q", page.Entries[1].Message)
+	}
+	for _, entry := range page.Entries {
+		if strings.HasPrefix(entry.ID, unrelated.BlockID+":") {
+			t.Fatalf("block filter leaked another block's line: %q", entry.ID)
+		}
+	}
+}
+
+func TestStore_QueryWithoutABlockFilterStillReadsEveryCandidate(t *testing.T) {
+	dir := t.TempDir()
+	s := NewStore(dir)
+	ts := time.Date(2026, 8, 25, 1, 0, 0, 0, time.UTC)
+	if _, err := s.Append(sampleLine("host-a", "journald", "first block", ts)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Flush("host-a", "journald"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(sampleLine("host-a", "journald", "second block", ts.Add(time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Flush("host-a", "journald"); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := s.Query(context.Background(), Query{HostID: "host-a", From: ts.Add(-time.Minute), To: ts.Add(time.Minute), Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("expected both blocks without a block filter, got %d", page.Total)
 	}
 }

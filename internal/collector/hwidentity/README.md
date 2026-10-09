@@ -14,7 +14,11 @@ the whole collector.
   between two timed samples — the first `Collect()` call only seeds the
   baseline and reports no wattage.
 - `cpu_topology` (one item per logical CPU, ID `cpu<N>`): `core_id`,
-  `online`, `core_type` (hybrid P-core/E-core awareness). This is a thin
+  `online`, `isolated`, `core_type` (hybrid P-core/E-core awareness). The
+  `isolated` attribute comes only from Linux's authoritative
+  `/sys/devices/system/cpu/isolated` list; `nohz_full` and `rcu_nocbs` do not
+  classify a CPU as isolated. When the authoritative list is unavailable, the
+  attribute is omitted rather than inferring `false`. This is a thin
   wrapper over `internal/faultcluster.ReadTopology`, reused as-is rather
   than reimplemented — that package already computes exactly this mapping
   for ADR-0011's fault-correlation work.

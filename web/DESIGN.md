@@ -312,7 +312,13 @@ shape of a hardware dashboard rather than a catalogue. Its contract:
 - Offline and isolated CPUs are tracked per thread, not per core. A core whose
   second hyperthread was taken offline still runs on the first one. An offline
   thread is dimmed, labelled in words, and keeps its empty track; it is never
-  dropped from the list and never drawn as 0 %.
+  dropped from the list and never drawn as 0 %. A core whose threads are all
+  offline stays in the list even after its last samples age out of retention
+  (the topology still names it), dimmed as a whole row. Rows are labelled by
+  their lowest CPU number and ordered by it, never by core id, which the agent
+  may have reconstructed for an offline core.
+- Only the refresh line re-renders every second (its own component); the rows,
+  meters and formatters update with the data, not with the clock.
 - The history strip under the rows is a compact uPlot chart with no axes and no
   cursor. Its readable current value lives in its own header, and the full
   inspectable CPU history stays in the `TimeSeriesChart` beside the panel.

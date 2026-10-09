@@ -308,6 +308,16 @@ func TestCollect_CPUTopologyReportsOfflineCoreWithItsRealCore(t *testing.T) {
 		writeFile(t, filepath.Join(dir, "topology", "core_id"), strconv.Itoa(core)+"\n")
 		writeFile(t, filepath.Join(dir, "online"), "1\n")
 	}
+	// cpu10 is offline past the last readable CPU: nothing brackets it, so
+	// its core is unknown. cpu11 is online but publishes no topology (as some
+	// VMs do): its core is not reconstructed either, and it is not offline.
+	for cpu := 8; cpu <= 9; cpu++ {
+		dir := filepath.Join(cpuRoot, "cpu"+strconv.Itoa(cpu))
+		writeFile(t, filepath.Join(dir, "topology", "core_id"), "16\n")
+		writeFile(t, filepath.Join(dir, "online"), "1\n")
+	}
+	writeFile(t, filepath.Join(cpuRoot, "cpu10", "online"), "0\n")
+	writeFile(t, filepath.Join(cpuRoot, "cpu11", "online"), "1\n")
 
 	c := New()
 	if err := c.Init(context.Background(), collector.Config{
@@ -346,6 +356,19 @@ func TestCollect_CPUTopologyReportsOfflineCoreWithItsRealCore(t *testing.T) {
 		if byID[cpu].Attrs["core_id_inferred"] != "true" {
 			t.Errorf("expected %s to declare its core reconstructed, got %q", cpu, byID[cpu].Attrs["core_id_inferred"])
 		}
+	}
+	// Neither placeholder may be published as if it were a core number, and
+	// neither CPU was reconstructed.
+	for _, cpu := range []string{"cpu10", "cpu11"} {
+		if got, ok := byID[cpu].Attrs["core_id"]; ok {
+			t.Errorf("expected no core_id for %s, whose core is unknown, got %q", cpu, got)
+		}
+		if got, ok := byID[cpu].Attrs["core_id_inferred"]; ok {
+			t.Errorf("expected no inference flag on %s, got %q", cpu, got)
+		}
+	}
+	if byID["cpu11"].Attrs["online"] != "true" {
+		t.Errorf("expected cpu11 online, got %q", byID["cpu11"].Attrs["online"])
 	}
 	// The running cores must read exactly as before, inference flag included.
 	for cpu, core := range map[string]string{"cpu0": "0", "cpu1": "0", "cpu4": "8", "cpu5": "8", "cpu6": "12", "cpu7": "12"} {

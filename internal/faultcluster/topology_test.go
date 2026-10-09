@@ -1,6 +1,7 @@
 package faultcluster
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -331,8 +332,8 @@ func TestReadTopology_UnbracketedOfflineCPUGetsACoreOfItsOwn(t *testing.T) {
 		if readable[topo.LogicalToCore[cpu]] {
 			t.Errorf("cpu%d was given core %d, which a running CPU already reports", cpu, topo.LogicalToCore[cpu])
 		}
-		if !topo.CoreIDInferred[cpu] {
-			t.Errorf("expected cpu%d to be marked inferred", cpu)
+		if !topo.CoreIDUnknown[cpu] || topo.CoreIDInferred[cpu] {
+			t.Errorf("expected cpu%d to be marked unknown, not inferred", cpu)
 		}
 	}
 	if topo.LogicalToCore[30] == topo.LogicalToCore[31] {
@@ -340,31 +341,312 @@ func TestReadTopology_UnbracketedOfflineCPUGetsACoreOfItsOwn(t *testing.T) {
 	}
 }
 
+// sysCPU describes one logical CPU of a fixture: its real physical core and,
+// on a hybrid part with PMU lists, its core type.
+type sysCPU struct {
+	core     int
+	coreType CoreType
+}
+
+// sysTopology writes a sysfs fixture from a ground-truth layout. offline CPUs
+// keep their cpuN directory and "online" file but lose topology/, and are
+// left out of the hybrid PMU lists, exactly like the kernel reports them.
+// pmu=false omits those lists entirely, as on a kernel or CPU without them.
+func sysTopology(t *testing.T, layout []sysCPU, pmu bool, offline ...int) string {
+	t.Helper()
+	root := t.TempDir()
+	cpuRoot := filepath.Join(root, "devices", "system", "cpu")
+	down := map[int]bool{}
+	for _, cpu := range offline {
+		down[cpu] = true
+	}
+	var pCores, eCores []string
+	for cpu, info := range layout {
+		dir := filepath.Join(cpuRoot, "cpu"+strconv.Itoa(cpu))
+		if !down[cpu] {
+			writeSysFile(t, filepath.Join(dir, "topology", "core_id"), strconv.Itoa(info.core)+"\n")
+			switch info.coreType {
+			case CoreTypeP:
+				pCores = append(pCores, strconv.Itoa(cpu))
+			case CoreTypeE:
+				eCores = append(eCores, strconv.Itoa(cpu))
+			}
+		}
+		if cpu > 0 {
+			online := "1"
+			if down[cpu] {
+				online = "0"
+			}
+			writeSysFile(t, filepath.Join(dir, "online"), online+"\n")
+		}
+	}
+	if pmu {
+		writeSysFile(t, filepath.Join(root, "bus", "event_source", "devices", "cpu_core", "cpus"), strings.Join(pCores, ",")+"\n")
+		writeSysFile(t, filepath.Join(root, "bus", "event_source", "devices", "cpu_atom", "cpus"), strings.Join(eCores, ",")+"\n")
+	}
+	return root
+}
+
+// raptorLakeLayout: cpu0..cpu15 are eight SMT P-cores (core_id 0,4,...,28),
+// cpu16..cpu31 sixteen single-thread E-cores (core_id 32..47).
+func raptorLakeLayout() []sysCPU {
+	layout := make([]sysCPU, 32)
+	for cpu := range layout {
+		if cpu < 16 {
+			layout[cpu] = sysCPU{core: 4 * (cpu / 2), coreType: CoreTypeP}
+		} else {
+			layout[cpu] = sysCPU{core: 16 + cpu, coreType: CoreTypeE}
+		}
+	}
+	return layout
+}
+
+// interleavedLayout: cores siblings on cpu k and cpu k+cores, the numbering
+// of AMD and most non-hybrid Intel parts. coreStep spaces the core ids.
+func interleavedLayout(cores, coreStep int) []sysCPU {
+	layout := make([]sysCPU, 2*cores)
+	for cpu := range layout {
+		layout[cpu] = sysCPU{core: coreStep * (cpu % cores), coreType: CoreTypeUnknown}
+	}
+	return layout
+}
+
+// singleThreadLayout: one thread per core, consecutive core ids — SMT off on
+// an AMD part once the upper half of the CPUs is gone, or a non-SMT CPU.
+func singleThreadLayout(cores int) []sysCPU {
+	layout := make([]sysCPU, cores)
+	for cpu := range layout {
+		layout[cpu] = sysCPU{core: cpu, coreType: CoreTypeUnknown}
+	}
+	return layout
+}
+
+type topologyFixture struct {
+	name   string
+	layout []sysCPU
+	pmu    bool
+	// baseOffline is always offline on top of the CPUs under test, e.g. the
+	// siblings SMT-off (nosmt) takes down.
+	baseOffline []int
+}
+
+func topologyFixtures() []topologyFixture {
+	consecutiveNoSMT := make([]sysCPU, 16)
+	var oddCPUs []int
+	for cpu := range consecutiveNoSMT {
+		consecutiveNoSMT[cpu] = sysCPU{core: 4 * (cpu / 2), coreType: CoreTypeUnknown}
+		if cpu%2 == 1 {
+			oddCPUs = append(oddCPUs, cpu)
+		}
+	}
+	return []topologyFixture{
+		{name: "raptor lake with PMU lists", layout: raptorLakeLayout(), pmu: true},
+		{name: "hybrid without PMU lists", layout: raptorLakeLayout(), pmu: false},
+		{name: "AMD k/k+N/2 siblings", layout: interleavedLayout(8, 1)},
+		{name: "non-hybrid Intel k/k+N/2 siblings, spaced core ids", layout: interleavedLayout(4, 4)},
+		{name: "AMD with SMT off", layout: interleavedLayout(8, 1), baseOffline: []int{8, 9, 10, 11, 12, 13, 14, 15}},
+		{name: "consecutive siblings with SMT off", layout: consecutiveNoSMT, baseOffline: oddCPUs},
+		{name: "no SMT", layout: singleThreadLayout(8)},
+	}
+}
+
+// checkTopologyAgainstTruth asserts the invariants that make a reconstructed
+// topology safe to draw and to correlate against:
+//   - a CPU marked inferred sits on its real core;
+//   - every offline CPU is either inferred or unknown, never silently both
+//     or neither;
+//   - no CPU ever shares a core with a CPU that is not its real sibling;
+//   - an unknown CPU shares its placeholder with nobody.
+func checkTopologyAgainstTruth(t *testing.T, label string, layout []sysCPU, down map[int]bool, topo Topology) {
+	t.Helper()
+	for cpu, info := range layout {
+		got, ok := topo.LogicalToCore[cpu]
+		if !ok {
+			t.Errorf("%s: cpu%d has no core at all", label, cpu)
+			continue
+		}
+		if !down[cpu] {
+			if got != info.core || topo.CoreIDInferred[cpu] || topo.CoreIDUnknown[cpu] {
+				t.Errorf("%s: readable cpu%d changed: core %d (want %d), inferred=%v unknown=%v", label, cpu, got, info.core, topo.CoreIDInferred[cpu], topo.CoreIDUnknown[cpu])
+			}
+			continue
+		}
+		if topo.CoreIDInferred[cpu] == topo.CoreIDUnknown[cpu] {
+			t.Errorf("%s: offline cpu%d must be exactly one of inferred/unknown, got inferred=%v unknown=%v", label, cpu, topo.CoreIDInferred[cpu], topo.CoreIDUnknown[cpu])
+		}
+		if topo.CoreIDInferred[cpu] && got != info.core {
+			t.Errorf("%s: offline cpu%d inferred on core %d, really on %d", label, cpu, got, info.core)
+		}
+		for other, otherInfo := range layout {
+			if other == cpu || topo.LogicalToCore[other] != got {
+				continue
+			}
+			if topo.CoreIDUnknown[cpu] {
+				t.Errorf("%s: unknown cpu%d shares its placeholder core %d with cpu%d", label, cpu, got, other)
+			} else if otherInfo.core != info.core {
+				t.Errorf("%s: offline cpu%d landed on core %d with cpu%d, which is not its sibling", label, cpu, got, other)
+			}
+		}
+	}
+}
+
 func TestReadTopology_OfflineCPUNeverCollidesWithARunningCore(t *testing.T) {
-	// Every single logical CPU number on this machine is some other core's
-	// real core_id for cpu0..cpu7, so an offline CPU anywhere in that range
-	// used to be able to corrupt a running core. None may.
-	for _, offline := range [][]int{{8, 9}, {2, 3}, {4}, {12, 13}, {16}, {8, 9, 12, 13}} {
-		topo, err := ReadTopology(raptorLakeTopology(t, offline...))
+	// Every single CPU and every pair of adjacent CPUs offline, on every
+	// fixture layout: no reconstruction may ever put a CPU on a core it does
+	// not belong to, and what it does reconstruct must be the real core.
+	for _, fixture := range topologyFixtures() {
+		// cpu0 is never offlined: the kernel does not allow it, and it has no
+		// "online" file to say so.
+		var sets [][]int
+		for cpu := 1; cpu < len(fixture.layout); cpu++ {
+			sets = append(sets, []int{cpu})
+			if cpu+1 < len(fixture.layout) {
+				sets = append(sets, []int{cpu, cpu + 1})
+			}
+		}
+		sets = append(sets, []int{8, 9, 12, 13}, []int{5, 9}, []int{3, 4})
+		for _, set := range sets {
+			down := map[int]bool{}
+			var offline []int
+			for _, cpu := range append(append([]int{}, fixture.baseOffline...), set...) {
+				if cpu < len(fixture.layout) && !down[cpu] {
+					down[cpu] = true
+					offline = append(offline, cpu)
+				}
+			}
+			topo, err := ReadTopology(sysTopology(t, fixture.layout, fixture.pmu, offline...))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			checkTopologyAgainstTruth(t, fmt.Sprintf("%s, offline %v", fixture.name, offline), fixture.layout, down, topo)
+		}
+	}
+}
+
+func TestReadTopology_InterleavedSiblingsAreNeverReconstructed(t *testing.T) {
+	// AMD: cpu3's sibling is cpu11. A consecutive-sibling reading would top
+	// up core 2 or core 4 with it; the numbering disproves that, so cpu3
+	// must stand alone as unknown.
+	for _, fixture := range []topologyFixture{
+		{name: "AMD", layout: interleavedLayout(8, 1)},
+		{name: "non-hybrid Intel", layout: interleavedLayout(4, 4)},
+	} {
+		topo, err := ReadTopology(sysTopology(t, fixture.layout, false, 3))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		down := map[int]bool{}
-		for _, cpu := range offline {
-			down[cpu] = true
+		if topo.CoreIDInferred[3] || !topo.CoreIDUnknown[3] {
+			t.Errorf("%s: expected cpu3 unknown, got core %d inferred=%v", fixture.name, topo.LogicalToCore[3], topo.CoreIDInferred[3])
 		}
-		for _, cpu := range offline {
-			core := topo.LogicalToCore[cpu]
-			for other := 0; other < 32; other++ {
-				if down[other] || topo.LogicalToCore[other] != core {
-					continue
-				}
-				// Sharing a core with a running CPU is only legitimate when
-				// that CPU is a real sibling thread of the same physical core.
-				if other/2 != cpu/2 || cpu >= 16 {
-					t.Errorf("offline %v: cpu%d landed on core %d, shared with running cpu%d", offline, cpu, core, other)
-				}
+	}
+}
+
+func TestReadTopology_SMTOffReconstructsOnlyWholeSingleThreadCores(t *testing.T) {
+	// SMT off on AMD: cpu8..15 are the downed siblings and cpu0..7 run one
+	// thread per core. cpu3 going down as well is a whole core, core 3.
+	offline := []int{3, 8, 9, 10, 11, 12, 13, 14, 15}
+	topo, err := ReadTopology(sysTopology(t, interleavedLayout(8, 1), false, offline...))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !topo.CoreIDInferred[3] || topo.LogicalToCore[3] != 3 {
+		t.Errorf("expected cpu3 inferred on core 3, got %d inferred=%v", topo.LogicalToCore[3], topo.CoreIDInferred[3])
+	}
+	for _, cpu := range offline[1:] {
+		if !topo.CoreIDUnknown[cpu] {
+			t.Errorf("expected unbracketed cpu%d unknown, got core %d", cpu, topo.LogicalToCore[cpu])
+		}
+	}
+}
+
+func TestReadTopology_HybridWithoutPMUListsDoesNotMergeECores(t *testing.T) {
+	// Without cpu_core/cpu_atom every CPU is CoreTypeUnknown, so P-cores
+	// (two threads) and E-cores (one) look like one type. Taking the larger
+	// count would top up E-core 35 with cpu20; the counts disagree, so
+	// nothing of that type is reconstructed.
+	topo, err := ReadTopology(sysTopology(t, raptorLakeLayout(), false, 20))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if topo.CoreIDInferred[20] || !topo.CoreIDUnknown[20] {
+		t.Errorf("expected cpu20 unknown, got core %d inferred=%v", topo.LogicalToCore[20], topo.CoreIDInferred[20])
+	}
+	if topo.LogicalToCore[19] != 35 || topo.LogicalToCore[21] != 37 {
+		t.Errorf("expected E-cores 35/37 untouched, got %d/%d", topo.LogicalToCore[19], topo.LogicalToCore[21])
+	}
+}
+
+func TestReadTopology_WholePCoreOfflineAtTheHybridEdge(t *testing.T) {
+	// P-core 7 (cpu14/cpu15, core_id 28) offline right before the first
+	// E-core: the run is exactly one P-core long, the P-core below it is
+	// complete, and E-core 32 sits one P step past 28. One core, not two.
+	topo, err := ReadTopology(raptorLakeTopology(t, 14, 15))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, cpu := range []int{14, 15} {
+		if !topo.CoreIDInferred[cpu] || topo.LogicalToCore[cpu] != 28 {
+			t.Errorf("expected cpu%d inferred on core 28, got %d inferred=%v", cpu, topo.LogicalToCore[cpu], topo.CoreIDInferred[cpu])
+		}
+		if topo.CoreType[cpu] != CoreTypeP {
+			t.Errorf("expected cpu%d as P-core, got %v", cpu, topo.CoreType[cpu])
+		}
+	}
+}
+
+func TestReadTopology_TwoECoresOfflineAtTheHybridEdgeStayUnknown(t *testing.T) {
+	// cpu16/cpu17 are two E-cores, but the run is also one P-core long. The
+	// E-core above (core 34) is not one P step past 32, so the P reading is
+	// refuted and both stay unknown rather than merged.
+	topo, err := ReadTopology(raptorLakeTopology(t, 16, 17))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, cpu := range []int{16, 17} {
+		if !topo.CoreIDUnknown[cpu] {
+			t.Errorf("expected cpu%d unknown, got core %d inferred=%v", cpu, topo.LogicalToCore[cpu], topo.CoreIDInferred[cpu])
+		}
+	}
+	if topo.LogicalToCore[16] == topo.LogicalToCore[17] {
+		t.Error("expected the two E-cores not to be merged")
+	}
+}
+
+func TestReadTopology_TwoOfflineCPUsOnDifferentCores(t *testing.T) {
+	cases := map[string]struct {
+		offline []int
+		want    map[int]int
+	}{
+		"apart":    {offline: []int{5, 9}, want: map[int]int{5: 8, 9: 16}},
+		"adjacent": {offline: []int{3, 4}, want: map[int]int{3: 4, 4: 8}},
+	}
+	for name, tc := range cases {
+		topo, err := ReadTopology(raptorLakeTopology(t, tc.offline...))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for cpu, core := range tc.want {
+			if !topo.CoreIDInferred[cpu] || topo.LogicalToCore[cpu] != core {
+				t.Errorf("%s: expected cpu%d inferred on core %d, got %d inferred=%v", name, cpu, core, topo.LogicalToCore[cpu], topo.CoreIDInferred[cpu])
 			}
+		}
+	}
+}
+
+func TestReadTopology_OnlineCPUWithoutTopologyIsNotInferred(t *testing.T) {
+	// A VM with no topology/ anywhere: every CPU is online and is its own
+	// core, as before reconstruction existed. Nothing was reconstructed.
+	root := t.TempDir()
+	for cpu := 0; cpu < 4; cpu++ {
+		writeSysFile(t, filepath.Join(root, "devices", "system", "cpu", "cpu"+strconv.Itoa(cpu), "online"), "1\n")
+	}
+	topo, err := ReadTopology(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for cpu := 0; cpu < 4; cpu++ {
+		if topo.LogicalToCore[cpu] != cpu || topo.CoreIDInferred[cpu] || topo.CoreIDUnknown[cpu] {
+			t.Errorf("expected cpu%d on core %d and unflagged, got %d inferred=%v unknown=%v", cpu, cpu, topo.LogicalToCore[cpu], topo.CoreIDInferred[cpu], topo.CoreIDUnknown[cpu])
 		}
 	}
 }

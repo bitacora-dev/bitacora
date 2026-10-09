@@ -33,9 +33,14 @@ type Topology struct {
 	// offline CPU, so a CPU offlined at boot never exposes its core_id and its
 	// membership has to be deduced from the CPUs that still do.
 	CoreIDInferred map[int]bool
-	CoreType       map[int]CoreType
-	Online         map[int]bool
-	Isolated       map[int]bool
+	// CoreIDUnknown marks CPUs whose core could not be read or reconstructed.
+	// Their LogicalToCore entry is a placeholder past every real core id: it
+	// keeps them from corrupting a running core, but it is not a core number
+	// and must not be presented as one.
+	CoreIDUnknown map[int]bool
+	CoreType      map[int]CoreType
+	Online        map[int]bool
+	Isolated      map[int]bool
 	// IsolatedAvailable reports whether the authoritative isolated CPU list
 	// was readable. A missing list is not evidence that every CPU is shared.
 	IsolatedAvailable bool
@@ -63,6 +68,7 @@ func ReadTopology(sysRoot string) (Topology, error) {
 	topo := Topology{
 		LogicalToCore:  map[int]int{},
 		CoreIDInferred: map[int]bool{},
+		CoreIDUnknown:  map[int]bool{},
 		CoreType:       map[int]CoreType{},
 		Online:         map[int]bool{},
 		Isolated:       map[int]bool{},
@@ -124,7 +130,9 @@ func ReadTopology(sysRoot string) (Topology, error) {
 }
 
 // reconstructCores fills in LogicalToCore for every CPU whose core_id was
-// unreadable, and marks each one in CoreIDInferred.
+// unreadable. An offline CPU whose core could be reconstructed from its
+// neighbours is marked in CoreIDInferred; any CPU that only got a placeholder
+// is marked in CoreIDUnknown instead.
 //
 // The one thing it must never do is hand such a CPU a core id that belongs to
 // a different physical core: that is what made offlining cpu8/cpu9 (the two
@@ -133,14 +141,19 @@ func ReadTopology(sysRoot string) (Topology, error) {
 //
 // Order of preference, most to least evidence:
 //  1. fillTopologyGaps, which extrapolates the kernel's own enumeration from
-//     the CPUs that are readable.
+//     the CPUs that are readable — offline CPUs only. An online CPU with no
+//     topology/ subtree is not a CPU the kernel took down, and nothing about
+//     its neighbours says where it sits.
 //  2. the CPU's own number, but only on a machine that publishes no core id
-//     at all. A kernel with no topology/ subtree anywhere is one that does not
-//     publish SMT information, so every logical CPU really is its own core and
-//     there is no core identity left to corrupt.
-//  3. a core id past every readable one, i.e. "a core of its own, siblings
-//     unknown". Deliberately useless for correlation, but it cannot corrupt a
-//     core that is actually running.
+//     at all (typically a VM). A kernel with no topology/ subtree anywhere is
+//     one that does not publish SMT information, so every logical CPU really
+//     is its own core and there is no core identity left to corrupt. This is
+//     the same assumption as before reconstruction existed, so it is not
+//     flagged as inferred.
+//  3. a placeholder core id past every readable one, i.e. "a core of its own,
+//     siblings unknown". Deliberately useless for correlation, but it cannot
+//     corrupt a core that is actually running. CoreIDUnknown tells consumers
+//     not to present it as a core number.
 func reconstructCores(topo *Topology, present, unreadable []int) {
 	if len(unreadable) == 0 {
 		return
@@ -157,56 +170,71 @@ func reconstructCores(topo *Topology, present, unreadable []int) {
 		}
 	}
 
-	inferred := fillTopologyGaps(topo, present, unreadable, readableCores)
+	var offline []int
+	for _, cpu := range unreadable {
+		if !topo.Online[cpu] {
+			offline = append(offline, cpu)
+		}
+	}
+
+	inferred := fillTopologyGaps(topo, present, unreadable, offline, readableCores)
 	next := maxReadableCore + 1
 	for _, cpu := range unreadable {
-		topo.CoreIDInferred[cpu] = true
 		if core, ok := inferred[cpu]; ok {
 			topo.LogicalToCore[cpu] = core
+			topo.CoreIDInferred[cpu] = true
 			continue
 		}
-		switch {
-		case len(readableCores) == 0:
+		if len(readableCores) == 0 {
 			topo.LogicalToCore[cpu] = cpu
-		default:
-			topo.LogicalToCore[cpu] = next
-			next++
+			continue
 		}
+		topo.LogicalToCore[cpu] = next
+		topo.CoreIDUnknown[cpu] = true
+		next++
 	}
 }
 
-// fillTopologyGaps reconstructs the core of unreadable CPUs by extrapolating
-// the enumeration the kernel used for the readable ones. Linux numbers the
-// sibling threads of a core consecutively and walks core ids in a constant
-// step, so the readable P-cores of an i9-13900K with cpu8/cpu9 offlined
-// (core_id 0,4,8,12 for cpu0..cpu7 then 20,24,28 for cpu10..cpu15) pin the
-// step at 4 and leave exactly one core id, 16, unaccounted for between cpu7
-// and cpu10 — the real core of the two missing threads.
+// fillTopologyGaps reconstructs the core of offline CPUs by extrapolating the
+// enumeration the kernel used for the readable ones. On Intel hybrid CPUs
+// Linux numbers the sibling threads of a core consecutively and walks core ids
+// in a constant step, so the readable P-cores of an i9-13900K with cpu8/cpu9
+// offlined (core_id 0,4,8,12 for cpu0..cpu7 then 20,24,28 for cpu10..cpu15)
+// pin the step at 4 and leave exactly one core id, 16, unaccounted for between
+// cpu7 and cpu10 — the real core of the two missing threads.
+//
+// That numbering is not universal: AMD and most non-hybrid Intel parts put
+// the siblings of core k on cpu k and cpu k+N/2. A gap there says nothing
+// about the cores next to it, so a core type takes part only when
+// provenThreadsPerCore can show, from readable data alone, that its siblings
+// are consecutive and how many a core has.
 //
 // Each gap is reconstructed only from its own two readable neighbours: the
 // missing CPUs first top up the core below to its full thread count, then fill
-// whole cores hidden between the two, then top up the core above. A gap that
-// is unbracketed, straddles the P-core/E-core boundary, or whose length does
-// not match that accounting exactly is left out of the result for the caller
-// to fail closed on — a wrong sibling set is worse than an unknown one.
+// whole cores hidden between the two, then top up the core above. A gap at the
+// edge between two hybrid core types (a whole P-core offline right before the
+// first E-core) may only hold whole cores of the type below it. A gap that is
+// unbracketed or whose length does not match that accounting exactly is left
+// out of the result for the caller to fail closed on — a wrong sibling set is
+// worse than an unknown one.
 //
-// A reconstructed CPU also takes the hybrid core type of the two neighbours it
-// was placed between, which the PMU device lists cannot give it: they only
+// A reconstructed CPU also takes the hybrid core type of the neighbour whose
+// core it was placed in, which the PMU device lists cannot give it: they only
 // list CPUs that are online.
-func fillTopologyGaps(topo *Topology, present, unreadable []int, readableCores map[int]bool) map[int]int {
+func fillTopologyGaps(topo *Topology, present, unreadable, offline []int, readableCores map[int]bool) map[int]int {
 	filled := map[int]int{}
 	missing := map[int]bool{}
 	for _, cpu := range unreadable {
 		missing[cpu] = true
 	}
 	steps := coreIDSteps(topo, present, missing)
-	threadsPerCore, coreThreads := readableThreadCounts(topo, present, missing)
+	threadsPerCore, coreThreads := provenThreadsPerCore(topo, present)
 
-	for i := 0; i < len(unreadable); i++ {
-		run := []int{unreadable[i]}
-		for i+1 < len(unreadable) && unreadable[i+1] == unreadable[i]+1 {
+	for i := 0; i < len(offline); i++ {
+		run := []int{offline[i]}
+		for i+1 < len(offline) && offline[i+1] == offline[i]+1 {
 			i++
-			run = append(run, unreadable[i])
+			run = append(run, offline[i])
 		}
 
 		low, lowOK := topo.LogicalToCore[run[0]-1]
@@ -214,25 +242,33 @@ func fillTopologyGaps(topo *Topology, present, unreadable []int, readableCores m
 		if !lowOK || !highOK {
 			continue // unbracketed: nothing to interpolate between
 		}
-		coreType := topo.CoreType[run[0]-1]
-		if coreType != topo.CoreType[run[len(run)-1]+1] {
-			continue // the gap straddles a hybrid boundary
-		}
-		threads, ok := threadsPerCore[coreType]
-		if !ok || threads <= 0 {
+		lowType := topo.CoreType[run[0]-1]
+		highType := topo.CoreType[run[len(run)-1]+1]
+		threads, ok := threadsPerCore[lowType]
+		if !ok {
 			continue
 		}
 
-		step := steps[coreType]
-		cores, ok := assignGap(run, low, high, threads, coreThreads, step, readableCores, filled)
+		var cores []int
+		if lowType == highType {
+			cores, ok = assignGap(run, low, high, threads, coreThreads, steps[lowType], readableCores, filled)
+		} else {
+			if lowType == CoreTypeUnknown || highType == CoreTypeUnknown {
+				continue
+			}
+			cores, ok = assignEdgeGap(run, low, high, threads, coreThreads, steps[lowType], readableCores, filled)
+		}
 		if !ok {
 			for _, cpu := range run {
 				delete(filled, cpu)
 			}
 			continue
 		}
-		for _, cpu := range run {
-			topo.CoreType[cpu] = coreType
+		for n, cpu := range run {
+			topo.CoreType[cpu] = lowType
+			if cores[n] == high {
+				topo.CoreType[cpu] = highType
+			}
 		}
 		for _, core := range cores {
 			coreThreads[core]++
@@ -253,27 +289,13 @@ func fillTopologyGaps(topo *Topology, present, unreadable []int, readableCores m
 // Topping up the neighbours' own thread counts needs none of that, because it
 // invents no core id at all.
 func assignGap(run []int, low, high, threads int, coreThreads map[int]int, step int, readableCores map[int]bool, filled map[int]int) ([]int, bool) {
-	assigned := make([]int, 0, len(run))
-	offset := 0
-	place := func(count, core int) bool {
-		if core != low && core != high && readableCores[core] {
-			return false // a core no readable CPU claims is the only one free
-		}
-		for n := 0; n < count; n++ {
-			filled[run[offset]] = core
-			assigned = append(assigned, core)
-			offset++
-		}
-		return true
-	}
-
 	missingLow := max(0, threads-coreThreads[low])
 	if low == high {
 		// The gap sits between two threads of one readable core.
-		if len(run) != missingLow || !place(missingLow, low) {
+		if len(run) != missingLow {
 			return nil, false
 		}
-		return assigned, true
+		return placeRun(run, []coreSlot{{low, missingLow}}, low, high, readableCores, filled)
 	}
 
 	missingHigh := max(0, threads-coreThreads[high])
@@ -286,48 +308,136 @@ func assignGap(run []int, low, high, threads int, coreThreads map[int]int, step 
 		return nil, false
 	}
 
-	if !place(missingLow, low) {
-		return nil, false
-	}
+	slots := []coreSlot{{low, missingLow}}
 	for n := 0; n < hidden; n++ {
-		if !place(threads, low+step*(n+1)) {
-			return nil, false
-		}
+		slots = append(slots, coreSlot{low + step*(n+1), threads})
 	}
-	if !place(missingHigh, high) {
+	slots = append(slots, coreSlot{high, missingHigh})
+	return placeRun(run, slots, low, high, readableCores, filled)
+}
+
+// assignEdgeGap handles a run whose two readable neighbours are of different
+// hybrid core types — on an i9-13900K, P-core 7 (cpu14/cpu15) offline right
+// before the first E-core (cpu16). Only the type below the edge can own the
+// run, and only as whole cores aligned to its end: the core below has to be
+// complete already, the run has to be a whole number of its cores, and the
+// core above the edge has to sit exactly one step of the lower type past the
+// last reconstructed core, which is where the kernel continues numbering
+// (core_id 28 for P-core 7, then 32 for the first E-core). Two E-cores offline
+// right after the last P-core fail that last check and stay unknown.
+func assignEdgeGap(run []int, low, high, threads int, coreThreads map[int]int, step int, readableCores map[int]bool, filled map[int]int) ([]int, bool) {
+	if threads-coreThreads[low] != 0 || len(run)%threads != 0 || step <= 0 {
 		return nil, false
+	}
+	hidden := len(run) / threads
+	if high-low != step*(hidden+1) {
+		return nil, false
+	}
+	slots := make([]coreSlot, 0, hidden)
+	for n := 0; n < hidden; n++ {
+		slots = append(slots, coreSlot{low + step*(n+1), threads})
+	}
+	return placeRun(run, slots, low, high, readableCores, filled)
+}
+
+type coreSlot struct{ core, count int }
+
+// placeRun assigns the run's CPUs, in order, to the given cores. A core other
+// than the run's own two neighbours must be one no readable CPU claims.
+func placeRun(run []int, slots []coreSlot, low, high int, readableCores map[int]bool, filled map[int]int) ([]int, bool) {
+	assigned := make([]int, 0, len(run))
+	for _, slot := range slots {
+		if slot.core != low && slot.core != high && readableCores[slot.core] {
+			return nil, false // a core no readable CPU claims is the only one free
+		}
+		for n := 0; n < slot.count; n++ {
+			filled[run[len(assigned)]] = slot.core
+			assigned = append(assigned, slot.core)
+		}
 	}
 	return assigned, true
 }
 
-// readableThreadCounts returns how many readable logical CPUs each core has,
-// and per core type the largest of those counts — the machine's own answer to
-// "how many threads does a core of this type have", which is what says whether
-// a gap next to a core is one of its missing threads or a core of its own.
-func readableThreadCounts(topo *Topology, present []int, missing map[int]bool) (map[CoreType]int, map[int]int) {
-	coreThreads := map[int]int{}
+// provenThreadsPerCore returns how many readable logical CPUs each core has,
+// and per core type how many threads one of its cores has — but only for core
+// types whose readable data proves the two things reconstruction relies on:
+//
+//   - siblings are numbered consecutively: every core with two or more
+//     readable threads holds a contiguous range of CPU numbers. AMD's and
+//     most non-hybrid Intel parts' k / k+N/2 sibling numbering fails this.
+//   - the thread count is known: every fully observed core of the type (one
+//     whose CPUs on both sides of its range are readable and belong to other
+//     cores, or do not exist) has the same number of threads, and no core
+//     has more. A hybrid CPU without the PMU lists lumps P-cores and E-cores
+//     together as CoreTypeUnknown, whose fully observed cores then disagree
+//     (two threads and one), so nothing of that type is inferred.
+//
+// A type that cannot prove both is absent from the result.
+func provenThreadsPerCore(topo *Topology, present []int) (map[CoreType]int, map[int]int) {
+	exists := map[int]bool{}
 	for _, cpu := range present {
-		if missing[cpu] {
-			continue
-		}
-		if core, ok := topo.LogicalToCore[cpu]; ok {
-			coreThreads[core]++
-		}
+		exists[cpu] = true
 	}
-	threadsPerCore := map[CoreType]int{}
-	for _, cpu := range present {
-		if missing[cpu] {
-			continue
-		}
+	members := map[int][]int{}
+	var order []int
+	coreThreads := map[int]int{}
+	for _, cpu := range present { // present is sorted, so members are too
 		core, ok := topo.LogicalToCore[cpu]
 		if !ok {
 			continue
 		}
-		if coreType := topo.CoreType[cpu]; coreThreads[core] > threadsPerCore[coreType] {
-			threadsPerCore[coreType] = coreThreads[core]
+		if _, seen := members[core]; !seen {
+			order = append(order, core)
+		}
+		members[core] = append(members[core], cpu)
+		coreThreads[core]++
+	}
+
+	rejected := map[CoreType]bool{}
+	observed := map[CoreType]int{}
+	largest := map[CoreType]int{}
+	for _, core := range order {
+		cpus := members[core]
+		first, last := cpus[0], cpus[len(cpus)-1]
+		coreType := topo.CoreType[first]
+		for _, cpu := range cpus {
+			if topo.CoreType[cpu] != coreType {
+				rejected[coreType] = true
+				rejected[topo.CoreType[cpu]] = true
+			}
+		}
+		if last-first+1 != len(cpus) {
+			rejected[coreType] = true
+			continue
+		}
+		largest[coreType] = max(largest[coreType], len(cpus))
+		if !boundedBy(topo, exists, first-1, core) || !boundedBy(topo, exists, last+1, core) {
+			continue
+		}
+		if seen, ok := observed[coreType]; ok && seen != len(cpus) {
+			rejected[coreType] = true
+			continue
+		}
+		observed[coreType] = len(cpus)
+	}
+
+	threadsPerCore := map[CoreType]int{}
+	for coreType, threads := range observed {
+		if !rejected[coreType] && largest[coreType] <= threads {
+			threadsPerCore[coreType] = threads
 		}
 	}
 	return threadsPerCore, coreThreads
+}
+
+// boundedBy reports whether cpu closes off a core's range: it either does not
+// exist, or it is readable and sits on another core.
+func boundedBy(topo *Topology, exists map[int]bool, cpu, core int) bool {
+	if !exists[cpu] {
+		return true
+	}
+	other, ok := topo.LogicalToCore[cpu]
+	return ok && other != core
 }
 
 // coreIDSteps returns, per core type, the constant distance between the core

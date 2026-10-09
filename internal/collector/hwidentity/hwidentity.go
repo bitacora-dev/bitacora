@@ -200,9 +200,14 @@ func cpuTopologyItems(sysRoot string) []schema.InventoryItem {
 	items := make([]schema.InventoryItem, 0, len(topo.LogicalToCore))
 	for cpu, coreID := range topo.LogicalToCore {
 		attrs := schema.Labels{
-			"core_id":   strconv.Itoa(coreID),
 			"online":    strconv.FormatBool(topo.Online[cpu]),
 			"core_type": string(topo.CoreType[cpu]),
+		}
+		// A CPU whose core could be neither read nor reconstructed only holds
+		// a placeholder id internally. Publishing it would present an invented
+		// number as a physical core, so core_id is left out instead.
+		if !topo.CoreIDUnknown[cpu] {
+			attrs["core_id"] = strconv.Itoa(coreID)
 		}
 		if topo.IsolatedAvailable {
 			attrs["isolated"] = strconv.FormatBool(topo.Isolated[cpu])

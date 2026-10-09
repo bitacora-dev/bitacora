@@ -10,7 +10,11 @@ information UnRaid-style panels show.
   mountpoint) and filtering out pseudo/virtual filesystems (`proc`,
   `tmpfs`, `overlay`, ...) and anything not under `/dev/`.
 - `statfsUsage` reads real capacity/used/available bytes via `statfs(2)`
-  (`golang.org/x/sys/unix.Statfs_t`) against each mountpoint directly.
+  (`golang.org/x/sys/unix.Statfs_t`) against each mountpoint directly, and
+  the same call's `f_fsid` as `fs_id` (omitted when the filesystem reports
+  none). One filesystem mounted twice (bind mounts) shares it; two
+  filesystems behind one generic device string (`/dev/root`) do not, which
+  is what lets the panel fold the first and keep the second apart.
 - `readSMARTIdentities` reads bitacora-smart's spool entry (ADR-0005) and
   joins each mount's `model`, `serial`, `temperature_celsius` and
   `smart_status` by matching `baseDeviceName` (e.g. `/dev/sdc1` and

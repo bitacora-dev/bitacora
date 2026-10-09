@@ -87,6 +87,31 @@ func TestStatfsUsage_RealMountpoint(t *testing.T) {
 	}
 }
 
+// Two directories on one filesystem are what a bind mount looks like to
+// statfs: they must report the same filesystem id, so a reader folds them
+// into one disk instead of counting the filesystem twice.
+func TestStatfsUsage_SameFilesystemSameID(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "a")
+	second := filepath.Join(root, "b")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	a, okA := statfsUsage(first)
+	b, okB := statfsUsage(second)
+	if !okA || !okB {
+		t.Fatal("expected statfs to succeed against real directories")
+	}
+	if a.fsID != b.fsID {
+		t.Fatalf("expected one filesystem id for one filesystem, got %q and %q", a.fsID, b.fsID)
+	}
+	if a.fsID != "" && len(a.fsID) != 16 {
+		t.Fatalf("expected a 16-hex-digit filesystem id, got %q", a.fsID)
+	}
+}
+
 func TestStatfsUsage_MissingPathFails(t *testing.T) {
 	_, ok := statfsUsage("/this/path/does/not/exist/anywhere")
 	if ok {
@@ -141,6 +166,9 @@ func TestCollector_CombinesMountsAndSMARTIdentity(t *testing.T) {
 	}
 	if attrs["capacity_bytes"] == "" || attrs["used_bytes"] == "" {
 		t.Fatalf("expected real statfs usage attrs, got %+v", attrs)
+	}
+	if want, _ := statfsUsage(realMount); attrs["fs_id"] != want.fsID {
+		t.Fatalf("expected fs_id %q from statfs, got %q", want.fsID, attrs["fs_id"])
 	}
 }
 

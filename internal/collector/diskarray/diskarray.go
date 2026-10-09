@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -103,6 +104,9 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 			attrs["capacity_bytes"] = strconv.FormatUint(usage.total, 10)
 			attrs["used_bytes"] = strconv.FormatUint(usage.used, 10)
 			attrs["available_bytes"] = strconv.FormatUint(usage.available, 10)
+			if usage.fsID != "" {
+				attrs["fs_id"] = usage.fsID
+			}
 		}
 
 		if id, ok := smart[baseDeviceName(m.device)]; ok {
@@ -238,6 +242,12 @@ func unescapeMountField(s string) string {
 
 type diskUsage struct {
 	total, used, available uint64
+	// fsID is statfs' f_fsid, hex encoded: the same for every mount of one
+	// filesystem (bind mounts included) and different for different ones,
+	// which is what lets a reader tell them apart when /proc/mounts names
+	// the same generic device (e.g. /dev/root) for both. Empty when the
+	// filesystem reports no id (all zero).
+	fsID string
 }
 
 func statfsUsage(mountpoint string) (diskUsage, bool) {
@@ -252,7 +262,11 @@ func statfsUsage(mountpoint string) (diskUsage, bool) {
 	if total < free {
 		return diskUsage{}, false
 	}
-	return diskUsage{total: total, used: total - free, available: avail}, true
+	usage := diskUsage{total: total, used: total - free, available: avail}
+	if st.Fsid.Val[0] != 0 || st.Fsid.Val[1] != 0 {
+		usage.fsID = fmt.Sprintf("%08x%08x", uint32(st.Fsid.Val[0]), uint32(st.Fsid.Val[1]))
+	}
+	return usage, true
 }
 
 // baseDeviceName strips a trailing partition number so "/dev/sdc1" and

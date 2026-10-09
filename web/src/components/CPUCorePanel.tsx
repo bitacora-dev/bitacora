@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import type { CPUSeries, Inventory, InventoryItem, SeriesPoint } from "../api";
-import { useTranslation } from "../i18n";
+import { useTranslation, type Dictionary } from "../i18n";
 
 const CPU_PANEL_PREFERENCES_KEY = "bitacora_cpu_panel_preferences";
 export const CPU_AVERAGING_WINDOWS = [30, 60, 300, 900] as const;
@@ -14,7 +14,12 @@ export const CPU_AVERAGING_WINDOWS = [30, 60, 300, 900] as const;
 // integers) and reusing it as a React key makes them collide into one card.
 // offline lists the threads the kernel has taken down, which is a different
 // state from a thread that simply has no samples yet.
-interface CoreGroup { key: string; id: string; type: string; online: boolean; cpus: CPUSeries[]; isolated: string[]; offline: string[]; }
+//
+// reportedID is false when no thread of the group carries a core id the
+// kernel itself published: the agent either reconstructed it from the
+// neighbouring CPUs (core_id_inferred) or could not place the CPU at all and
+// left core_id out. Such an id must not be drawn as a real core number.
+export interface CoreGroup { key: string; id: string; reportedID: boolean; type: string; online: boolean; cpus: CPUSeries[]; isolated: string[]; offline: string[]; }
 export interface CPUAggregate { ts: string; mean: number; max: number; count: number; }
 export interface CPUPanelPreferences { expanded: boolean; averagingWindowSeconds: typeof CPU_AVERAGING_WINDOWS[number]; }
 const defaultPreferences: CPUPanelPreferences = { expanded: false, averagingWindowSeconds: 60 };
@@ -42,7 +47,7 @@ function topologyByCPU(inventory: Inventory | null): Map<string, InventoryItem> 
 // It only fills in around CPUs that are reporting. With no load reported at
 // all the panel still has to say so rather than drawing a grid of cores that
 // all read "no samples".
-function withTopologyOnlyCPUs(series: CPUSeries[], topology: Map<string, InventoryItem>): CPUSeries[] {
+export function withTopologyOnlyCPUs(series: CPUSeries[], topology: Map<string, InventoryItem>): CPUSeries[] {
   if (series.length === 0) return series;
   const sampled = new Set(series.map((cpu) => cpu.cpu));
   const extra: CPUSeries[] = [];
@@ -57,7 +62,8 @@ export function groupCPUCores(series: CPUSeries[], inventory: Inventory | null):
     const item = topology.get(cpu.cpu);
     const coreID = item?.attrs.core_id;
     const key = coreID === undefined ? `cpu-${cpu.cpu}` : `core-${coreID}`;
-    const group = groups.get(key) ?? { key, id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", online: false, cpus: [], isolated: [], offline: [] };
+    const group = groups.get(key) ?? { key, id: coreID ?? cpu.cpu, reportedID: false, type: item?.attrs.core_type ?? "unknown", online: false, cpus: [], isolated: [], offline: [] };
+    if (coreID !== undefined && item?.attrs.core_id_inferred !== "true") group.reportedID = true;
     // A core is down only once every one of its threads is. One offline
     // thread next to a running sibling is marked on the thread, not on the
     // core, so a live core is never drawn as if it had stopped.
@@ -141,7 +147,6 @@ export default function CPUCorePanel({ cores, topology, identity }: Props) {
   const model = system?.attrs.cpu_model;
   const power = Number(system?.attrs.cpu_power_watts);
   const hasPower = Number.isFinite(power);
-  const percentage = new Intl.NumberFormat(intlTag, { style: "percent", minimumFractionDigits: 0, maximumFractionDigits: 1 });
   const detailsID = "cpu-core-details";
 
   useEffect(() => { saveCPUPanelPreferences(preferences); }, [preferences]);
@@ -159,29 +164,46 @@ export default function CPUCorePanel({ cores, topology, identity }: Props) {
         <button type="button" className="cpu-details-toggle" aria-expanded={preferences.expanded} aria-controls={detailsID} onClick={() => setPreferences((current) => ({ ...current, expanded: !current.expanded }))}>{preferences.expanded ? t.cpuDetailsHide : t.cpuDetailsShow}</button>
       </div>
       {preferences.expanded && <div className="cpu-core-grid" id={detailsID} aria-label={t.cpuCoresTitle}>
-        {groups.map((group) => <section className={`cpu-core${group.online ? "" : " cpu-core--offline"}`} key={group.key}>
-          <div className="cpu-core-heading"><strong>{t.cpuCoreLabel(group.id)}</strong>{group.type !== "unknown" && <span>{t.cpuCoreType(group.type)}</span>}{!group.online && <span className="cpu-core-offline">{t.cpuOffline}</span>}{group.isolated.length === group.cpus.length && <span>{t.cpuIsolated}</span>}</div>
-          <div className="cpu-thread-list">{group.cpus.map((cpu) => {
-            const aggregate = latestAggregate(cpu, preferences.averagingWindowSeconds);
-            const isolated = group.isolated.includes(cpu.cpu);
-            const offline = group.offline.includes(cpu.cpu);
-            const mean = aggregate?.mean ?? null;
-            const peak = aggregate?.max ?? null;
-            const peakWidth = Math.max(0, Math.min(1, peak ?? 0)) * 100;
-            return <div className="cpu-thread" key={cpu.cpu}>
-              <span>{t.cpuThreadLabel(cpu.cpu)}</span>
-              <div className={`cpu-thread-meter cpu-thread-meter--${peak === null ? "empty" : severity(peak)}`} aria-label={mean === null || peak === null ? t.noSamples : t.cpuThreadUsage(cpu.cpu, percentage.format(mean), percentage.format(peak))}>
-                <span style={{ width: `${Math.max(0, Math.min(1, mean ?? 0)) * 100}%` }} />
-                {peak !== null && <i className="cpu-thread-peak" style={{ "--cpu-peak": `${peakWidth}%` } as CSSProperties} aria-hidden="true" />}
-              </div>
-              <strong>{mean === null ? t.noSamples : percentage.format(mean)}</strong>
-              {peak !== null && <small>{t.cpuPeakLabel(percentage.format(peak))}</small>}
-              {offline && group.online && <small className="cpu-thread-offline">{t.cpuOffline}</small>}
-              {isolated && <small className="cpu-thread-isolated"><span className="sr-only">{t.cpuIsolatedThread(cpu.cpu)}</span><span aria-hidden="true">{t.cpuIsolated}</span></small>}
-            </div>;
-          })}</div>
-        </section>)}
+        {groups.map((group) => <CPUCoreCard group={group} averagingWindowSeconds={preferences.averagingWindowSeconds} key={group.key} />)}
       </div>}
     </>}
   </article>;
+}
+
+// coreLabel names a card. A switched-off core whose id the kernel did not
+// publish is named by its threads instead, so a reconstructed or unknown core
+// never reads as a core number the machine reported.
+function coreLabel(group: CoreGroup, t: Dictionary): string {
+  if (!group.online && !group.reportedID) return t.cpuOfflineCoreLabel(group.cpus.map((cpu) => cpu.cpu).join(", "));
+  return t.cpuCoreLabel(group.id);
+}
+
+export function CPUCoreCard({ group, averagingWindowSeconds }: { group: CoreGroup; averagingWindowSeconds: number }) {
+  const { t, intlTag } = useTranslation();
+  const percentage = new Intl.NumberFormat(intlTag, { style: "percent", minimumFractionDigits: 0, maximumFractionDigits: 1 });
+  return <section className={`cpu-core${group.online ? "" : " cpu-core--offline"}`}>
+    <div className="cpu-core-heading"><strong>{coreLabel(group, t)}</strong>{group.type !== "unknown" && <span>{t.cpuCoreType(group.type)}</span>}{!group.online && group.reportedID && <span className="cpu-core-offline">{t.cpuOffline}</span>}{group.isolated.length === group.cpus.length && <span>{t.cpuIsolated}</span>}</div>
+    <div className="cpu-thread-list">{group.cpus.map((cpu) => {
+      const aggregate = latestAggregate(cpu, averagingWindowSeconds);
+      const isolated = group.isolated.includes(cpu.cpu);
+      const offline = group.offline.includes(cpu.cpu);
+      const mean = aggregate?.mean ?? null;
+      const peak = aggregate?.max ?? null;
+      const peakWidth = Math.max(0, Math.min(1, peak ?? 0)) * 100;
+      // A switched-off thread has no samples because it is off, not because
+      // they have not arrived yet.
+      const idle = offline ? t.cpuOffline : t.noSamples;
+      return <div className="cpu-thread" key={cpu.cpu}>
+        <span>{t.cpuThreadLabel(cpu.cpu)}</span>
+        <div className={`cpu-thread-meter cpu-thread-meter--${peak === null ? "empty" : severity(peak)}`} aria-label={mean === null || peak === null ? idle : t.cpuThreadUsage(cpu.cpu, percentage.format(mean), percentage.format(peak))}>
+          <span style={{ width: `${Math.max(0, Math.min(1, mean ?? 0)) * 100}%` }} />
+          {peak !== null && <i className="cpu-thread-peak" style={{ "--cpu-peak": `${peakWidth}%` } as CSSProperties} aria-hidden="true" />}
+        </div>
+        <strong>{mean === null ? idle : percentage.format(mean)}</strong>
+        {peak !== null && <small>{t.cpuPeakLabel(percentage.format(peak))}</small>}
+        {offline && group.online && <small className="cpu-thread-offline">{t.cpuOffline}</small>}
+        {isolated && <small className="cpu-thread-isolated"><span className="sr-only">{t.cpuIsolatedThread(cpu.cpu)}</span><span aria-hidden="true">{t.cpuIsolated}</span></small>}
+      </div>;
+    })}</div>
+  </section>;
 }

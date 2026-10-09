@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { cpuTemperature, groupCPUCores, isolatedCPUCount, offlineCPUCount, powerWatts, readCPUPanelPreferences, severity, totalLoadSeries, windowStats } from "./CPUCorePanel";
+import type { Inventory } from "../api";
+import { cpuTemperature, groupCPUCores, isolatedCPUCount, offlineCPUCount, powerWatts, readCPUPanelPreferences, severity, totalLoadSeries, windowStats, withTopologyOnlyCPUs } from "./CPUCorePanel";
 import { sparklineData } from "./CPULoadSparkline";
 
 const topology = (attrs: Record<string, Record<string, string>>) => ({
@@ -80,6 +81,108 @@ describe("offline CPUs", () => {
 
     expect(groups[0].offline).toEqual([]);
     expect(offlineCPUCount(groups)).toBe(0);
+  });
+});
+
+// Ported from the card layout's offline-CPU model (task #1297): the real
+// icloudserver layout has eight SMT P-cores numbered 0,4,8,...,28 over
+// cpu0..cpu15, then single-thread E-cores from core 32 over cpu16..cpu31.
+// cpu8 and cpu9 are the two threads of core 16, offlined because that P-core
+// is degraded; the agent reconstructs their core and marks it inferred.
+describe("offline CPUs on icloudserver's layout", () => {
+  const raptorLake = (offline: string[]): Inventory => ({
+    host_id: "host-a", kind: "cpu_topology", reported_at: "2026-10-08T10:00:00Z", schema: 1,
+    items: Array.from({ length: 32 }, (_unused, cpu) => ({
+      id: `cpu${cpu}`,
+      name: `cpu${cpu}`,
+      attrs: {
+        core_id: String(cpu < 16 ? 4 * Math.floor(cpu / 2) : 16 + cpu),
+        core_type: cpu < 16 ? "p-core" : "e-core",
+        online: offline.includes(String(cpu)) ? "false" : "true",
+        ...(offline.includes(String(cpu)) ? { core_id_inferred: "true" } : {}),
+      },
+    })),
+  });
+  const sampled = (cpus: string[]) => cpus.map((cpu) => ({ cpu, points: [{ ts: "2026-10-08T10:00:00Z", value: 0.1 }] }));
+  const allOffline = (group: { cpus: { cpu: string }[]; offline: string[] }) => group.offline.length === group.cpus.length;
+
+  it("keeps an offline core's threads together and off every other core", () => {
+    const groups = groupCPUCores(sampled(["4", "5", "8", "9", "10", "11"]), raptorLake(["8", "9"]));
+
+    const offline = groups.filter(allOffline);
+    expect(offline).toHaveLength(1);
+    expect(offline[0].id).toBe("16");
+    expect(offline[0].cpus.map((cpu) => cpu.cpu)).toEqual(["8", "9"]);
+    expect(offline[0].type).toBe("p-core");
+
+    // cpu4 and cpu5 run on core 8, which is also the number cpu8 carries.
+    // They must keep exactly their own two threads and stay running.
+    const core8 = groups.find((group) => group.key === "core-8");
+    expect(core8?.cpus.map((cpu) => cpu.cpu)).toEqual(["4", "5"]);
+    expect(core8?.offline).toEqual([]);
+  });
+
+  it("draws an offline core even once its last samples have aged out", () => {
+    const groups = groupCPUCores(sampled(["4", "5"]), raptorLake(["8", "9"]));
+
+    const core16 = groups.find((group) => group.key === "core-16");
+    expect(core16 && allOffline(core16)).toBe(true);
+    expect(core16?.cpus.map((cpu) => cpu.cpu)).toEqual(["8", "9"]);
+    expect(core16?.cpus.every((cpu) => cpu.points.length === 0)).toBe(true);
+    expect(offlineCPUCount(groups)).toBe(2);
+  });
+
+  it("marks a single downed thread on the thread, not on its running core", () => {
+    const groups = groupCPUCores(sampled(["4", "5"]), raptorLake(["5"]));
+
+    const core8 = groups.find((group) => group.key === "core-8");
+    expect(core8?.offline).toEqual(["5"]);
+    expect(core8 && allOffline(core8)).toBe(false);
+  });
+
+  it("gives every group its own render key even when two share an id", () => {
+    // A CPU with no core_id at all (one the agent could not place) falls back
+    // to its own number as id, which is also some other core's core_id.
+    const groups = groupCPUCores(sampled(["4", "5", "8"]), {
+      host_id: "host-a", kind: "cpu_topology", reported_at: "2026-10-08T10:00:00Z", schema: 1,
+      items: [
+        { id: "cpu4", name: "cpu4", attrs: { core_id: "8", core_type: "p-core", online: "true" } },
+        { id: "cpu5", name: "cpu5", attrs: { core_id: "8", core_type: "p-core", online: "true" } },
+        { id: "cpu8", name: "cpu8", attrs: { core_type: "unknown", online: "false" } },
+      ],
+    });
+
+    expect(groups.map((group) => group.id)).toEqual(["8", "8"]);
+    expect(groups.map((group) => group.key)).toEqual(["core-8", "cpu-8"]);
+    expect(groups[1].offline).toEqual(["8"]);
+  });
+
+  it("orders cores by their lowest thread so a reconstructed core stays in place", () => {
+    const groups = groupCPUCores(sampled(["0", "1", "10", "11"]), raptorLake(["8", "9"]));
+
+    expect(groups).toHaveLength(24);
+    expect(groups.slice(0, 8).map((group) => group.id)).toEqual(["0", "4", "8", "12", "16", "20", "24", "28"]);
+    expect(groups.map((group) => group.cpus[0].cpu)).toEqual(
+      Array.from({ length: 8 }, (_unused, core) => String(core * 2)).concat(Array.from({ length: 16 }, (_unused, core) => String(16 + core))),
+    );
+  });
+});
+
+describe("withTopologyOnlyCPUs", () => {
+  const known = new Map([
+    ["0", { id: "cpu0", name: "cpu0", attrs: { core_id: "0", online: "true" } }],
+    ["1", { id: "cpu1", name: "cpu1", attrs: { core_id: "0", online: "false" } }],
+  ]);
+
+  it("draws nothing when no CPU reports load at all", () => {
+    const empty: { cpu: string; points: { ts: string; value: number }[] }[] = [];
+    expect(withTopologyOnlyCPUs(empty, known)).toBe(empty);
+    expect(groupCPUCores([], topology({ cpu0: { core_id: "0", online: "false" } }))).toEqual([]);
+  });
+
+  it("adds an empty series for every topology CPU the metrics lack", () => {
+    const reporting = [{ cpu: "0", points: [{ ts: "2026-10-08T10:00:00Z", value: 0.5 }] }];
+    expect(withTopologyOnlyCPUs(reporting, known)).toEqual([...reporting, { cpu: "1", points: [] }]);
   });
 });
 

@@ -63,7 +63,7 @@ export const en: Dictionary = {
   cpuThreadUsage: (cpu, mean, peak) => `CPU ${cpu}: mean ${mean}, peak ${peak}`,
   cpuThreadNoSamples: (cpu) => `CPU ${cpu}: no samples yet`,
   cpuNoValue: "--",
-  cpuOffline: "Offline",
+  cpuOffline: "Switched off",
   cpuOfflineShort: "off",
   cpuOfflineCount: (count) => (count === 1 ? "1 CPU offline (taken out of the scheduler by the kernel)" : `${count} CPUs offline (taken out of the scheduler by the kernel)`),
   cpuOfflineThread: (cpu) => `CPU ${cpu} is offline: it reports no load.`,

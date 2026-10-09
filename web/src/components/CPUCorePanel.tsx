@@ -31,7 +31,12 @@ export const CPU_REFRESH_STALE_AFTER_SECONDS = 60;
 // deliberately no core-level online flag: any such flag has to pick between
 // "some thread is offline" and "every thread is offline", and a reader who
 // takes the first for the second dims a core that is still working.
-interface CoreGroup {
+//
+// key identifies the group for rendering. It is deliberately not id: two
+// groups can share an id (a core_id and a bare CPU number are both plain
+// integers) and reusing it as a React key makes them collide into one row.
+export interface CoreGroup {
+  key: string;
   id: string;
   type: string;
   cpus: CPUSeries[];
@@ -57,14 +62,35 @@ function topologyByCPU(inventory: Inventory | null): Map<string, InventoryItem> 
   return topology;
 }
 
+// withTopologyOnlyCPUs appends an empty series for every CPU the topology
+// knows about but the metrics do not. An offlined core reports no samples at
+// all, so without this it would silently disappear from the panel as soon as
+// the last samples it produced while it was still running fall out of
+// retention — exactly the core an operator most needs to still see.
+//
+// It only fills in around CPUs that are reporting. With no load reported at
+// all the panel still has to say so rather than drawing rows of cores that
+// all read "no samples".
+export function withTopologyOnlyCPUs(series: CPUSeries[], topology: Map<string, InventoryItem>): CPUSeries[] {
+  if (series.length === 0) return series;
+  const sampled = new Set(series.map((cpu) => cpu.cpu));
+  const extra: CPUSeries[] = [];
+  for (const cpu of topology.keys()) if (!sampled.has(cpu)) extra.push({ cpu, points: [] });
+  return extra.length === 0 ? series : [...series, ...extra];
+}
+
+// A CPU whose core the agent could not place carries no core_id at all (the
+// agent never publishes a placeholder), so it becomes its own row. Rows are
+// labelled by their lowest CPU number, never by core id, so a reconstructed
+// core id is not presented as a number the kernel reported either.
 export function groupCPUCores(series: CPUSeries[], inventory: Inventory | null): CoreGroup[] {
   const topology = topologyByCPU(inventory);
   const groups = new Map<string, CoreGroup>();
-  for (const cpu of series) {
+  for (const cpu of withTopologyOnlyCPUs(series, topology)) {
     const item = topology.get(cpu.cpu);
     const coreID = item?.attrs.core_id;
     const key = coreID === undefined ? `cpu-${cpu.cpu}` : `core-${coreID}`;
-    const group = groups.get(key) ?? { id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", cpus: [], isolated: [], offline: [] };
+    const group = groups.get(key) ?? { key, id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", cpus: [], isolated: [], offline: [] };
     if (group.type === "unknown" && item?.attrs.core_type) group.type = item.attrs.core_type;
     if (item?.attrs.isolated === "true") group.isolated.push(cpu.cpu);
     if (item?.attrs.online === "false") group.offline.push(cpu.cpu);
@@ -73,7 +99,9 @@ export function groupCPUCores(series: CPUSeries[], inventory: Inventory | null):
   }
   return [...groups.values()]
     .map((group) => ({ ...group, cpus: group.cpus.sort((left, right) => cpuNumber(left.cpu) - cpuNumber(right.cpu)) }))
-    .sort((left, right) => Number(left.id) - Number(right.id));
+    // Ordered by lowest thread, not by core id: a core id is only unique, not
+    // ordered, and a reconstructed one can land past every real core.
+    .sort((left, right) => cpuNumber(left.cpus[0].cpu) - cpuNumber(right.cpus[0].cpu));
 }
 
 // How many logical CPUs the kernel has reserved. A core held back by isolcpus
@@ -207,7 +235,6 @@ interface Props {
 export default function CPUCorePanel({ cores, topology, identity, total, temperatures, generatedAt }: Props) {
   const { t, intlTag } = useTranslation();
   const [preferences, setPreferences] = useState(readCPUPanelPreferences);
-  const [now, setNow] = useState(() => Date.now());
   const groups = groupCPUCores(cores, topology);
   const isolatedCount = isolatedCPUCount(groups);
   const offlineCount = offlineCPUCount(groups);
@@ -215,29 +242,20 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
   const model = system?.attrs.cpu_model;
   const power = powerWatts(system?.attrs.cpu_power_watts);
   const temperature = cpuTemperature(temperatures);
-  // Memoised because the one-second tick below re-renders this panel, and the
-  // per-core fallback inside totalLoadSeries builds a fresh array every call.
-  // A new array identity reaches CPULoadSparkline as a new `points` prop, and
-  // that chart rebuilds its uPlot instance whenever its data changes, so an
-  // unmemoised value tore the history strip down and rebuilt it once a second
-  // on any host that reports per-CPU usage but no aggregate series.
+  // Memoised because the per-core fallback inside totalLoadSeries builds a
+  // fresh array every call. A new array identity reaches CPULoadSparkline as a
+  // new `points` prop, and that chart rebuilds its uPlot instance whenever its
+  // data changes, so an unmemoised value tore the history strip down on every
+  // re-render (a preference change, a parent update) on any host that reports
+  // per-CPU usage but no aggregate series.
   const totalPoints = useMemo(() => totalLoadSeries(total, cores), [total, cores]);
   const totalStats = windowStats(totalPoints, preferences.averagingWindowSeconds);
-  const percentage = new Intl.NumberFormat(intlTag, { style: "percent", minimumFractionDigits: 0, maximumFractionDigits: 1 });
-  const decimal = new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 });
-  const refreshedAge = formatAge(generatedAt, intlTag, now);
-  const refreshedSeconds = ageSeconds(generatedAt, now);
-  const refreshStale = refreshedSeconds !== null && refreshedSeconds > CPU_REFRESH_STALE_AFTER_SECONDS;
+  // Intl formatters are comparatively expensive to build and only depend on
+  // the locale; every row reuses the same two.
+  const percentage = useMemo(() => new Intl.NumberFormat(intlTag, { style: "percent", minimumFractionDigits: 0, maximumFractionDigits: 1 }), [intlTag]);
+  const decimal = useMemo(() => new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 }), [intlTag]);
 
   useEffect(() => { saveCPUPanelPreferences(preferences); }, [preferences]);
-
-  // The agent's cadence is what it is; the one-second tick only keeps the
-  // "updated N seconds ago" line honest between polls, so the operator can
-  // tell a quiet host from a stalled page.
-  useEffect(() => {
-    const tick = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(tick);
-  }, []);
 
   return <article className="control-panel cpu-core-panel">
     <div className="panel-title-row cpu-core-panel-header">
@@ -279,10 +297,7 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
           {CPU_AVERAGING_WINDOWS.map((seconds) => <option key={seconds} value={seconds}>{t.cpuAveragingWindow(seconds)}</option>)}
         </select>
       </label>
-      <p className={`cpu-core-refresh${refreshStale ? " cpu-core-refresh--stale" : ""}`}>
-        <span className="cpu-core-pulse" aria-hidden="true" />
-        {refreshedAge === null ? t.noSamples : t.cpuRefreshedAge(refreshedAge)}
-      </p>
+      <CPURefreshAge generatedAt={generatedAt} />
     </div>
 
     {(isolatedCount > 0 || offlineCount > 0) && <p className="cpu-core-reservations">
@@ -295,7 +310,7 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
         {groups.map((group) => {
           const siblings = group.cpus.slice(1).map((cpu) => cpu.cpu);
           const allOffline = group.offline.length === group.cpus.length;
-          return <li className={`cpu-core-row${allOffline ? " cpu-core-row--offline" : ""}`} key={group.id}>
+          return <li className={`cpu-core-row${allOffline ? " cpu-core-row--offline" : ""}`} key={group.key}>
             <div className="cpu-core-row-label">
               <strong>{t.cpuCoreLabel(group.cpus[0].cpu)}</strong>
               {group.type !== "unknown" && <span className="cpu-core-row-type">{t.cpuCoreType(group.type)}</span>}
@@ -336,4 +351,27 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
       />
     </>}
   </article>;
+}
+
+// CPURefreshAge owns the one-second tick on its own, so only this line
+// re-renders every second instead of every core row, meter and formatter of
+// the panel. The agent's cadence is what it is; the tick only keeps the
+// "updated N seconds ago" line honest between polls, so the operator can tell
+// a quiet host from a stalled page.
+export function CPURefreshAge({ generatedAt }: { generatedAt: string | null }) {
+  const { t, intlTag } = useTranslation();
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(tick);
+  }, []);
+
+  const refreshedAge = formatAge(generatedAt, intlTag, now);
+  const refreshedSeconds = ageSeconds(generatedAt, now);
+  const refreshStale = refreshedSeconds !== null && refreshedSeconds > CPU_REFRESH_STALE_AFTER_SECONDS;
+  return <p className={`cpu-core-refresh${refreshStale ? " cpu-core-refresh--stale" : ""}`}>
+    <span className="cpu-core-pulse" aria-hidden="true" />
+    {refreshedAge === null ? t.noSamples : t.cpuRefreshedAge(refreshedAge)}
+  </p>;
 }

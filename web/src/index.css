@@ -1570,8 +1570,12 @@ body {
 
 .usage-ring span { z-index: 1; }
 
-.usage-ring--compact { width: 2rem; height: 2rem; font-size: 0.62rem; }
-.usage-ring--compact::before { width: 1.55rem; height: 1.55rem; }
+/* Sized around its widest label rather than around the glyphs that happen
+   to fit: "100 %" is five characters and a separator, and at 2rem across
+   it spilled over the arc on both sides. The hole has to hold the text,
+   not the other way round. */
+.usage-ring--compact { width: 2.5rem; height: 2.5rem; font-size: 0.58rem; }
+.usage-ring--compact::before { width: 2.05rem; height: 2.05rem; }
 
 .usage-bar { height: 0.42rem; overflow: hidden; border-radius: 999px; background: var(--line-soft); }
 .usage-bar span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); }

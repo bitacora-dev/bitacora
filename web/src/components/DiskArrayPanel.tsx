@@ -167,7 +167,8 @@ function UsageBar({ usage, label, intlTag }: { usage: DiskUsage; label: string; 
 
 function UsageRing({ usage, label, intlTag }: { usage: DiskUsage; label: string; intlTag: string }) {
   const { t } = useTranslation();
-  // Whole percent only: the ring is 2rem across and a decimal overflows it.
+  // Whole percent only: the ring is sized to hold "100 %" and a decimal
+  // place would push past it. The per-disk bars still carry the decimal.
   const percentage = formatPercentage(usage.ratio, intlTag, 0);
   return (
     <div

@@ -32,8 +32,8 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 		return nil
 	}
 
-	prefixes, filterLists := activeAptListPrefixes(sourcesList, sourcesDir)
-	candidates, err := candidateVersionsForSources(listsDir, prefixes, filterLists)
+	sources, filterLists := activeAptSources(sourcesList, sourcesDir)
+	candidates, err := candidateVersionsForSources(listsDir, sources, filterLists)
 	if err != nil || len(candidates) == 0 {
 		// No usable cache — `apt update` has never run on this host, or
 		// the lists directory doesn't exist. Nothing to compare against,
@@ -42,21 +42,26 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 	}
 
 	refreshedAt := aptCacheRefreshedAt(listsDir)
+	suites := newAptSuitePolicy(listsDir)
 
 	items := make([]schema.InventoryItem, 0, len(installed))
 	for name, installedVersion := range installed {
 		candidate, ok := candidates[name]
-		if !ok || debversion.Compare(candidate, installedVersion) <= 0 {
+		if !ok || debversion.Compare(candidate.version, installedVersion) <= 0 {
 			continue
 		}
 
 		attrs := schema.Labels{
 			"source":            "apt",
 			"installed_version": installedVersion,
-			"candidate_version": candidate,
+			"candidate_version": candidate.version,
 		}
 		if !refreshedAt.IsZero() {
 			attrs["cache_age_seconds"] = strconv.FormatFloat(now.Sub(refreshedAt).Seconds(), 'f', 0, 64)
+		}
+		if candidate.source.suite != "" {
+			attrs["candidate_suite"] = candidate.source.suite
+			attrs["candidate_automatic"] = strconv.FormatBool(suites.automatic(candidate.source))
 		}
 		items = append(items, schema.InventoryItem{
 			ID:    "apt:" + name,
@@ -162,25 +167,35 @@ func parseDpkgStatus(path string) (map[string]string, error) {
 	return installed, scanner.Err()
 }
 
-// candidateVersionsForSources reads every configured repository's local
-// package list, keeping the highest version found per package name — a
-// package can appear in more than one enabled repo (e.g. both a distro's main
-// archive and its security updates) at different versions.
-//
-// Only list files backed by currently configured binary-package sources are
-// read. apt leaves old list files behind when a source is removed; treating
-// those as current makes the candidates lie. If source configuration is
-// unavailable, callers may deliberately retain the old cache-only behavior by
-// passing filterLists=false.
-func candidateVersionsForSources(listsDir string, prefixes map[string]struct{}, filterLists bool) (map[string]string, error) {
+// aptCandidate is the highest version found for one package across every
+// readable list file, together with the configured source that carried it —
+// a package can appear in more than one enabled repo (e.g. both a distro's
+// main archive and its backports suite) at different versions.
+type aptCandidate struct {
+	version string
+	source  aptSource
+}
+
+// candidateVersionsForSources reads only list files backed by currently
+// configured binary-package sources. apt leaves old list files behind when a
+// source is removed; treating those as current makes the candidates lie. If
+// source configuration is unavailable, callers may deliberately retain the
+// old cache-only behavior by passing filterLists=false — the candidate then
+// carries no source, and the origin attributes are omitted rather than
+// guessed from the file name.
+func candidateVersionsForSources(listsDir string, sources map[string]aptSource, filterLists bool) (map[string]aptCandidate, error) {
 	entries, err := os.ReadDir(listsDir)
 	if err != nil {
 		return nil, err
 	}
 
-	candidates := map[string]string{}
+	candidates := map[string]aptCandidate{}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), "_Packages") || (filterLists && !matchesAptSource(e.Name(), prefixes)) {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), "_Packages") {
+			continue
+		}
+		source, matched := matchingAptSource(e.Name(), sources)
+		if filterLists && !matched {
 			continue
 		}
 
@@ -189,39 +204,101 @@ func candidateVersionsForSources(listsDir string, prefixes map[string]struct{}, 
 			continue
 		}
 		for name, version := range pkgs {
-			if current, ok := candidates[name]; !ok || debversion.Compare(version, current) > 0 {
-				candidates[name] = version
+			if current, ok := candidates[name]; !ok || debversion.Compare(version, current.version) > 0 {
+				candidates[name] = aptCandidate{version: version, source: source}
 			}
 		}
 	}
 	return candidates, nil
 }
 
-func matchesAptSource(listName string, prefixes map[string]struct{}) bool {
-	for prefix := range prefixes {
+// aptSource is one configured binary-package source, named the way apt names
+// the files it writes for it under the lists directory.
+type aptSource struct {
+	listPrefix    string // host_path_dists_suite_component_
+	releasePrefix string // host_path_dists_suite_
+	suite         string
+}
+
+func matchingAptSource(listName string, sources map[string]aptSource) (aptSource, bool) {
+	for prefix, source := range sources {
 		if strings.HasPrefix(listName, prefix) {
-			return true
+			return source, true
 		}
+	}
+	return aptSource{}, false
+}
+
+// aptSuitePolicy answers, per suite, whether apt installs versions from it on
+// its own initiative.
+//
+// Ubuntu's backports suite declares `NotAutomatic: yes` in its Release index,
+// which pins every version it carries below the release pocket: `apt upgrade`
+// leaves them alone, and `apt-cache policy` reports the installed version as
+// the candidate even though a higher one is cached. (`ButAutomaticUpgrades:
+// yes`, which Ubuntu also sets, only re-enables upgrades for packages whose
+// installed version already came from that suite — which is not knowable from
+// dpkg's database, so it is not claimed here.) The newer version is really
+// there, so it is still reported; what the suite attributes add is where it
+// comes from and that apt will not take it by itself, instead of presenting
+// an unactionable version jump as a pending update.
+type aptSuitePolicy struct {
+	listsDir string
+	known    map[string]bool
+}
+
+func newAptSuitePolicy(listsDir string) *aptSuitePolicy {
+	return &aptSuitePolicy{listsDir: listsDir, known: map[string]bool{}}
+}
+
+func (p *aptSuitePolicy) automatic(source aptSource) bool {
+	if source.releasePrefix == "" {
+		return true
+	}
+	if automatic, ok := p.known[source.releasePrefix]; ok {
+		return automatic
+	}
+	automatic := true
+	// InRelease is the inline-signed form and Release the detached one; the
+	// fields are plain text in both, so one line scan reads either.
+	for _, name := range []string{source.releasePrefix + "InRelease", source.releasePrefix + "Release"} {
+		contents, err := os.ReadFile(filepath.Join(p.listsDir, name))
+		if err != nil {
+			continue
+		}
+		automatic = !releaseDeclaresNotAutomatic(string(contents))
+		break
+	}
+	p.known[source.releasePrefix] = automatic
+	return automatic
+}
+
+func releaseDeclaresNotAutomatic(contents string) bool {
+	for _, line := range strings.Split(contents, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "NotAutomatic") {
+			continue
+		}
+		return strings.EqualFold(strings.TrimSpace(value), "yes")
 	}
 	return false
 }
 
-// activeAptListPrefixes returns the filenames apt uses for active binary
-// package sources. The boolean means source configuration was readable: an
-// empty but readable configuration intentionally matches no cached lists.
-func activeAptListPrefixes(sourcesList, sourcesDir string) (map[string]struct{}, bool) {
-	prefixes := map[string]struct{}{}
+// activeAptSources returns the currently configured binary-package sources,
+// keyed by the list-file prefix apt derives from each one. The boolean means
+// source configuration was readable: an empty but readable configuration
+// intentionally matches no cached lists.
+func activeAptSources(sourcesList, sourcesDir string) (map[string]aptSource, bool) {
+	sources := map[string]aptSource{}
 	configured := false
 	parse := func(path string, contents []byte) {
 		configured = true
+		parsed := parseLegacyAptSources(string(contents))
 		if strings.HasSuffix(path, ".sources") {
-			for prefix := range parseDeb822AptSources(string(contents)) {
-				prefixes[prefix] = struct{}{}
-			}
-			return
+			parsed = parseDeb822AptSources(string(contents))
 		}
-		for prefix := range parseLegacyAptSources(string(contents)) {
-			prefixes[prefix] = struct{}{}
+		for prefix, source := range parsed {
+			sources[prefix] = source
 		}
 	}
 	if sourcesList != "" {
@@ -230,11 +307,11 @@ func activeAptListPrefixes(sourcesList, sourcesDir string) (map[string]struct{},
 		}
 	}
 	if sourcesDir == "" {
-		return prefixes, configured
+		return sources, configured
 	}
 	entries, err := os.ReadDir(sourcesDir)
 	if err != nil {
-		return prefixes, configured
+		return sources, configured
 	}
 	configured = true
 	for _, entry := range entries {
@@ -248,11 +325,11 @@ func activeAptListPrefixes(sourcesList, sourcesDir string) (map[string]struct{},
 		}
 		parse(path, contents)
 	}
-	return prefixes, configured
+	return sources, configured
 }
 
-func parseLegacyAptSources(contents string) map[string]struct{} {
-	prefixes := map[string]struct{}{}
+func parseLegacyAptSources(contents string) map[string]aptSource {
+	sources := map[string]aptSource{}
 	for _, line := range strings.Split(contents, "\n") {
 		line = strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
 		fields := strings.Fields(line)
@@ -271,16 +348,16 @@ func parseLegacyAptSources(contents string) map[string]struct{} {
 		}
 		uri, suite := fields[index], fields[index+1]
 		for _, component := range fields[index+2:] {
-			if prefix, ok := aptListPrefix(uri, suite, component); ok {
-				prefixes[prefix] = struct{}{}
+			if source, ok := aptSourceFor(uri, suite, component); ok {
+				sources[source.listPrefix] = source
 			}
 		}
 	}
-	return prefixes
+	return sources
 }
 
-func parseDeb822AptSources(contents string) map[string]struct{} {
-	prefixes := map[string]struct{}{}
+func parseDeb822AptSources(contents string) map[string]aptSource {
+	sources := map[string]aptSource{}
 	fields := map[string]string{}
 	flush := func() {
 		types := strings.Fields(fields["types"])
@@ -291,8 +368,8 @@ func parseDeb822AptSources(contents string) map[string]struct{} {
 		for _, uri := range strings.Fields(fields["uris"]) {
 			for _, suite := range strings.Fields(fields["suites"]) {
 				for _, component := range strings.Fields(fields["components"]) {
-					if prefix, ok := aptListPrefix(uri, suite, component); ok {
-						prefixes[prefix] = struct{}{}
+					if source, ok := aptSourceFor(uri, suite, component); ok {
+						sources[source.listPrefix] = source
 					}
 				}
 			}
@@ -314,7 +391,7 @@ func parseDeb822AptSources(contents string) map[string]struct{} {
 		}
 	}
 	flush()
-	return prefixes
+	return sources
 }
 
 func contains(values []string, want string) bool {
@@ -326,14 +403,15 @@ func contains(values []string, want string) bool {
 	return false
 }
 
-func aptListPrefix(rawURI, suite, component string) (string, bool) {
+func aptSourceFor(rawURI, suite, component string) (aptSource, bool) {
 	uri, err := url.Parse(rawURI)
 	if err != nil || uri.Host == "" || suite == "" || component == "" {
-		return "", false
+		return aptSource{}, false
 	}
 	base := uri.Host + "_" + strings.ReplaceAll(strings.Trim(uri.Path, "/"), "/", "_")
 	base = strings.TrimSuffix(base, "_")
-	return base + "_dists_" + suite + "_" + component + "_", true
+	release := base + "_dists_" + suite + "_"
+	return aptSource{listPrefix: release + component + "_", releasePrefix: release, suite: suite}, true
 }
 
 // parsePackagesFile reads one apt list cache file — the same deb822

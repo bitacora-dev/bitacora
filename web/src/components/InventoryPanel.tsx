@@ -9,7 +9,7 @@ interface InventoryPanelProps {
 }
 
 const diskAttributes = ["device", "model", "serial", "fstype", "capacity_bytes", "used_bytes", "available_bytes"] as const;
-const updateAttributes = ["source", "installed_version", "candidate_version", "current_digest", "registry_digest", "arch", "repo", "cache_age_seconds"] as const;
+const updateAttributes = ["source", "installed_version", "candidate_version", "candidate_suite", "candidate_automatic", "current_digest", "registry_digest", "arch", "repo", "cache_age_seconds"] as const;
 const diskDetailAttributes = ["device", "model", "serial", "fstype"] as const;
 
 export interface DiskUsage {

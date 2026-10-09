@@ -19,7 +19,10 @@ Four independent sources, each degrading on its own:
   when it refreshes (`periodic/update-success-stamp`, the lists directory
   and its `partial/`), never from the `*_Packages` mtimes: apt preserves
   each index's remote `Last-Modified`, so a suite that never republishes
-  keeps its publication date forever.
+  keeps its publication date forever. Each item also reports
+  `candidate_suite` and `candidate_automatic`, because a candidate coming
+  from a `NotAutomatic` suite (Ubuntu's backports) is pinned below the
+  release pocket and `apt upgrade` will not install it.
 - **dnf** (`dnf.go`): reads the spool entry the new `bitacora-dnf`
   helper writes after running `dnf check-update` (ADR-0005) — parsing
   DNF's repository metadata format directly isn't reasonable without a
@@ -63,6 +66,13 @@ whole collector.
   demands more than anonymous or scope-limited token auth ends up
   "couldn't check", not authenticated against — ADR-0017 explicitly
   accepts this rather than forcing credential configuration.
+- **apt's full pin resolution.** `candidate_suite` and
+  `candidate_automatic` report the suite a candidate came from and that
+  suite's `NotAutomatic` flag; they are not a reimplementation of
+  `apt-cache policy`. Priorities from `/etc/apt/preferences.d`, and
+  `ButAutomaticUpgrades` (which does upgrade packages whose installed
+  version already came from that suite — unknowable from dpkg's
+  database), are deliberately not modelled.
 - **`Obsoleting Packages`** in dnf's output — packages that outright
   replace another installed package are a different concept from a
   version update, and `dnfhelper.parseCheckUpdate` stops before that

@@ -234,6 +234,8 @@ export const es: Dictionary = {
     source: "Origen",
     installed_version: "Versión instalada",
     candidate_version: "Versión disponible",
+    candidate_suite: "Disponible en",
+    candidate_automatic: "La instala apt upgrade",
     current_digest: "Digest actual",
     registry_digest: "Digest del registro",
     arch: "Arquitectura",

@@ -320,6 +320,82 @@ func TestAptItemsForSources_IgnoresDisabledSourceCandidates(t *testing.T) {
 	}
 }
 
+// Observed on icloudserver: the panel listed cockpit 362-1~bpo24.04.1 as
+// pending while `apt-cache policy cockpit` reported the installed 314-1 as the
+// candidate. noble-backports declares NotAutomatic, so apt pins everything it
+// carries below the release pocket and `apt upgrade` never takes it. The
+// version really is newer, so it is still reported — but it says where it
+// comes from and that apt will not install it on its own.
+func TestAptItemsForSources_MarksNotAutomaticSuiteCandidate(t *testing.T) {
+	dir := t.TempDir()
+	dpkgStatus := filepath.Join(dir, "status")
+	listsDir := filepath.Join(dir, "lists")
+	sourcesDir := filepath.Join(dir, "sources.list.d")
+	writeFile(t, dpkgStatus, "Package: cockpit\nStatus: install ok installed\nVersion: 314-1\n\n")
+	writeFile(t, filepath.Join(sourcesDir, "ubuntu.sources"), "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble noble-backports\nComponents: universe\n\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble_universe_binary-amd64_Packages"), "Package: cockpit\nVersion: 314-1\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-backports_universe_binary-amd64_Packages"), "Package: cockpit\nVersion: 362-1~bpo24.04.1\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble_InRelease"), "Suite: noble\nCodename: noble\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-backports_InRelease"), "Suite: noble-backports\nCodename: noble\nNotAutomatic: yes\nButAutomaticUpgrades: yes\n")
+
+	items := aptItemsForSources(dpkgStatus, listsDir, filepath.Join(dir, "sources.list"), sourcesDir, time.Now())
+	if len(items) != 1 {
+		t.Fatalf("expected cockpit to be reported once, got %+v", items)
+	}
+	if got := items[0].Attrs["candidate_version"]; got != "362-1~bpo24.04.1" {
+		t.Fatalf("candidate_version: got %q, want 362-1~bpo24.04.1", got)
+	}
+	if got := items[0].Attrs["candidate_suite"]; got != "noble-backports" {
+		t.Fatalf("candidate_suite: got %q, want noble-backports", got)
+	}
+	if got := items[0].Attrs["candidate_automatic"]; got != "false" {
+		t.Fatalf("candidate_automatic: got %q, want false for a NotAutomatic suite", got)
+	}
+}
+
+func TestAptItemsForSources_MarksOrdinarySuiteCandidateAutomatic(t *testing.T) {
+	dir := t.TempDir()
+	dpkgStatus := filepath.Join(dir, "status")
+	listsDir := filepath.Join(dir, "lists")
+	sourcesDir := filepath.Join(dir, "sources.list.d")
+	writeFile(t, dpkgStatus, "Package: bash\nStatus: install ok installed\nVersion: 1.0\n\n")
+	writeFile(t, filepath.Join(sourcesDir, "ubuntu.sources"), "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble-updates\nComponents: main\n\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-updates_main_binary-amd64_Packages"), "Package: bash\nVersion: 2.0\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-updates_InRelease"), "Suite: noble-updates\nCodename: noble\n")
+
+	items := aptItemsForSources(dpkgStatus, listsDir, filepath.Join(dir, "sources.list"), sourcesDir, time.Now())
+	if len(items) != 1 {
+		t.Fatalf("expected one update, got %+v", items)
+	}
+	if got := items[0].Attrs["candidate_suite"]; got != "noble-updates" {
+		t.Fatalf("candidate_suite: got %q, want noble-updates", got)
+	}
+	if got := items[0].Attrs["candidate_automatic"]; got != "true" {
+		t.Fatalf("candidate_automatic: got %q, want true", got)
+	}
+}
+
+// Without readable source configuration the file name is the only clue to
+// where a candidate came from, and guessing a suite out of it would invent a
+// fact. The origin attributes are omitted instead.
+func TestAptItems_OmitsSuiteAttributesWithoutSourceConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	dpkgStatus := filepath.Join(dir, "status")
+	listsDir := filepath.Join(dir, "lists")
+	writeFile(t, dpkgStatus, "Package: bash\nStatus: install ok installed\nVersion: 1.0\n\n")
+	writeFile(t, filepath.Join(listsDir, "archive.ubuntu.com_ubuntu_dists_noble-backports_universe_binary-amd64_Packages"), "Package: bash\nVersion: 2.0\n")
+
+	items := aptItems(dpkgStatus, listsDir, time.Now())
+	if len(items) != 1 {
+		t.Fatalf("expected one update, got %+v", items)
+	}
+	for _, attr := range []string{"candidate_suite", "candidate_automatic"} {
+		if got, ok := items[0].Attrs[attr]; ok {
+			t.Fatalf("expected %s to be omitted, got %q", attr, got)
+		}
+	}
+}
+
 func TestAptItems_MissingListsDirYieldsNoItemsNotError(t *testing.T) {
 	dir := t.TempDir()
 	dpkgStatus := filepath.Join(dir, "status")

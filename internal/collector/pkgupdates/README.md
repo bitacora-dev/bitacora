@@ -14,8 +14,12 @@ Four independent sources, each degrading on its own:
   maintains) — no `exec`. Versions are compared with Debian's own
   ordering rules (`internal/debversion`), not plain string comparison,
   so "1.9" is correctly older than "1.10". Reports `cache_age_seconds`
-  (the oldest `*_Packages` file's age) alongside each result — a stale
-  `apt update` means a stale answer, and that's surfaced, not hidden.
+  alongside each result — a stale `apt update` means a stale answer, and
+  that's surfaced, not hidden. The age comes from the signals apt moves
+  when it refreshes (`periodic/update-success-stamp`, the lists directory
+  and its `partial/`), never from the `*_Packages` mtimes: apt preserves
+  each index's remote `Last-Modified`, so a suite that never republishes
+  keeps its publication date forever.
 - **dnf** (`dnf.go`): reads the spool entry the new `bitacora-dnf`
   helper writes after running `dnf check-update` (ADR-0005) — parsing
   DNF's repository metadata format directly isn't reasonable without a

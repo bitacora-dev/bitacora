@@ -33,13 +33,15 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 	}
 
 	prefixes, filterLists := activeAptListPrefixes(sourcesList, sourcesDir)
-	candidates, cacheAge, err := candidateVersionsForSources(listsDir, prefixes, filterLists)
+	candidates, err := candidateVersionsForSources(listsDir, prefixes, filterLists)
 	if err != nil || len(candidates) == 0 {
 		// No usable cache — `apt update` has never run on this host, or
 		// the lists directory doesn't exist. Nothing to compare against,
 		// not an error.
 		return nil
 	}
+
+	refreshedAt := aptCacheRefreshedAt(listsDir)
 
 	items := make([]schema.InventoryItem, 0, len(installed))
 	for name, installedVersion := range installed {
@@ -53,8 +55,8 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 			"installed_version": installedVersion,
 			"candidate_version": candidate,
 		}
-		if !cacheAge.IsZero() {
-			attrs["cache_age_seconds"] = strconv.FormatFloat(now.Sub(cacheAge).Seconds(), 'f', 0, 64)
+		if !refreshedAt.IsZero() {
+			attrs["cache_age_seconds"] = strconv.FormatFloat(now.Sub(refreshedAt).Seconds(), 'f', 0, 64)
 		}
 		items = append(items, schema.InventoryItem{
 			ID:    "apt:" + name,
@@ -63,6 +65,52 @@ func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, no
 		})
 	}
 	return items
+}
+
+// aptCacheRefreshedAt reports when apt last refreshed its package lists.
+//
+// It deliberately does NOT look at the mtime of the *_Packages files. apt
+// preserves each index's remote Last-Modified timestamp on the local copy, so
+// that mtime says when the repository last published that index, not when
+// this host last fetched it. Ubuntu's release pocket never republishes:
+// `archive.ubuntu.com_ubuntu_dists_noble_main_binary-amd64_Packages` carries
+// noble's release date forever. Deriving the cache age from the oldest of
+// those files is what made icloudserver report "package cache outdated:
+// 896.8 days" on 2026-10-08, hours after a successful `apt update` — the
+// number was the age of noble's frozen index, not of the cache.
+//
+// Three signals are read instead, all pure reads (ADR-0012), newest wins
+// because each one only moves forward when apt itself does work:
+//
+//   - <state>/periodic/update-success-stamp, touched by
+//     APT::Update::Post-Invoke-Success (/etc/apt/apt.conf.d/15update-stamp,
+//     shipped by update-notifier-common), so it marks the end of a
+//     successful `apt update` exactly. Absent when that package is not
+//     installed, which is why it is not the only signal.
+//   - the lists directory itself, and its partial/ subdirectory: apt
+//     downloads into partial/ and renames the result into lists/, so both
+//     move whenever an index is actually replaced.
+//
+// The remaining blind spot is honest and bounded: on a host without
+// update-notifier-common whose every configured suite is frozen, no index is
+// ever replaced and the age keeps growing. That reports the cache as old,
+// which is the safe direction — it never claims a stale cache is fresh.
+func aptCacheRefreshedAt(listsDir string) time.Time {
+	var newest time.Time
+	consider := func(path string) {
+		info, err := os.Stat(path)
+		if err != nil {
+			return
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+	}
+	// apt's own layout: Dir::State is the parent of Dir::State::lists.
+	consider(filepath.Join(filepath.Dir(listsDir), "periodic", "update-success-stamp"))
+	consider(listsDir)
+	consider(filepath.Join(listsDir, "partial"))
+	return newest
 }
 
 // parseDpkgStatus reads dpkg's own package database: one deb822 stanza
@@ -114,37 +162,25 @@ func parseDpkgStatus(path string) (map[string]string, error) {
 	return installed, scanner.Err()
 }
 
-// candidateVersions reads every configured repository's local package
-// list, keeping the highest version found per package name — a package
-// can appear in more than one enabled repo (e.g. both a distro's main
-// archive and its security updates) at different versions. The returned
-// time is the OLDEST mtime among the *_Packages files that contributed:
-// apt's own notion of "how stale is my worst source", not the newest.
-func candidateVersions(listsDir string) (map[string]string, time.Time, error) {
-	return candidateVersionsForSources(listsDir, nil, false)
-}
-
-// candidateVersionsForSources reads only list files backed by currently
-// configured binary-package sources. apt leaves old list files behind when a
-// source is removed; treating those as current makes both candidates and cache
-// age lie. If source configuration is unavailable, callers may deliberately
-// retain the old cache-only behavior by passing filterLists=false.
-func candidateVersionsForSources(listsDir string, prefixes map[string]struct{}, filterLists bool) (map[string]string, time.Time, error) {
+// candidateVersionsForSources reads every configured repository's local
+// package list, keeping the highest version found per package name — a
+// package can appear in more than one enabled repo (e.g. both a distro's main
+// archive and its security updates) at different versions.
+//
+// Only list files backed by currently configured binary-package sources are
+// read. apt leaves old list files behind when a source is removed; treating
+// those as current makes the candidates lie. If source configuration is
+// unavailable, callers may deliberately retain the old cache-only behavior by
+// passing filterLists=false.
+func candidateVersionsForSources(listsDir string, prefixes map[string]struct{}, filterLists bool) (map[string]string, error) {
 	entries, err := os.ReadDir(listsDir)
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, err
 	}
 
 	candidates := map[string]string{}
-	var oldest time.Time
-	var any bool
-
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), "_Packages") || (filterLists && !matchesAptSource(e.Name(), prefixes)) {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
 			continue
 		}
 
@@ -152,20 +188,13 @@ func candidateVersionsForSources(listsDir string, prefixes map[string]struct{}, 
 		if err != nil {
 			continue
 		}
-		if !any || info.ModTime().Before(oldest) {
-			oldest = info.ModTime()
-		}
-		any = true
 		for name, version := range pkgs {
 			if current, ok := candidates[name]; !ok || debversion.Compare(version, current) > 0 {
 				candidates[name] = version
 			}
 		}
 	}
-	if !any {
-		return candidates, time.Time{}, nil
-	}
-	return candidates, oldest, nil
+	return candidates, nil
 }
 
 func matchesAptSource(listName string, prefixes map[string]struct{}) bool {

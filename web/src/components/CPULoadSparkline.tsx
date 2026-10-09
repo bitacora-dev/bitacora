@@ -34,8 +34,14 @@ interface Props {
 // component, not inside the canvas.
 export default function CPULoadSparkline({ points, label, current }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<uPlot | null>(null);
   const data = useMemo(() => sparklineData(points), [points]);
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
+  // The chart is built once per mount and fed new samples with setData on
+  // every poll. Rebuilding the uPlot instance for each new data array tore the
+  // canvas down and redrew it every ten seconds, which reads as a flicker.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -49,7 +55,8 @@ export default function CPULoadSparkline({ points, label, current }: Props) {
       axes: [{ show: false }, { show: false }],
       padding: [2, 0, 0, 0],
       series: [{}, { stroke: CPU_SERIES_COLOR, fill: `${CPU_SERIES_COLOR}24`, width: 2, points: { show: false } }],
-    }, data, container);
+    }, dataRef.current, container);
+    chartRef.current = chart;
 
     let animationFrame: number | null = null;
     let disposed = false;
@@ -70,8 +77,13 @@ export default function CPULoadSparkline({ points, label, current }: Props) {
       disposed = true;
       if (animationFrame !== null) cancelAnimationFrame(animationFrame);
       resize.disconnect();
+      chartRef.current = null;
       chart.destroy();
     };
+  }, []);
+
+  useEffect(() => {
+    chartRef.current?.setData(data);
   }, [data]);
 
   return <div className="cpu-load-history">

@@ -169,6 +169,8 @@ export interface Dictionary {
   inventoryPending: string;
   disksEmpty: string;
   updatesEmpty: string;
+  updatesNotAutomaticHeading: string;
+  inventoryBoolean: (value: boolean) => string;
   cacheAge: (days: string, stale: boolean) => string;
   refreshPackageCache: string;
   applyPackageUpdates: string;

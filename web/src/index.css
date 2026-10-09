@@ -1197,6 +1197,8 @@ body {
 }
 
 .package-update-panel .inventory-list { margin: 0; }
+.package-not-automatic { margin-top: 1rem; }
+.package-not-automatic h3 { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--dim); }
 
 .cache-age,
 .action-notice {

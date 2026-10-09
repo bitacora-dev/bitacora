@@ -244,10 +244,9 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
   const temperature = cpuTemperature(temperatures);
   // Memoised because the per-core fallback inside totalLoadSeries builds a
   // fresh array every call. A new array identity reaches CPULoadSparkline as a
-  // new `points` prop, and that chart rebuilds its uPlot instance whenever its
-  // data changes, so an unmemoised value tore the history strip down on every
-  // re-render (a preference change, a parent update) on any host that reports
-  // per-CPU usage but no aggregate series.
+  // new `points` prop and makes it redraw, so an unmemoised value redrew the
+  // history strip on every re-render (a preference change, a parent update)
+  // on any host that reports per-CPU usage but no aggregate series.
   const totalPoints = useMemo(() => totalLoadSeries(total, cores), [total, cores]);
   const totalStats = windowStats(totalPoints, preferences.averagingWindowSeconds);
   // Intl formatters are comparatively expensive to build and only depend on

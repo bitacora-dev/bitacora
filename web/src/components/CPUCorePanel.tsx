@@ -27,11 +27,13 @@ export const CPU_REFRESH_STALE_AFTER_SECONDS = 60;
 //
 // offline is tracked per thread for the same reason: a core whose second
 // hyperthread was taken offline still runs on the first one, so dimming the
-// whole row would claim the core is gone when it is not.
+// whole row would claim the core is gone when it is not. There is
+// deliberately no core-level online flag: any such flag has to pick between
+// "some thread is offline" and "every thread is offline", and a reader who
+// takes the first for the second dims a core that is still working.
 interface CoreGroup {
   id: string;
   type: string;
-  online: boolean;
   cpus: CPUSeries[];
   isolated: string[];
   offline: string[];
@@ -62,8 +64,7 @@ export function groupCPUCores(series: CPUSeries[], inventory: Inventory | null):
     const item = topology.get(cpu.cpu);
     const coreID = item?.attrs.core_id;
     const key = coreID === undefined ? `cpu-${cpu.cpu}` : `core-${coreID}`;
-    const group = groups.get(key) ?? { id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", online: item?.attrs.online !== "false", cpus: [], isolated: [], offline: [] };
-    group.online = group.online && item?.attrs.online !== "false";
+    const group = groups.get(key) ?? { id: coreID ?? cpu.cpu, type: item?.attrs.core_type ?? "unknown", cpus: [], isolated: [], offline: [] };
     if (group.type === "unknown" && item?.attrs.core_type) group.type = item.attrs.core_type;
     if (item?.attrs.isolated === "true") group.isolated.push(cpu.cpu);
     if (item?.attrs.online === "false") group.offline.push(cpu.cpu);

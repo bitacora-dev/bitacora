@@ -69,7 +69,7 @@ describe("offline CPUs", () => {
 
     expect(groups).toHaveLength(1);
     expect(groups[0].offline).toEqual(["1"]);
-    expect(groups[0].online).toBe(false);
+    expect(groups[0].cpus.map((cpu) => cpu.cpu)).toEqual(["0", "1"]);
     expect(offlineCPUCount(groups)).toBe(1);
   });
 
@@ -79,7 +79,6 @@ describe("offline CPUs", () => {
     }));
 
     expect(groups[0].offline).toEqual([]);
-    expect(groups[0].online).toBe(true);
     expect(offlineCPUCount(groups)).toBe(0);
   });
 });

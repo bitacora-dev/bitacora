@@ -1520,7 +1520,6 @@ body {
 }
 
 .disk-status-light--ok { background: var(--green); }
-.disk-status-light--warning { background: var(--gold); }
 .disk-status-light--critical { background: var(--red); }
 .disk-status-light--unknown { background: var(--line); border: 1px solid var(--dim); }
 
@@ -1536,6 +1535,7 @@ body {
 }
 
 .disk-usage-cell-values b { color: var(--text); font-size: 0.84rem; }
+.disk-usage-warning { color: var(--gold); font-style: normal; font-weight: 700; }
 
 .array-badge {
   border: 1px solid var(--line);

@@ -149,16 +149,20 @@ function DiskMounts({ disk, intlTag }: { disk: Disk; intlTag: string }) {
 function UsageBar({ usage, label, intlTag }: { usage: DiskUsage; label: string; intlTag: string }) {
   const { t } = useTranslation();
   const percentage = formatPercentage(usage.ratio, intlTag);
+  // A nearly full disk is flagged here, on its usage, and not on the health
+  // light: the light only reports SMART and array health (see DiskState).
+  const nearlyFull = isNearlyFull(usage);
   return (
     <div className="disk-usage-cell">
       <div className="disk-usage-cell-values">
         <b>{percentage}</b>
+        {nearlyFull && <em className="disk-usage-warning">{t.diskNearlyFull}</em>}
         <span>
           {formatBytes(usage.used, intlTag)}
           {t.diskUsedLabel} {t.diskCapacityLabel(formatBytes(usage.capacity, intlTag))}
         </span>
       </div>
-      <div className={isNearlyFull(usage) ? "usage-bar usage-bar--nearly-full" : "usage-bar"} role="img" aria-label={t.diskUsagePercentage(label, percentage)}>
+      <div className={nearlyFull ? "usage-bar usage-bar--nearly-full" : "usage-bar"} role="img" aria-label={nearlyFull ? `${t.diskUsagePercentage(label, percentage)} · ${t.diskNearlyFull}` : t.diskUsagePercentage(label, percentage)}>
         <span style={{ width: `${usage.ratio * 100}%` }} />
       </div>
     </div>

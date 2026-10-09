@@ -47,7 +47,12 @@ export type ArrayHealth = "healthy" | "degraded" | "unknown";
 // claims whether a disk is spinning or parked — `smartctl --json` does not
 // report a power mode, so that part of UnRaid's light has no honest source
 // yet and the light reports health instead.
-export type DiskState = "ok" | "warning" | "critical" | "unknown";
+//
+// Usage is deliberately not part of it: a nearly full disk whose SMART
+// verdict passed is a healthy disk that is full, and the usage bar already
+// says so in its own colour. Turning the health light amber for it would
+// make "full" and "failing" read alike.
+export type DiskState = "ok" | "critical" | "unknown";
 
 export interface DiskMount {
   mountpoint: string;
@@ -58,6 +63,10 @@ export interface DiskMount {
 export interface Disk {
   key: string;
   device: string | null;
+  // fsID is the statfs filesystem id the collector reports (fs_id), when it
+  // reported one. It is what tells two filesystems behind one device string
+  // apart from one filesystem mounted twice.
+  fsID: string | null;
   model: string | null;
   serial: string | null;
   temperatureCelsius: number | null;
@@ -155,9 +164,47 @@ function groupHealth(disks: Disk[]): ArrayHealth | null {
 
 function diskState(disk: Omit<Disk, "state">): DiskState {
   if (disk.smartStatus === "failed" || disk.arrayHealth === "degraded") return "critical";
-  if (disk.usage && isNearlyFull(disk.usage)) return "warning";
   if (disk.smartStatus === "passed") return "ok";
   return "unknown";
+}
+
+// When the mounts of one device disagree — two spool reads straddling a
+// SMART change, or one mount carrying a reading the other lacks — the row
+// shows the worst verdict and the hottest temperature. Health is reported
+// pessimistically on purpose: hiding a failed verdict behind a passed one
+// is the only mistake here that costs a disk.
+function worstSmart(left: SmartStatus | null, right: SmartStatus | null): SmartStatus | null {
+  if (left === "failed" || right === "failed") return "failed";
+  return left ?? right;
+}
+
+function hottest(left: number | null, right: number | null): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.max(left, right);
+}
+
+// sameFilesystem decides whether a mount belongs to a disk already seen on
+// the same device string. A generic device name (/dev/root, a reused
+// /dev/mapper name, a bind mount source) can stand for more than one
+// filesystem, and merging those would hide one and count the other's
+// capacity for both.
+//
+//   - Both report a filesystem id: equal ids are one filesystem (bind mounts
+//     and repeated mounts share it). Different ids are different
+//     filesystems — except btrfs subvolumes, which each get their own id but
+//     share one pool, so same-capacity btrfs mounts still fold together.
+//   - Otherwise, a different capacity is proof of a different filesystem;
+//     an equal or unknown one keeps the previous one-row-per-device fold.
+function sameFilesystem(disk: Disk, fsID: string | null, fstype: string | null, usage: DiskUsage | null): boolean {
+  const known = representativeUsage(disk.mounts);
+  const sameCapacity = known !== null && usage !== null && known.capacity === usage.capacity;
+  if (disk.fsID !== null && fsID !== null) {
+    if (disk.fsID === fsID) return true;
+    return fstype === "btrfs" && disk.mounts.every((mount) => mount.fstype === "btrfs") && sameCapacity;
+  }
+  if (known !== null && usage !== null) return sameCapacity;
+  return true;
 }
 
 // sumUsage adds up already-deduplicated disks, so a device mounted four
@@ -177,17 +224,18 @@ export function sumUsage(disks: Disk[]): DiskUsage | null {
   return diskUsage({ capacity_bytes: String(capacity), used_bytes: String(used), available_bytes: String(Math.max(capacity - used, 0)) });
 }
 
-// groupDisks collapses the mount-level inventory into one entry per device
-// and buckets those by array function. An item with no `device` attribute
-// keeps its own entry keyed by name rather than merging with every other
-// nameless one.
+// groupDisks collapses the mount-level inventory into one entry per
+// filesystem — in practice one per device — and buckets those by array
+// function. An item with no `device` attribute keeps its own entry keyed by
+// name rather than merging with every other nameless one.
 export function groupDisks(items: InventoryItem[]): DiskGroup[] {
   const byGroup = new Map<string, Map<string, Disk>>();
 
   for (const item of items) {
     const attrs = item.attrs ?? {};
     const device = optional(attrs.device);
-    const key = device ?? `mount:${item.id || item.name}`;
+    const fsID = optional(attrs.fs_id);
+    const fstype = optional(attrs.fstype);
     const group = groupKey(attrs);
 
     let disks = byGroup.get(group);
@@ -198,25 +246,33 @@ export function groupDisks(items: InventoryItem[]): DiskGroup[] {
 
     const mount: DiskMount = {
       mountpoint: item.name || item.id,
-      fstype: optional(attrs.fstype),
+      fstype,
       usage: diskUsage(attrs),
     };
 
-    const existing = disks.get(key);
+    const candidates = device === null ? [] : [...disks.values()].filter((disk) => disk.device === device);
+    const existing = candidates.find((disk) => sameFilesystem(disk, fsID, fstype, mount.usage));
     if (existing) {
       existing.mounts.push(mount);
-      // Identity and health come from the device, so any mount of it
-      // carries them; keep the first non-empty value seen.
+      // Identity comes from the device, so any mount of it carries it; keep
+      // the first non-empty value seen. Health and temperature take the
+      // worst reading (see worstSmart).
       existing.model ??= optional(attrs.model);
       existing.serial ??= optional(attrs.serial);
-      existing.temperatureCelsius ??= temperature(attrs);
-      existing.smartStatus ??= smartStatus(attrs);
+      existing.fsID ??= fsID;
+      existing.temperatureCelsius = hottest(existing.temperatureCelsius, temperature(attrs));
+      existing.smartStatus = worstSmart(existing.smartStatus, smartStatus(attrs));
       continue;
     }
 
+    // The first filesystem seen on a device keeps the device as its key, so
+    // the common case reads exactly as before; any further one is suffixed.
+    const base = device ?? `mount:${item.id || item.name}`;
+    const key = candidates.length === 0 ? base : `${base}#${fsID ?? candidates.length + 1}`;
     disks.set(key, {
       key,
       device,
+      fsID,
       model: optional(attrs.model),
       serial: optional(attrs.serial),
       temperatureCelsius: temperature(attrs),
@@ -240,7 +296,7 @@ export function groupDisks(items: InventoryItem[]): DiskGroup[] {
       disk.state = diskState(disk);
       return disk;
     });
-    resolved.sort((a, b) => (a.device ?? a.key).localeCompare(b.device ?? b.key, undefined, { numeric: true }));
+    resolved.sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }));
     const first = resolved[0];
     groups.push({
       key,

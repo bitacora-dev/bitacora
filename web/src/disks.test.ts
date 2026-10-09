@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InventoryItem } from "./api";
-import { diskUsage, groupDisks, STANDALONE_GROUP, sumUsage } from "./disks";
+import { diskUsage, groupDisks, isNearlyFull, STANDALONE_GROUP, sumUsage } from "./disks";
 
 function item(name: string, attrs: Record<string, string>): InventoryItem {
   return { id: name, name, attrs };
@@ -47,12 +47,12 @@ describe("groupDisks deduplication", () => {
     expect(groups[0].total).toEqual({ capacity: 1000, used: 400, available: 600, ratio: 0.4 });
   });
 
-  it("takes the widest capacity as the device usage, breaking ties by the shortest mountpoint", () => {
+  it("takes the usage of the mount nearest the filesystem root when mounts of one filesystem disagree", () => {
     const groups = groupDisks([
       item("/var/lib/bitacora", { ...md0, capacity_bytes: "1000", used_bytes: "100" }),
       item("/", { ...md0, capacity_bytes: "1000", used_bytes: "400" }),
-      item("/boot", { ...md0, capacity_bytes: "500", used_bytes: "250" }),
     ]);
+    expect(groups[0].disks).toHaveLength(1);
     expect(groups[0].disks[0].usage?.used).toBe(400);
   });
 
@@ -129,6 +129,61 @@ describe("groupDisks grouping by function", () => {
   });
 });
 
+describe("groupDisks filesystem identity behind one device string", () => {
+  const root = { device: "/dev/root", fstype: "ext4", capacity_bytes: "1000", used_bytes: "400" };
+
+  it("keeps two filesystems apart when they report the same generic device but different filesystem ids", () => {
+    const groups = groupDisks([
+      item("/", { ...root, fs_id: "aaaa" }),
+      item("/srv", { ...root, fs_id: "bbbb", capacity_bytes: "1000", used_bytes: "900" }),
+    ]);
+
+    expect(groups[0].disks).toHaveLength(2);
+    expect(new Set(groups[0].disks.map((disk) => disk.key)).size).toBe(2);
+    expect(groups[0].total?.capacity).toBe(2000);
+  });
+
+  it("folds a bind mount into its filesystem when the ids match", () => {
+    const groups = groupDisks([item("/", { ...root, fs_id: "aaaa" }), item("/mnt/bind", { ...root, fs_id: "aaaa" })]);
+    expect(groups[0].disks).toHaveLength(1);
+    expect(groups[0].disks[0].mounts).toHaveLength(2);
+    expect(groups[0].total?.capacity).toBe(1000);
+  });
+
+  it("keeps them apart without filesystem ids when their capacities differ", () => {
+    const groups = groupDisks([item("/", root), item("/boot", { ...root, capacity_bytes: "500", used_bytes: "250" })]);
+    expect(groups[0].disks.map((disk) => disk.usage?.capacity)).toEqual([1000, 500]);
+    expect(groups[0].total?.capacity).toBe(1500);
+  });
+
+  it("folds btrfs subvolumes of one pool, which each report their own id", () => {
+    const pool = { device: "/dev/sda2", fstype: "btrfs", capacity_bytes: "1000", used_bytes: "300" };
+    const groups = groupDisks([item("/", { ...pool, fs_id: "1111" }), item("/home", { ...pool, fs_id: "2222" })]);
+    expect(groups[0].disks).toHaveLength(1);
+    expect(groups[0].total?.capacity).toBe(1000);
+  });
+});
+
+describe("groupDisks readings that disagree across mounts of one device", () => {
+  it("shows the worst SMART verdict and the hottest temperature, whichever mount carried them", () => {
+    const sda = { device: "/dev/sda1", capacity_bytes: "1000", used_bytes: "100" };
+    const [passedFirst] = groupDisks([
+      item("/", { ...sda, smart_status: "passed", temperature_celsius: "35" }),
+      item("/var", { ...sda, smart_status: "failed", temperature_celsius: "41" }),
+    ])[0].disks;
+    const [failedFirst] = groupDisks([
+      item("/", { ...sda, smart_status: "failed", temperature_celsius: "41" }),
+      item("/var", { ...sda, smart_status: "passed", temperature_celsius: "35" }),
+    ])[0].disks;
+
+    for (const disk of [passedFirst, failedFirst]) {
+      expect(disk.smartStatus).toBe("failed");
+      expect(disk.temperatureCelsius).toBe(41);
+      expect(disk.state).toBe("critical");
+    }
+  });
+});
+
 describe("disk state", () => {
   const usable = { capacity_bytes: "1000", used_bytes: "100" };
 
@@ -148,10 +203,11 @@ describe("disk state", () => {
     ).toBe("critical");
   });
 
-  it("warns on a nearly-full disk that is otherwise healthy", () => {
-    expect(
-      groupDisks([item("/", { device: "/dev/sda1", smart_status: "passed", capacity_bytes: "1000", used_bytes: "950" })])[0].disks[0].state,
-    ).toBe("warning");
+  it("keeps the health light ok on a nearly-full disk whose SMART verdict passed", () => {
+    // Full is not failing: the usage bar carries that warning, not the light.
+    const disk = groupDisks([item("/", { device: "/dev/sda1", smart_status: "passed", capacity_bytes: "1000", used_bytes: "950" })])[0].disks[0];
+    expect(disk.state).toBe("ok");
+    expect(disk.usage && isNearlyFull(disk.usage)).toBe(true);
   });
 
   it("ignores a non-numeric temperature instead of showing NaN", () => {

@@ -207,7 +207,8 @@ export interface Dictionary {
   diskArrayMembership: (type: string, level: string, members: string) => string;
   diskArrayHealth: Record<"healthy" | "degraded" | "unknown", string>;
   diskTableHeading: Record<"device" | "state" | "temperature" | "smart" | "usage", string>;
-  diskStateLabel: Record<"ok" | "warning" | "critical" | "unknown", string>;
+  diskStateLabel: Record<"ok" | "critical" | "unknown", string>;
+  diskNearlyFull: string;
   diskSmartVerdict: Record<"passed" | "failed", string>;
   diskTemperatureValue: (celsius: string) => string;
   diskValueUnknown: string;

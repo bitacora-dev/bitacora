@@ -325,8 +325,18 @@ func assignGap(run []int, low, high, threads int, coreThreads map[int]int, step 
 // last reconstructed core, which is where the kernel continues numbering
 // (core_id 28 for P-core 7, then 32 for the first E-core). Two E-cores offline
 // right after the last P-core fail that last check and stay unknown.
+//
+// The one exception is a run that exactly completes the core below (cpu15
+// alone, next to its running sibling cpu14): that only tops up a core a
+// readable CPU already reports and invents no core id.
 func assignEdgeGap(run []int, low, high, threads int, coreThreads map[int]int, step int, readableCores map[int]bool, filled map[int]int) ([]int, bool) {
-	if threads-coreThreads[low] != 0 || len(run)%threads != 0 || step <= 0 {
+	if missingLow := threads - coreThreads[low]; missingLow > 0 {
+		if len(run) != missingLow {
+			return nil, false
+		}
+		return placeRun(run, []coreSlot{{low, missingLow}}, low, high, readableCores, filled)
+	}
+	if len(run)%threads != 0 || step <= 0 {
 		return nil, false
 	}
 	hidden := len(run) / threads

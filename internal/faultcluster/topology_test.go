@@ -594,6 +594,18 @@ func TestReadTopology_WholePCoreOfflineAtTheHybridEdge(t *testing.T) {
 	}
 }
 
+func TestReadTopology_LastPThreadOfflineAtTheHybridEdgeRejoinsItsCore(t *testing.T) {
+	// cpu15 alone, next to its running sibling cpu14 on core 28 and the first
+	// E-core above: topping up core 28 invents no core id.
+	topo, err := ReadTopology(raptorLakeTopology(t, 15))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !topo.CoreIDInferred[15] || topo.LogicalToCore[15] != 28 || topo.CoreType[15] != CoreTypeP {
+		t.Errorf("expected cpu15 inferred on P-core 28, got %d inferred=%v type=%v", topo.LogicalToCore[15], topo.CoreIDInferred[15], topo.CoreType[15])
+	}
+}
+
 func TestReadTopology_TwoECoresOfflineAtTheHybridEdgeStayUnknown(t *testing.T) {
 	// cpu16/cpu17 are two E-cores, but the run is also one P-core long. The
 	// E-core above (core 34) is not one P step past 32, so the P reading is

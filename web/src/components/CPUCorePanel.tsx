@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { CPUSeries, Inventory, InventoryItem, SeriesPoint, TemperatureSeries } from "../api";
 import { useTranslation } from "../i18n";
 import { ageSeconds, formatAge } from "../relativeTime";
@@ -214,7 +214,13 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
   const model = system?.attrs.cpu_model;
   const power = powerWatts(system?.attrs.cpu_power_watts);
   const temperature = cpuTemperature(temperatures);
-  const totalPoints = totalLoadSeries(total, cores);
+  // Memoised because the one-second tick below re-renders this panel, and the
+  // per-core fallback inside totalLoadSeries builds a fresh array every call.
+  // A new array identity reaches CPULoadSparkline as a new `points` prop, and
+  // that chart rebuilds its uPlot instance whenever its data changes, so an
+  // unmemoised value tore the history strip down and rebuilt it once a second
+  // on any host that reports per-CPU usage but no aggregate series.
+  const totalPoints = useMemo(() => totalLoadSeries(total, cores), [total, cores]);
   const totalStats = windowStats(totalPoints, preferences.averagingWindowSeconds);
   const percentage = new Intl.NumberFormat(intlTag, { style: "percent", minimumFractionDigits: 0, maximumFractionDigits: 1 });
   const decimal = new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 });

@@ -137,6 +137,19 @@ describe("totalLoadSeries", () => {
   it("reports no total load at all when nothing was sampled", () => {
     expect(totalLoadSeries([], [])).toEqual([]);
   });
+
+  // The aggregate path above returns the caller's own array, so the sparkline
+  // sees a stable `points` prop between the panel's one-second ticks. The
+  // fallback cannot: it derives a new array on every call. That is why the
+  // panel memoises the result, and this test records the difference so nobody
+  // removes the memo after reading only the aggregate case.
+  it("derives a fresh array on the fallback path, which the caller must memoise", () => {
+    const cores = [{ cpu: "0", points: [{ ts: "2026-09-20T10:00:00Z", value: 0.5 }] }];
+    const first = totalLoadSeries([], cores);
+    const second = totalLoadSeries([], cores);
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+  });
 });
 
 describe("cpuTemperature", () => {

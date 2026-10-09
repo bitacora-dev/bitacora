@@ -175,6 +175,8 @@ export const es: Dictionary = {
   inventoryPending: "Este inventario todavía no ha sido reportado por el agente.",
   disksEmpty: "No hay discos reportados para este host.",
   updatesEmpty: "No hay actualizaciones pendientes reportadas.",
+  updatesNotAutomaticHeading: "Disponible en backports (no se instala con apt upgrade)",
+  inventoryBoolean: (value) => value ? "Sí" : "No",
   cacheAge: (days, stale) => stale ? `Caché de paquetes desactualizada: ${days} días. Debe refrescarse antes de aplicar.` : `Caché de paquetes: ${days} días de antigüedad.`,
   refreshPackageCache: "Refrescar caché de paquetes",
   applyPackageUpdates: "Aplicar actualizaciones pendientes",

@@ -175,6 +175,8 @@ export const en: Dictionary = {
   inventoryPending: "This inventory has not been reported by the agent yet.",
   disksEmpty: "No disks have been reported for this host.",
   updatesEmpty: "No pending updates have been reported.",
+  updatesNotAutomaticHeading: "Available from backports (not installed by apt upgrade)",
+  inventoryBoolean: (value) => value ? "Yes" : "No",
   cacheAge: (days, stale) => stale ? `Package cache is stale: ${days} days old. Refresh it before applying updates.` : `Package cache: ${days} days old.`,
   refreshPackageCache: "Refresh package cache",
   applyPackageUpdates: "Apply pending updates",

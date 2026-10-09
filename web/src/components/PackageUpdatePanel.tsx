@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { confirmAction, fetchJob, issueActionToken, type ActionToken, type Inventory, type JobOutputLine, type PackageOperation } from "../api";
-import { useTranslation } from "../i18n";
+import { confirmAction, fetchJob, issueActionToken, type ActionToken, type Inventory, type InventoryItem, type JobOutputLine, type PackageOperation } from "../api";
+import { useTranslation, type Dictionary } from "../i18n";
 import { ageSeconds, formatAge } from "../relativeTime";
 
 const POLL_INTERVAL_MS = 3_000;
@@ -64,6 +64,29 @@ export function linesForJob(jobID: string, lines: JobOutputLine[]): JobOutputLin
   return lines.filter((line) => !line.job_id || line.job_id === jobID);
 }
 
+// A candidate from a NotAutomatic suite (Ubuntu's backports) is a real newer
+// version, but `apt upgrade` never installs it. It is listed on its own and is
+// neither counted as a pending update nor part of what "apply" is confirmed
+// against; the agent only reports one when nothing apt would take is newer.
+export function splitPackageItems(items: InventoryItem[]): { pending: InventoryItem[]; notAutomatic: InventoryItem[] } {
+  const pending: InventoryItem[] = [];
+  const notAutomatic: InventoryItem[] = [];
+  for (const item of items) (item.attrs.candidate_automatic === "false" ? notAutomatic : pending).push(item);
+  return { pending, notAutomatic };
+}
+
+// Inventory attributes are strings on the wire; a boolean one is shown as a
+// translated yes/no, never as a raw "true"/"false".
+export function packageAttributeValue(value: string, t: Pick<Dictionary, "inventoryBoolean">): string {
+  if (value === "true") return t.inventoryBoolean(true);
+  if (value === "false") return t.inventoryBoolean(false);
+  return value;
+}
+
+function PackageItemList({ items, t }: { items: InventoryItem[]; t: Dictionary }) {
+  return <ul className="inventory-list">{items.map((item) => <li key={item.id}><strong>{item.name}</strong><dl>{Object.entries(item.attrs).filter(([key]) => key !== "cache_age_seconds").map(([key, value]) => <div key={key}><dt>{t.inventoryAttribute(key)}</dt><dd>{packageAttributeValue(value, t)}</dd></div>)}</dl></li>)}</ul>;
+}
+
 export function packageActionVisibility(canRefresh: boolean, canApply: boolean, stale: boolean, phase: Phase) {
   return {
     showApply: canApply && !stale && (phase === "idle" || phase === "refreshed"),
@@ -85,7 +108,7 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
   const stale = age !== null && age > maxAge;
   const canRefresh = metadata.refresh_package_cache === "true" && secondFactorAvailable;
   const canApply = metadata.apply_pending_package_updates === "true" && secondFactorAvailable;
-  const packageItems = useMemo(() => inventory?.items.filter((item) => item.id !== "package-actions") ?? [], [inventory]);
+  const { pending: packageItems, notAutomatic } = useMemo(() => splitPackageItems(inventory?.items.filter((item) => item.id !== "package-actions") ?? []), [inventory]);
 
   useEffect(() => {
     if (!issued || (phase !== "pending" && phase !== "running")) return;
@@ -158,7 +181,8 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
       <div className="panel-title-row"><div><h2>{t.updatesHeading}</h2>{inventory && <p className={inventoryStale ? "inventory-reported inventory-reported--stale" : "inventory-reported"}>{reportedAge === null
         ? t.inventoryReportedAt(reportedInstant)
         : <time dateTime={reportedAt?.toISOString()} title={reportedInstant} aria-label={t.inventoryReportedAria(reportedInstant)}>{t.inventoryAge(reportedAge, inventoryStale)}</time>}</p>}</div><span className="inventory-count">{packageItems.length}</span></div>
-      {!inventory ? <p className="inventory-empty">{t.inventoryPending}</p> : packageItems.length === 0 ? <p className="inventory-empty">{t.updatesEmpty}</p> : <ul className="inventory-list">{packageItems.map((item) => <li key={item.id}><strong>{item.name}</strong><dl>{Object.entries(item.attrs).filter(([key]) => key !== "cache_age_seconds").map(([key, value]) => <div key={key}><dt>{t.inventoryAttribute(key)}</dt><dd>{value}</dd></div>)}</dl></li>)}</ul>}
+      {!inventory ? <p className="inventory-empty">{t.inventoryPending}</p> : packageItems.length === 0 ? <p className="inventory-empty">{t.updatesEmpty}</p> : <PackageItemList items={packageItems} t={t} />}
+      {notAutomatic.length > 0 && <section className="package-not-automatic" aria-labelledby="package-not-automatic-heading"><h3 id="package-not-automatic-heading">{t.updatesNotAutomaticHeading}</h3><PackageItemList items={notAutomatic} t={t} /></section>}
       {age !== null && <p className={stale ? "cache-age cache-age--stale" : "cache-age"}>{t.cacheAge(new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 }).format(age / 86400), stale)}</p>}
       <div className="package-action-controls">
         {showRefresh && <button type="button" className="primary-button package-action-button" onClick={() => begin("REFRESH_PACKAGE_CACHE")}>{t.refreshPackageCache}</button>}

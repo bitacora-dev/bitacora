@@ -2070,9 +2070,12 @@ body {
   /* The header row is gone, so each stacked cell names itself: two bare
      em dashes under one another say nothing about which is temperature
      and which is the SMART verdict. */
-  .disk-cell-state,
-  .disk-cell-smart,
-  .disk-cell-numeric { display: flex; align-items: baseline; gap: 0.4rem; }
+  /* Qualified by `td` on purpose: the `display: block` above is written
+     as `.disk-table-row td`, which outranks a lone class and would leave
+     these cells stacked without their label column. */
+  .disk-table-row td.disk-cell-state,
+  .disk-table-row td.disk-cell-smart,
+  .disk-table-row td.disk-cell-numeric { display: flex; align-items: baseline; gap: 0.4rem; }
 
   .disk-cell-state::before,
   .disk-cell-smart::before,

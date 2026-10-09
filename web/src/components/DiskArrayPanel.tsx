@@ -42,7 +42,7 @@ export default function DiskArrayPanel({ inventory }: { inventory: Inventory | n
 
 function DiskGroupTable({ group, intlTag }: { group: DiskGroup; intlTag: string }) {
   const { t } = useTranslation();
-  const degraded = group.disks.some((disk) => disk.arrayHealth === "degraded");
+  const degraded = group.arrayHealth === "degraded";
 
   return (
     <section className="disk-group">
@@ -51,6 +51,10 @@ function DiskGroupTable({ group, intlTag }: { group: DiskGroup; intlTag: string 
         {group.arrayType && (
           <span className={degraded ? "array-badge array-badge--degraded" : "array-badge"}>
             {t.diskArrayMembership(t.diskArrayType(group.arrayType), group.arrayLevel ?? "", group.arrayMemberCount ?? "")}
+            {/* Spelled out, not only coloured: a red border alone says
+                nothing to a reader who cannot tell it apart. `unknown` is
+                left unsaid because the badge never claimed a verdict. */}
+            {group.arrayHealth && group.arrayHealth !== "unknown" && ` · ${t.diskArrayHealth[group.arrayHealth]}`}
           </span>
         )}
         <p className="disk-group-summary">

@@ -112,6 +112,21 @@ describe("groupDisks grouping by function", () => {
   it("returns no group at all for an empty inventory", () => {
     expect(groupDisks([])).toEqual([]);
   });
+
+  it("degrades the whole group when a single member is degraded", () => {
+    const mdraid = { array_type: "storage.mdraid", array_level: "raid1", array_member_count: "2" };
+    expect(groupDisks([item("/", { ...mdraid, device: "/dev/md0", array_health: "healthy" })])[0].arrayHealth).toBe("healthy");
+    expect(
+      groupDisks([
+        item("/", { ...mdraid, device: "/dev/md0", array_health: "healthy" }),
+        item("/srv", { ...mdraid, device: "/dev/md1", array_health: "degraded" }),
+      ])[0].arrayHealth,
+    ).toBe("degraded");
+  });
+
+  it("reports no array health for a group whose members never claimed one", () => {
+    expect(groupDisks([item("/boot/efi", { device: "/dev/nvme0n1p1", fstype: "vfat" })])[0].arrayHealth).toBeNull();
+  });
 });
 
 describe("disk state", () => {

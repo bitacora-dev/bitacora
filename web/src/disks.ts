@@ -77,6 +77,7 @@ export interface DiskGroup {
   arrayType: string | null;
   arrayLevel: string | null;
   arrayMemberCount: string | null;
+  arrayHealth: ArrayHealth | null;
   disks: Disk[];
   total: DiskUsage | null;
 }
@@ -137,6 +138,19 @@ function representativeUsage(mounts: DiskMount[]): DiskUsage | null {
     }
   }
   return best?.usage ?? null;
+}
+
+// One degraded member degrades the array, so the worst verdict in the
+// group wins. A group whose members report no verdict at all stays
+// `unknown` rather than borrowing the health of the ones that did.
+function groupHealth(disks: Disk[]): ArrayHealth | null {
+  let health: ArrayHealth | null = null;
+  for (const disk of disks) {
+    if (disk.arrayHealth === "degraded") return "degraded";
+    if (disk.arrayHealth === "healthy") health = "healthy";
+    else if (disk.arrayHealth === "unknown" && health === null) health = "unknown";
+  }
+  return health;
 }
 
 function diskState(disk: Omit<Disk, "state">): DiskState {
@@ -233,6 +247,7 @@ export function groupDisks(items: InventoryItem[]): DiskGroup[] {
       arrayType: first?.arrayType ?? null,
       arrayLevel: first?.arrayLevel ?? null,
       arrayMemberCount: first?.arrayMemberCount ?? null,
+      arrayHealth: groupHealth(resolved),
       disks: resolved,
       total: sumUsage(resolved),
     });

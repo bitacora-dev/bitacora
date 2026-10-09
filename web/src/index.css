@@ -1711,6 +1711,24 @@ body {
   font-weight: 700;
 }
 
+/* A core the kernel has taken down reads as switched off rather than as a
+   core that is merely idle or still waiting for its first samples. */
+.cpu-core--offline {
+  border-style: dashed;
+  background: transparent;
+  opacity: 0.6;
+}
+
+.cpu-core-offline,
+.cpu-thread-offline {
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .host-metadata--stale,
 .host-stale-note {
   color: var(--gold);

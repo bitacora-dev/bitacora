@@ -62,6 +62,7 @@ export interface Dictionary {
   cpuThreadLabel: (cpu: string) => string;
   cpuThreadUsage: (cpu: string, mean: string, peak: string) => string;
   cpuOffline: string;
+  cpuOfflineCoreLabel: (cpus: string) => string;
   cpuPowerWatts: (watts: string) => string;
   cpuAveragingLabel: string;
   cpuAveragingWindow: (seconds: number) => string;

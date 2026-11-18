@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -37,6 +38,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/storage"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 	"github.com/bitacora-dev/bitacora/internal/transport/sqlitetokenstore"
+	"github.com/bitacora-dev/bitacora/internal/websecurity"
 	"github.com/bitacora-dev/bitacora/internal/webui"
 )
 
@@ -87,11 +89,25 @@ func main() {
 		log.Fatal(err)
 	}
 	defer h.Close()
+	securityConfig, err := websecurity.ConfigFromEnv()
+	if err != nil {
+		log.Fatal(fmt.Errorf("reading trusted proxy configuration: %w", err))
+	}
+	var hasSession func(*http.Request) bool
+	if h.auth != nil {
+		hasSession = h.auth.HasSession
+	}
 
 	log.Printf("bitacora-hub listening on %s (data: %s)", *addr, *dataDir)
 	httpSrv := &http.Server{
 		Addr:    *addr,
-		Handler: h2c.NewHandler(h.handler, &http2.Server{}),
+		Handler: h2c.NewHandler(websecurity.Middleware(h.handler, securityConfig, hasSession), &http2.Server{}),
+		// Header and idle deadlines bound slowloris and abandoned keep-alive
+		// connections. ReadTimeout and WriteTimeout intentionally stay unset:
+		// they cover an entire request/response and would terminate legitimate
+		// long ingest bodies or future streaming responses under h2c.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	if err := httpSrv.ListenAndServe(); err != nil {
 		log.Fatal(err)
@@ -131,6 +147,7 @@ type hub struct {
 	handler http.Handler
 	tokens  *sqlitetokenstore.Store
 	devices *hubapi.DeviceTokenStore
+	auth    *hubauth.Authenticator
 	closers []io.Closer
 }
 
@@ -261,6 +278,7 @@ func newHubWithLocalAuth(dataDir string, localAuth *hubauth.LocalStore, pipeline
 		handler: mux,
 		tokens:  tokenStore,
 		devices: devices,
+		auth:    auth,
 		closers: []io.Closer{relStore, metricsStore, tokenStore},
 	}, nil
 }

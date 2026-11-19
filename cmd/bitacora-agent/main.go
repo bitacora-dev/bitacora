@@ -54,6 +54,16 @@ var agentVersion = "dev"
 const DefaultBlackboxPath = "/var/lib/bitacora/blackbox.dat"
 
 func main() {
+	// Enrollment is an installer step, not a daemon mode: it is handled
+	// before any collector, buffer or hub client is built, and it exits.
+	if len(os.Args) > 1 && os.Args[1] == "enroll" {
+		if err := runEnroll(os.Args[2:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "bitacora-agent enroll: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	logger := log.New(os.Stderr, "bitacora-agent: ", log.LstdFlags)
 	cfg, err := parseConfig()
 	if err != nil {

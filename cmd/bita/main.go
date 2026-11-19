@@ -18,10 +18,10 @@ const DefaultLogsDir = "/var/lib/bitacora/logs"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("bita: scaffold only, most subcommands not yet implemented")
 		fmt.Println("usage: bita doctor")
 		fmt.Println("       bita logs verify [dir]")
 		fmt.Println("       bita blackbox dump <fichero>")
+		fmt.Println("       bita agent create|list|revoke|rotate")
 		return
 	}
 
@@ -32,6 +32,11 @@ func main() {
 		runLogs(os.Args[2:])
 	case "blackbox":
 		runBlackbox(os.Args[2:])
+	case "agent":
+		if err := runAgent(os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "bita: unknown subcommand %q\n", os.Args[1])
 		os.Exit(1)

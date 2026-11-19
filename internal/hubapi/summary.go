@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/prometheus/model/labels"
@@ -23,6 +24,7 @@ import (
 	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
 	"github.com/bitacora-dev/bitacora/internal/schema"
+	"github.com/bitacora-dev/bitacora/internal/transport"
 )
 
 // DefaultWindow is how far back GET /v1/summary looks when the caller
@@ -139,6 +141,21 @@ type Server struct {
 	// what grants the single local:operator every host. It never widens a
 	// device token's reach: scope applies to human sessions only.
 	HostScopes HostScopeResolver
+	// Tokens is the lifecycle side of the same ingest token store Hosts
+	// writes to (ADR-0008: revocable and rotatable without reinstalling the
+	// agent). Nil makes the revoke and rotate routes answer 503 and leaves
+	// GET /v1/hosts without credential status — never with a fabricated one.
+	Tokens transport.TokenAdmin
+	// Enrollments persists one-time enrollment codes. Nil makes both
+	// enrollment routes answer 503; POST /v1/hosts keeps working, so an
+	// operator is never left without a way to add a server.
+	Enrollments EnrollmentIssuer
+
+	// enrollLimiterOnce guards the lazily built per-IP budget for
+	// POST /v1/enroll. It is built on first use rather than in a
+	// constructor because callers build this struct as a literal.
+	enrollLimiterOnce  sync.Once
+	enrollLimiterValue *perIPLimiter
 }
 
 // Handler returns the http.Handler serving /v1/summary (device-token
@@ -153,6 +170,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/jobs/", s.requireDeviceToken(s.handleJobPoll))
 	mux.HandleFunc("/v1/inventory", s.requireDeviceToken(s.handleInventory))
 	mux.HandleFunc("/v1/hosts", s.handleHosts)
+	// Method-and-wildcard patterns, so a mistyped method is a 405 from the
+	// mux rather than a handler that has to re-check it. They are more
+	// specific than "/" and than "/v1/hosts", so registration order here
+	// carries no meaning.
+	mux.HandleFunc("POST /v1/hosts/{id}/revoke", s.handleRevokeHost)
+	mux.HandleFunc("POST /v1/hosts/{id}/rotate", s.handleRotateHost)
+	mux.HandleFunc("/v1/enrollments", s.handleCreateEnrollment)
+	// Unauthenticated except for the one-time code it carries, which is why
+	// it is the only write route in the hub with a per-IP budget in front of
+	// it. See handleEnroll.
+	mux.HandleFunc("/v1/enroll", s.handleEnroll)
 	// Unguarded on purpose: it is the route that answers "is there a login on
 	// this hub?", which has to be readable before there is a session.
 	mux.HandleFunc("/v1/auth/session", s.handleAuthSession)

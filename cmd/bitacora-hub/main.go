@@ -220,6 +220,12 @@ func newHubWithLocalAuth(dataDir string, localAuth *hubauth.LocalStore, pipeline
 		// same persisted Argon2id hash, not two parallel registries.
 		Hosts:       tokenStore,
 		HostRecords: relStore,
+		// The lifecycle side of that same store: revoking, rotating and
+		// listing credentials, and the one-time enrollment codes that let a
+		// new machine fetch its own token instead of having it copied by
+		// hand (ADR-0008).
+		Tokens:      tokenStore,
+		Enrollments: tokenStore,
 	}
 
 	ingestSrv := &transport.Server{

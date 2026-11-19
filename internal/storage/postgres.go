@@ -52,6 +52,17 @@ var postgresMigrations = []string{
 		items_json  JSONB NOT NULL,
 		PRIMARY KEY (host_id, kind)
 	)`,
+	`CREATE TABLE IF NOT EXISTS hosts (
+		id            TEXT PRIMARY KEY,
+		name          TEXT NOT NULL DEFAULT '',
+		hostname      TEXT NOT NULL DEFAULT '',
+		agent_version TEXT NOT NULL DEFAULT '',
+		last_seen_at  BIGINT
+	)`,
+	`CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, job_name TEXT NOT NULL, host_id TEXT NOT NULL, started_at BIGINT NOT NULL, finished_at BIGINT, duration_seconds DOUBLE PRECISION, status TEXT NOT NULL, exit_code INTEGER, signal TEXT, stats_json JSONB, peer_host_id TEXT, trigger TEXT, next_expected BIGINT, log_refs_json JSONB, schema INTEGER NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS idx_jobs_host_finished ON jobs (host_id, finished_at)`,
+	`CREATE INDEX IF NOT EXISTS idx_jobs_host_status_started ON jobs (host_id, status, started_at DESC)`,
+	`CREATE TABLE IF NOT EXISTS job_output (job_id TEXT NOT NULL REFERENCES jobs(id), sequence BIGINT NOT NULL, ts BIGINT NOT NULL, stream TEXT NOT NULL, message TEXT NOT NULL, PRIMARY KEY (job_id, sequence))`,
 }
 
 // PostgresStore is the optional Relational backend (ADR-0003): same
@@ -89,6 +100,20 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("migrating postgres: %w", err)
+		}
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE jobs ALTER COLUMN finished_at DROP NOT NULL`,
+		`ALTER TABLE jobs ALTER COLUMN duration_seconds DROP NOT NULL`,
+		`ALTER TABLE jobs ALTER COLUMN exit_code DROP NOT NULL`,
+		`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS peer_host_id TEXT`,
+		`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS trigger TEXT`,
+		`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS next_expected BIGINT`,
+		`ALTER TABLE jobs ADD COLUMN IF NOT EXISTS log_refs_json JSONB`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrating postgres jobs: %w", err)
 		}
 	}
 
@@ -150,6 +175,65 @@ func (s *PostgresStore) ListEvents(ctx context.Context, from, to time.Time, host
 	return scanEvents(rows)
 }
 
+// ListLatestEvents implements Relational. PostgreSQL keeps every event in
+// one table, so "the newest limit rows, whenever they happened" is the
+// query it already has an ordering for.
+func (s *PostgresStore) ListLatestEvents(ctx context.Context, hostID string, limit int) ([]schema.Event, error) {
+	if limit <= 0 {
+		return []schema.Event{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema
+		FROM events
+		WHERE ($1 = '' OR host_id = $1)
+		ORDER BY ts DESC, id DESC
+		LIMIT $2
+	`, hostID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying latest events: %w", err)
+	}
+	defer rows.Close()
+
+	return scanEvents(rows)
+}
+
+// ListEventPage implements Relational with database-side filtering and
+// pagination for the event-history API.
+func (s *PostgresStore) ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error) {
+	var total int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM events
+		WHERE ts BETWEEN $1 AND $2
+			AND ($3 = '' OR host_id = $3)
+			AND ($4 = '' OR severity = $4)
+			AND ($5 = '' OR type = $5)
+	`, from.UnixMilli(), to.UnixMilli(), hostID, severity, eventType).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("counting events: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema
+		FROM events
+		WHERE ts BETWEEN $1 AND $2
+			AND ($3 = '' OR host_id = $3)
+			AND ($4 = '' OR severity = $4)
+			AND ($5 = '' OR type = $5)
+		ORDER BY ts DESC, id DESC
+		LIMIT $6 OFFSET $7
+	`, from.UnixMilli(), to.UnixMilli(), hostID, severity, eventType, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying event page: %w", err)
+	}
+	defer rows.Close()
+
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return events, total, nil
+}
+
 // SearchEventTitles implements Relational using PostgreSQL full-text
 // search (the GIN index in postgresMigrations) — the equivalent of
 // SQLite's FTS5 for this backend.
@@ -202,4 +286,31 @@ func (s *PostgresStore) GetInventory(ctx context.Context, hostID string, kind sc
 		WHERE host_id = $1 AND kind = $2
 	`, hostID, string(kind))
 	return scanInventory(row)
+}
+
+// CreateHost implements Relational.
+func (s *PostgresStore) CreateHost(ctx context.Context, hostID, name string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO hosts (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = excluded.name`, hostID, name)
+	if err != nil {
+		return fmt.Errorf("creating host %s: %w", hostID, err)
+	}
+	return nil
+}
+
+// RecordHostManifest implements Relational.
+func (s *PostgresStore) RecordHostManifest(ctx context.Context, hostID, hostname, agentVersion string, receivedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO hosts (id, hostname, agent_version, last_seen_at) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET hostname = excluded.hostname, agent_version = excluded.agent_version, last_seen_at = excluded.last_seen_at`, hostID, hostname, agentVersion, receivedAt.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("recording manifest for host %s: %w", hostID, err)
+	}
+	return nil
+}
+
+// ListHosts implements Relational.
+func (s *PostgresStore) ListHosts(ctx context.Context) ([]schema.Host, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, hostname, agent_version, last_seen_at FROM hosts ORDER BY CASE WHEN name = '' THEN hostname ELSE name END, id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing hosts: %w", err)
+	}
+	return scanHosts(rows)
 }

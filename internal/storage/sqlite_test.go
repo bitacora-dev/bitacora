@@ -2,8 +2,12 @@ package storage
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/bitacora-dev/bitacora/internal/schema"
 )
 
 func newTestStore(t *testing.T) *SQLiteStore {
@@ -55,5 +59,30 @@ func TestSQLiteStore_ListEventsAcrossMonthsUsesAttach(t *testing.T) {
 	}
 	if got[0].ID != "evt-july" || got[1].ID != "evt-august" {
 		t.Fatalf("expected chronological order july-then-august, got %+v", got)
+	}
+}
+
+func TestSQLiteStore_MigratesLegacyTerminalJobs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE jobs (id TEXT PRIMARY KEY, job_name TEXT NOT NULL, host_id TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER NOT NULL, duration_seconds REAL NOT NULL, status TEXT NOT NULL, exit_code INTEGER NOT NULL, signal TEXT, stats_json TEXT, schema INTEGER NOT NULL); INSERT INTO jobs VALUES ('legacy','backup','host-a',1000,2000,1,'success',0,NULL,NULL,1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := NewSQLiteStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	job, ok, err := s.GetJob(context.Background(), "host-a", "legacy")
+	if err != nil || !ok || job.Status != schema.JobSuccess || job.FinishedAt.UnixMilli() != 2000 {
+		t.Fatalf("legacy job was not preserved: job=%+v ok=%t err=%v", job, ok, err)
 	}
 }

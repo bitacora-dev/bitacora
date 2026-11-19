@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,11 @@ type SQLiteStore struct {
 
 	invMu sync.Mutex
 	invDB *sql.DB
+
+	hostMu  sync.Mutex
+	hostsDB *sql.DB
+	jobMu   sync.Mutex
+	jobsDB  *sql.DB
 }
 
 var _ Relational = (*SQLiteStore)(nil)
@@ -108,6 +114,20 @@ func (s *SQLiteStore) Close() error {
 	defer s.invMu.Unlock()
 	if s.invDB != nil {
 		if err := s.invDB.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
+	if s.hostsDB != nil {
+		if err := s.hostsDB.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	if s.jobsDB != nil {
+		if err := s.jobsDB.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -303,6 +323,75 @@ func (s *SQLiteStore) GetInventory(ctx context.Context, hostID string, kind sche
 	return scanInventory(row)
 }
 
+func (s *SQLiteStore) hostDatabase() (*sql.DB, error) {
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
+	if s.hostsDB != nil {
+		return s.hostsDB, nil
+	}
+	db, err := sql.Open("sqlite", filepath.Join(s.dir, "hosts.db"))
+	if err != nil {
+		return nil, fmt.Errorf("opening hosts db: %w", err)
+	}
+	for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL", "PRAGMA busy_timeout=5000"} {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("applying %q to hosts db: %w", pragma, err)
+		}
+	}
+	for _, stmt := range hostMigrations {
+		if _, err := db.Exec(stmt); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrating hosts db: %w", err)
+		}
+	}
+	s.hostsDB = db
+	return db, nil
+}
+
+// CreateHost implements Relational.
+func (s *SQLiteStore) CreateHost(ctx context.Context, hostID, name string) error {
+	return s.enqueueWrite(ctx, func(ctx context.Context) error {
+		db, err := s.hostDatabase()
+		if err != nil {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `INSERT INTO hosts (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name`, hostID, name)
+		if err != nil {
+			return fmt.Errorf("creating host %s: %w", hostID, err)
+		}
+		return nil
+	})
+}
+
+// RecordHostManifest implements Relational.
+func (s *SQLiteStore) RecordHostManifest(ctx context.Context, hostID, hostname, agentVersion string, receivedAt time.Time) error {
+	return s.enqueueWrite(ctx, func(ctx context.Context) error {
+		db, err := s.hostDatabase()
+		if err != nil {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `INSERT INTO hosts (id, hostname, agent_version, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET hostname = excluded.hostname, agent_version = excluded.agent_version, last_seen_at = excluded.last_seen_at`, hostID, hostname, agentVersion, receivedAt.UnixMilli())
+		if err != nil {
+			return fmt.Errorf("recording manifest for host %s: %w", hostID, err)
+		}
+		return nil
+	})
+}
+
+// ListHosts implements Relational.
+func (s *SQLiteStore) ListHosts(ctx context.Context) ([]schema.Host, error) {
+	db, err := s.hostDatabase()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id, name, hostname, agent_version, last_seen_at FROM hosts ORDER BY CASE WHEN name = '' THEN hostname ELSE name END, id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing hosts: %w", err)
+	}
+	return scanHosts(rows)
+}
+
 func monthsBetween(from, to time.Time) []string {
 	if to.Before(from) {
 		return nil
@@ -381,6 +470,161 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, from, to time.Time, hostID
 	defer rows.Close()
 
 	return scanEvents(rows)
+}
+
+// monthsWithEvents returns every month that already has an event database,
+// newest first. ListEvents derives its month list from the range it was
+// given; ListLatestEvents has no range to derive one from, so it has to
+// discover what exists on disk.
+func (s *SQLiteStore) monthsWithEvents() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading storage dir %s: %w", s.dir, err)
+	}
+
+	seen := make(map[string]bool)
+	var months []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		month, ok := monthFromEventFilename(entry.Name())
+		if !ok || seen[month] {
+			continue
+		}
+		seen[month] = true
+		months = append(months, month)
+	}
+
+	// A month opened in this process is a month with a database, even if
+	// the directory listing above raced its creation.
+	s.mu.Lock()
+	for month := range s.dbs {
+		if !seen[month] {
+			seen[month] = true
+			months = append(months, month)
+		}
+	}
+	s.mu.Unlock()
+
+	// "2006-01" sorts lexicographically the same way it sorts
+	// chronologically, so reverse string order is newest first.
+	sort.Sort(sort.Reverse(sort.StringSlice(months)))
+	return months, nil
+}
+
+// monthFromEventFilename recognizes exactly the files pathForMonth creates.
+// SQLite's WAL sidecars (`-wal`, `-shm`) share the prefix and must not be
+// mistaken for a month of their own.
+func monthFromEventFilename(name string) (string, bool) {
+	month, ok := strings.CutPrefix(name, "events-")
+	if !ok {
+		return "", false
+	}
+	month, ok = strings.CutSuffix(month, ".db")
+	if !ok {
+		return "", false
+	}
+	if _, err := time.Parse("2006-01", month); err != nil {
+		return "", false
+	}
+	return month, true
+}
+
+// ListLatestEvents implements Relational. An event is stored in the month
+// file its own ts falls in, so walking the months newest-first and stopping
+// as soon as limit rows are collected reads one file in the ordinary case.
+// That also keeps this away from ATTACH: SQLITE_MAX_ATTACHED defaults to 10
+// databases, and an unbounded history is not bounded by ten months.
+func (s *SQLiteStore) ListLatestEvents(ctx context.Context, hostID string, limit int) ([]schema.Event, error) {
+	if limit <= 0 {
+		return []schema.Event{}, nil
+	}
+
+	months, err := s.monthsWithEvents()
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]schema.Event, 0, limit)
+	for _, month := range months {
+		db, err := s.monthDB(month)
+		if err != nil {
+			return nil, fmt.Errorf("preparing month %s: %w", month, err)
+		}
+		rows, err := db.QueryContext(ctx, `
+			SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema
+			FROM events
+			WHERE (? = '' OR host_id = ?)
+			ORDER BY ts DESC, id DESC
+			LIMIT ?
+		`, hostID, hostID, limit-len(out))
+		if err != nil {
+			return nil, fmt.Errorf("querying latest events in %s: %w", month, err)
+		}
+		found, err := scanEvents(rows)
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, found...)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// ListEventPage implements Relational with database-side filtering and
+// pagination across the monthly event files.
+func (s *SQLiteStore) ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error) {
+	months := monthsBetween(from, to)
+	if len(months) == 0 {
+		return []schema.Event{}, 0, nil
+	}
+	for _, m := range months {
+		if _, err := s.monthDB(m); err != nil {
+			return nil, 0, fmt.Errorf("preparing month %s: %w", m, err)
+		}
+	}
+
+	attachDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return nil, 0, fmt.Errorf("opening attach connection: %w", err)
+	}
+	defer attachDB.Close()
+	attachDB.SetMaxOpenConns(1)
+	conn, err := attachDB.Conn(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("acquiring dedicated connection: %w", err)
+	}
+	defer conn.Close()
+
+	var unionParts []string
+	for i, m := range months {
+		alias := fmt.Sprintf("m%d", i)
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf("ATTACH DATABASE ? AS %s", alias), s.pathForMonth(m)); err != nil {
+			return nil, 0, fmt.Errorf("attaching %s: %w", m, err)
+		}
+		unionParts = append(unionParts, fmt.Sprintf("SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema FROM %s.events", alias))
+	}
+
+	base := fmt.Sprintf(` FROM (%s) WHERE ts BETWEEN ? AND ? AND (? = '' OR host_id = ?) AND (? = '' OR severity = ?) AND (? = '' OR type = ?)`, strings.Join(unionParts, " UNION ALL "))
+	args := []any{from.UnixMilli(), to.UnixMilli(), hostID, hostID, severity, severity, eventType, eventType}
+	var total int
+	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*)"+base, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting events: %w", err)
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT id, ts, ts_received, host_id, source, type, severity, title, subject_json, attrs_json, fingerprint, log_refs_json, schema`+base+` ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying event page: %w", err)
+	}
+	defer rows.Close()
+	events, err := scanEvents(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return events, total, nil
 }
 
 // SearchEventTitles implements Relational, demonstrating that FTS5 is

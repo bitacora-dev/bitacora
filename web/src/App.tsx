@@ -1,12 +1,35 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { claimPairing, fetchSummary, getDeviceToken, setDeviceToken, startPairing, type SeriesPoint, type Summary } from "./api";
+import { claimPairing, fetchActionAvailability, fetchEventHistory, fetchHosts, fetchInventory, fetchLogHistory, fetchSummary, getDeviceToken, hasInstant, setDeviceToken, startPairing, type BitacoraEvent, type Host, type Inventory, type LogEntry, type SeriesPoint, type Summary } from "./api";
+import { LOG_PAGE_SIZE, logRefPageOffset, logRefRange, type LogRefTarget } from "./logrefs";
 import TimeSeriesChart from "./components/TimeSeriesChart";
 import EventsList from "./components/EventsList";
+import LogsList from "./components/LogsList";
 import AddServerPanel from "./components/AddServerPanel";
+import DiskArrayPanel from "./components/DiskArrayPanel";
+import PackageUpdatePanel from "./components/PackageUpdatePanel";
+import JobsList from "./components/JobsList";
+import CPUCorePanel from "./components/CPUCorePanel";
+import MotherboardPanel from "./components/MotherboardPanel";
+import PublicSurfacePanel from "./components/PublicSurfacePanel";
+import PowerPanel from "./components/PowerPanel";
+import AccessTunnelsPanel from "./components/AccessTunnelsPanel";
+import SharesPanel from "./components/SharesPanel";
+import ContainerPanel from "./components/ContainerPanel";
+import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
+import LoginPanel from "./components/LoginPanel";
 
 const POLL_INTERVAL_MS = 10_000;
+// Shares, accounts, and share sizes are collected every five minutes, five
+// minutes, and twenty-four hours respectively. Re-requesting them on the
+// ten-second dashboard poll would triple the request count to redraw figures
+// that cannot have changed.
+const SLOW_INVENTORY_POLL_INTERVAL_MS = 5 * 60_000;
+const CPU_Y_RANGE: [number, number] = [0, 1];
+// The agent reports on its own cadence; a host that has said nothing for
+// several polling rounds is the answer to "is this server still alive?".
+const HOST_STALE_AFTER_MS = 5 * 60_000;
 
 function hostIDFromURL(): string {
   return new URLSearchParams(window.location.search).get("host_id") ?? "";
@@ -14,6 +37,11 @@ function hostIDFromURL(): string {
 
 function pairCodeFromURL(): string | null {
   return new URLSearchParams(window.location.search).get("pair");
+}
+
+function viewFromURL(): "summary" | "events" | "logs" {
+  const view = new URLSearchParams(window.location.search).get("view");
+  return view === "events" || view === "logs" ? view : "summary";
 }
 
 function stripPairParam(): void {
@@ -29,20 +57,6 @@ const formatRatio = (v: number, locale: string) =>
     maximumFractionDigits: 1,
   }).format(v);
 
-const formatBytes = (value: number, locale: string) => {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let size = value;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-  const amount = new Intl.NumberFormat(locale, {
-    maximumFractionDigits: size >= 10 || unitIndex === 0 ? 0 : 1,
-  }).format(size);
-  return `${amount} ${units[unitIndex]}`;
-};
-
 function latest(points: SeriesPoint[]): SeriesPoint | null {
   return points.length > 0 ? points[points.length - 1] : null;
 }
@@ -53,11 +67,32 @@ interface PairPanelData {
   expiresAt: string;
 }
 
+function Brand() {
+  return (
+    <div className="brand-lockup">
+      <img className="brand-mark" src="/bitacora-logo.png" alt="" aria-hidden="true" />
+      <h1>Bitácora</h1>
+    </div>
+  );
+}
+
 export default function App() {
   const { t, intlTag } = useTranslation();
+  if (window.location.pathname === "/auth/login") return <LoginPanel />;
   const [hostID, setHostID] = useState(hostIDFromURL);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hosts, setHosts] = useState<Host[]>([]);
+  const [disks, setDisks] = useState<Inventory | null>(null);
+  const [updates, setUpdates] = useState<Inventory | null>(null);
+  const [hardwareIdentity, setHardwareIdentity] = useState<Inventory | null>(null);
+  const [cpuTopology, setCPUTopology] = useState<Inventory | null>(null);
+  const [ups, setUPS] = useState<Inventory | null>(null);
+  const [tunnels, setTunnels] = useState<Inventory | null>(null);
+  const [shares, setShares] = useState<Inventory | null>(null);
+  const [shareUsage, setShareUsage] = useState<Inventory | null>(null);
+  const [shareUsers, setShareUsers] = useState<Inventory | null>(null);
+  const [secondFactorAvailable, setSecondFactorAvailable] = useState(false);
 
   const [token, setToken] = useState<string | null>(getDeviceToken);
   const [claimingFromURL, setClaimingFromURL] = useState(() => pairCodeFromURL() !== null);
@@ -68,6 +103,38 @@ export default function App() {
   const [pairPanelError, setPairPanelError] = useState<string | null>(null);
   const [pairPanelOpen, setPairPanelOpen] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
+  const [hostIDCopyStatus, setHostIDCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
+  const [view, setView] = useState<"summary" | "events" | "logs">(viewFromURL);
+  const [historyEvents, setHistoryEvents] = useState<BitacoraEvent[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [historySeverity, setHistorySeverity] = useState<BitacoraEvent["severity"] | "">("");
+  const [historyType, setHistoryType] = useState("");
+  const [historyFrom, setHistoryFrom] = useState(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+  const [historyTo, setHistoryTo] = useState(() => new Date().toISOString().slice(0, 16));
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [logTotal, setLogTotal] = useState(0);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [logOffset, setLogOffset] = useState(0);
+  const [logText, setLogText] = useState("");
+  const [logSource, setLogSource] = useState("");
+  const [logUnit, setLogUnit] = useState("");
+  const [logBlock, setLogBlock] = useState("");
+  const [logReferencedIDs, setLogReferencedIDs] = useState<string[]>([]);
+  const [logRefSubject, setLogRefSubject] = useState("");
+  const [logFrom, setLogFrom] = useState(() => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+  const [logTo, setLogTo] = useState(() => new Date().toISOString().slice(0, 16));
+
+  useEffect(() => {
+    const checkSession = async () => {
+      const response = await fetch("/auth/me");
+      if (response.status !== 401) return;
+      window.location.assign(`/auth/login?return_to=${encodeURIComponent(window.location.pathname + window.location.search)}&expired=1`);
+    };
+    const interval = window.setInterval(() => { void checkSession(); }, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const memoryTotalByTS = useMemo(() => {
     const byTS = new Map<string, number>();
@@ -81,6 +148,15 @@ export default function App() {
     return byTS;
   }, [summary?.memory_available_bytes]);
 
+  // bitacora_memory_used_ratio is polled every 10 seconds whether or not the
+  // derived byte series exists. It is the share-of-RAM number an operator
+  // scans for, so it is read here rather than only as a fallback below.
+  const memoryRatioByTS = useMemo(() => {
+    const byTS = new Map<string, number>();
+    for (const point of summary?.memory ?? []) byTS.set(point.ts, point.value);
+    return byTS;
+  }, [summary?.memory]);
+
   const memoryAvailable = latest(summary?.memory_available_bytes ?? []);
   const swapFree = latest(summary?.memory_swap_free_bytes ?? []);
   const swapTotal = latest(summary?.memory_swap_total_bytes ?? []);
@@ -88,13 +164,93 @@ export default function App() {
   const windowMinutes = summary ? Math.round(summary.window_secs / 60) : 0;
   const ratio = useCallback((value: number) => formatRatio(value, intlTag), [intlTag]);
   const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
+  const bytesPerSecond = useCallback((value: number) => t.bytesPerSecond(formatBytes(value, intlTag)), [intlTag, t]);
+  const selectedHost = hosts.find((host) => host.id === hostID);
+  const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
+  const lastSeenAt = hasInstant(selectedHost?.last_seen_at) ? selectedHost.last_seen_at : null;
+  const hostStale = lastSeenAt !== null && Date.now() - new Date(lastSeenAt).getTime() > HOST_STALE_AFTER_MS;
+
+  const refreshInventories = useCallback(async () => {
+    // The UPS reports every minute and the VPN helper every thirty seconds:
+    // both describe the server's current state, so they poll with the rest of
+    // the live dashboard rather than on the slow inventory cadence.
+    const [nextDisks, nextUpdates, nextHardwareIdentity, nextCPUTopology, nextUPS, nextTunnels] = await Promise.all([
+      fetchInventory(hostID, "disk"),
+      fetchInventory(hostID, "package_update"),
+      fetchInventory(hostID, "hardware_identity"),
+      fetchInventory(hostID, "cpu_topology"),
+      fetchInventory(hostID, "ups"),
+      fetchInventory(hostID, "vpn_tunnel"),
+    ]);
+    setDisks(nextDisks);
+    setUpdates(nextUpdates);
+    setHardwareIdentity(nextHardwareIdentity);
+    setCPUTopology(nextCPUTopology);
+    setUPS(nextUPS);
+    setTunnels(nextTunnels);
+    return nextUpdates;
+  }, [hostID]);
+
+  const refreshShareInventories = useCallback(async () => {
+    const [nextShares, nextUsage, nextUsers] = await Promise.all([
+      fetchInventory(hostID, "share"),
+      fetchInventory(hostID, "share_usage"),
+      fetchInventory(hostID, "user"),
+    ]);
+    setShares(nextShares);
+    setShareUsage(nextUsage);
+    setShareUsers(nextUsers);
+  }, [hostID]);
+
+  const copyHostID = async () => {
+    try {
+      await navigator.clipboard.writeText(hostID);
+      setHostIDCopyStatus("copied");
+    } catch {
+      setHostIDCopyStatus("failed");
+    }
+  };
 
   const goToHost = (value: string) => {
     const url = new URL(window.location.href);
     url.searchParams.set("host_id", value);
     window.history.replaceState(null, "", url);
     setHostID(value);
+    setHostIDCopyStatus("idle");
     setAddServerOpen(false);
+  };
+
+  const goToView = (next: "summary" | "events" | "logs") => {
+    const url = new URL(window.location.href);
+    if (next === "summary") url.searchParams.delete("view"); else url.searchParams.set("view", next);
+    window.history.pushState(null, "", url);
+    setView(next);
+  };
+
+  // An event or a job names the exact durable block and lines it came from.
+  // Opening the log viewer on that block is what makes the timeline correlated
+  // instead of three lists the operator has to cross-reference by eye.
+  const showReferencedLogs = (subject: string, target: LogRefTarget) => {
+    const range = logRefRange(target.anchorTS);
+    if (range) {
+      setLogFrom(range.from);
+      setLogTo(range.to);
+    }
+    setLogText("");
+    setLogSource("");
+    setLogUnit("");
+    setLogBlock(target.blockID);
+    setLogReferencedIDs(target.entryIDs);
+    setLogRefSubject(subject);
+    setLogOffset(logRefPageOffset(target.firstLine));
+    goToView("logs");
+  };
+
+  const clearReferencedLogs = () => {
+    setLogBlock("");
+    setLogReferencedIDs([]);
+    setLogRefSubject("");
+    setLogOffset(0);
   };
 
   useEffect(() => {
@@ -139,6 +295,68 @@ export default function App() {
     };
   }, [hostID, token]);
 
+  useEffect(() => {
+    if (!hostID || !token || view !== "events") return;
+    const from = new Date(historyFrom).toISOString();
+    const to = new Date(historyTo).toISOString();
+    fetchEventHistory(hostID, { from, to, severity: historySeverity, type: historyType, limit: 50, offset: historyOffset })
+      .then((page) => { setHistoryEvents(page.events); setHistoryTotal(page.total); setHistoryError(null); })
+      .catch((err) => setHistoryError(err instanceof Error ? err.message : String(err)));
+  }, [hostID, token, view, historyFrom, historyTo, historySeverity, historyType, historyOffset]);
+
+  useEffect(() => {
+    if (!hostID || !token || view !== "logs") return;
+    fetchLogHistory(hostID, { from: new Date(logFrom).toISOString(), to: new Date(logTo).toISOString(), text: logText, source: logSource, unit: logUnit, block: logBlock, limit: LOG_PAGE_SIZE, offset: logOffset })
+      .then((page) => { setLogEntries(page.entries); setLogTotal(page.total); setLogError(null); })
+      .catch((err) => setLogError(err instanceof Error ? err.message : String(err)));
+  }, [hostID, token, view, logFrom, logTo, logText, logSource, logUnit, logBlock, logOffset]);
+
+  useEffect(() => {
+    if (!hostID || !token) return;
+
+    const poll = async () => {
+      try {
+        await refreshInventories();
+      } catch {
+        // Inventory is optional. Keep the latest readable snapshot while a
+        // collector or its dedicated endpoint is temporarily unavailable.
+      }
+    };
+
+    poll();
+    const id = setInterval(poll, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [hostID, token, refreshInventories]);
+
+  useEffect(() => {
+    if (!hostID || !token) return;
+
+    const poll = async () => {
+      try {
+        await refreshShareInventories();
+      } catch {
+        // Same contract as the fast inventories: an optional collector that
+        // is momentarily unreachable keeps its last readable snapshot.
+      }
+    };
+
+    poll();
+    const id = setInterval(poll, SLOW_INVENTORY_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [hostID, token, refreshShareInventories]);
+
+  useEffect(() => {
+    if (!hostID || !token) return;
+    let cancelled = false;
+    fetchActionAvailability(hostID).then((available) => { if (!cancelled) setSecondFactorAvailable(available); });
+    return () => { cancelled = true; };
+  }, [hostID, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    fetchHosts().then(setHosts).catch(() => setHosts([]));
+  }, [token]);
+
   const bootstrapPairing = async () => {
     setBootstrapping(true);
     setPairError(null);
@@ -180,7 +398,7 @@ export default function App() {
     return (
       <main className="auth-shell">
         <section className="auth-panel">
-          <h1>{t.brand}</h1>
+          <Brand />
           <p>{t.notPaired}</p>
           {pairError && <div className="error-panel">{pairError}</div>}
           <button type="button" onClick={bootstrapPairing} disabled={bootstrapping} className="primary-button">
@@ -195,7 +413,13 @@ export default function App() {
     return (
       <main className="auth-shell">
         <section className="auth-panel auth-panel-wide">
-          <h1>{t.brand}</h1>
+          <Brand />
+          {hosts.length > 1 && (
+            <select aria-label={t.hostSelectorLabel} value="" onChange={(event) => event.target.value && goToHost(event.target.value)}>
+              <option value="">{t.hostSelectorLabel}</option>
+              {hosts.map((host) => <option key={host.id} value={host.id}>{host.name || host.hostname || host.id}</option>)}
+            </select>
+          )}
           <form
             className="host-form"
             onSubmit={(e) => {
@@ -225,20 +449,67 @@ export default function App() {
   }
 
   return (
-    <main className="dashboard-shell">
+    <main className="dashboard-shell dashboard-shell--tall-portrait">
       <header className="dashboard-header">
         <div>
-          <h1>{t.brand}</h1>
+          <Brand />
           <p>{t.dashboardSubtitle}</p>
+          <div className="host-identity">
+            <strong>{hostName}</strong>
+            <span className="host-id">{hostID}</span>
+            <button type="button" onClick={copyHostID} className="host-id-copy-button">
+              {hostIDCopyStatus === "copied" ? t.hostIdCopied : hostIDCopyStatus === "failed" ? t.hostIdCopyFailed : t.copyHostId}
+            </button>
+            <span className="sr-only" aria-live="polite">
+              {hostIDCopyStatus === "copied" ? t.hostIdCopied : hostIDCopyStatus === "failed" ? t.hostIdCopyFailed : ""}
+            </span>
+          </div>
         </div>
         <div className="header-actions">
-          <span title={hostID}>{hostID}</span>
+          {hosts.length > 1 ? (
+            <select aria-label={t.hostSelectorLabel} value={hostID} onChange={(event) => goToHost(event.target.value)}>
+              {hosts.map((host) => <option key={host.id} value={host.id}>{host.name || host.hostname || host.id}</option>)}
+            </select>
+          ) : null}
+          {(summary || selectedHost) && (
+            <dl className="dashboard-metadata">
+              {summary && (
+                <div>
+                  <dt>{t.windowMetadataLabel}</dt>
+                  <dd>{t.windowLabel(windowMinutes)}</dd>
+                </div>
+              )}
+              {summary && (
+                <div>
+                  <dt>{t.updatedAtLabel}</dt>
+                  <dd>{generatedAt || t.noSamples}</dd>
+                </div>
+              )}
+              {lastSeenAt && (
+                <div>
+                  <dt>{t.lastSeenLabel}</dt>
+                  <dd className={hostStale ? "host-metadata--stale" : undefined}>
+                    {new Date(lastSeenAt).toLocaleString(intlTag)}
+                    {hostStale && <span className="host-stale-note"> · {t.hostStale}</span>}
+                  </dd>
+                </div>
+              )}
+              {selectedHost?.agent_version && (
+                <div>
+                  <dt>{t.agentVersionLabel}</dt>
+                  <dd>{selectedHost.agent_version}</dd>
+                </div>
+              )}
+            </dl>
+          )}
           <button type="button" onClick={() => setAddServerOpen((open) => !open)} className="link-button">
             {t.addServerButton}
           </button>
           <button type="button" onClick={openPairPanel} className="link-button">
             {t.addDeviceButton}
           </button>
+          <button type="button" onClick={() => goToView("events")} className="link-button">{t.eventsHistoryButton}</button>
+          <button type="button" onClick={() => goToView("logs")} className="link-button">{t.logsHistoryButton}</button>
         </div>
       </header>
 
@@ -264,59 +535,113 @@ export default function App() {
 
       {error && <div className="error-panel">{t.hubUnreachable(error)}</div>}
 
-      {summary && (
-        <>
-          <section className="status-strip" aria-label={t.dashboardSubtitle}>
-            <article>
-              <span>{t.cpuStatusLabel}</span>
-              <strong>{latest(summary.cpu) ? ratio(latest(summary.cpu)?.value ?? 0) : t.noSamples}</strong>
-            </article>
-            <article>
-              <span>{t.memoryStatusLabel}</span>
-              <strong>
-                {latest(summary.memory_used_bytes) && latest(summary.memory_total_bytes)
-                  ? t.memoryOfTotal(bytes(latest(summary.memory_used_bytes)?.value ?? 0), bytes(latest(summary.memory_total_bytes)?.value ?? 0))
-                  : t.noSamples}
-              </strong>
-            </article>
-            <article>
-              <span>{t.windowLabel(windowMinutes)}</span>
-              <strong>{generatedAt ? t.updatedAt(generatedAt) : t.noSamples}</strong>
-            </article>
-          </section>
+      {/* A power cut has a countdown attached, and everything else on this
+          page is moot if the machine is about to go down. So the UPS keeps one
+          fixed slot above the dashboard and follows the operator into the
+          event and log views. It renders nothing on a host without a UPS. */}
+      <PowerPanel inventory={ups} />
 
-          <section className="metrics-grid">
-            <TimeSeriesChart
-              title={t.cpuUsageTitle}
-              points={summary.cpu}
-              color="#38bdf8"
-              formatAxisValue={ratio}
-              describePoint={(point) => ({ primary: ratio(point.value) })}
-            />
-            <TimeSeriesChart
-              title={t.memoryUsedTitle}
-              points={summary.memory_used_bytes.length > 0 ? summary.memory_used_bytes : summary.memory}
-              color="#f8d66d"
-              formatAxisValue={(value) => (summary.memory_used_bytes.length > 0 ? bytes(value) : ratio(value))}
-              describePoint={(point) => {
+      {view === "events" ? (
+        <article className="control-panel events-history-panel">
+          <div className="panel-title-row"><h2>{t.eventsHistoryHeading}</h2><button type="button" onClick={() => goToView("summary")} className="link-button">{t.dashboardButton}</button></div>
+          <p>{t.eventsHistoryIntro}</p>
+          <p className="events-retention-notice">{t.eventsRetentionNotice}</p>
+          <div className="events-history-filters">
+            <label>{t.eventsFromLabel}<input type="datetime-local" value={historyFrom} onChange={(e) => { setHistoryOffset(0); setHistoryFrom(e.target.value); }} /></label>
+            <label>{t.eventsToLabel}<input type="datetime-local" value={historyTo} onChange={(e) => { setHistoryOffset(0); setHistoryTo(e.target.value); }} /></label>
+            <label>{t.eventsSeverityLabel}<select value={historySeverity} onChange={(e) => { setHistoryOffset(0); setHistorySeverity(e.target.value as BitacoraEvent["severity"] | ""); }}><option value="">{t.eventsAnySeverity}</option>{Object.entries(t.severity).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label>{t.eventsTypeLabel}<input value={historyType} onChange={(e) => { setHistoryOffset(0); setHistoryType(e.target.value); }} /></label>
+          </div>
+          {historyError && <div className="error-panel">{t.hubUnreachable(historyError)}</div>}
+          <EventsList events={historyEvents} emptyHeading={t.eventsHistoryEmptyHeading} emptyBody={t.eventsHistoryEmptyBody} onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
+          <div className="events-history-pagination"><button type="button" className="link-button" disabled={historyOffset === 0} onClick={() => setHistoryOffset((offset) => Math.max(0, offset - 50))}>{t.eventsPreviousPage}</button><span>{t.eventsPage(historyTotal === 0 ? 0 : historyOffset + 1, Math.min(historyOffset + historyEvents.length, historyTotal), historyTotal)}</span><button type="button" className="link-button" disabled={historyOffset + historyEvents.length >= historyTotal} onClick={() => setHistoryOffset((offset) => offset + 50)}>{t.eventsNextPage}</button></div>
+        </article>
+      ) : view === "logs" ? (
+        <article className="control-panel events-history-panel">
+          <div className="panel-title-row"><h2>{t.logsHistoryHeading}</h2><button type="button" onClick={() => goToView("summary")} className="link-button">{t.dashboardButton}</button></div>
+          <p>{t.logsHistoryIntro}</p><p className="events-retention-notice">{t.logsRetentionNotice}</p>
+          <div className="events-history-filters">
+            <label>{t.logsFromLabel}<input type="datetime-local" value={logFrom} onChange={(e) => { setLogOffset(0); setLogFrom(e.target.value); }} /></label>
+            <label>{t.logsToLabel}<input type="datetime-local" value={logTo} onChange={(e) => { setLogOffset(0); setLogTo(e.target.value); }} /></label>
+            <label>{t.logsTextLabel}<input value={logText} onChange={(e) => { setLogOffset(0); setLogText(e.target.value); }} /></label>
+            <label>{t.logsSourceLabel}<input value={logSource} onChange={(e) => { setLogOffset(0); setLogSource(e.target.value); }} /></label>
+            <label>{t.logsUnitLabel}<input value={logUnit} onChange={(e) => { setLogOffset(0); setLogUnit(e.target.value); }} /></label>
+          </div>
+          {logBlock && (
+            <div className="log-ref-notice">
+              <div>
+                <strong>{t.logsReferencedFrom(logRefSubject)}</strong>
+                <span>{t.logsReferencedBlock(logBlock)}</span>
+              </div>
+              <button type="button" className="link-button" onClick={clearReferencedLogs}>{t.logsClearBlockFilter}</button>
+            </div>
+          )}
+          {logError && <div className="error-panel">{t.hubUnreachable(logError)}</div>}
+          {logBlock && logEntries.length > 0 && !logEntries.some((entry) => logReferencedIDs.includes(entry.id)) && <p className="muted-text">{t.logsReferencedMissing}</p>}
+          <LogsList entries={logEntries} referencedIDs={logReferencedIDs} />
+          <div className="events-history-pagination"><button type="button" className="link-button" disabled={logOffset === 0} onClick={() => setLogOffset((offset) => Math.max(0, offset - LOG_PAGE_SIZE))}>{t.eventsPreviousPage}</button><span>{t.eventsPage(logTotal === 0 ? 0 : logOffset + 1, Math.min(logOffset + logEntries.length, logTotal), logTotal)}</span><button type="button" className="link-button" disabled={logOffset + logEntries.length >= logTotal} onClick={() => setLogOffset((offset) => offset + LOG_PAGE_SIZE)}>{t.eventsNextPage}</button></div>
+        </article>
+      ) : summary && (
+        <>
+          <section className="processor-layout">
+            <div className="processor-identity">
+              <CPUCorePanel cores={summary.cpu_cores} topology={cpuTopology} identity={hardwareIdentity} total={summary.cpu} temperatures={summary.temperatures} generatedAt={summary.generated_at} />
+              <MotherboardPanel identity={hardwareIdentity} temperatures={summary.temperatures} />
+            </div>
+            <div className="processor-summary">
+              <TimeSeriesChart title={t.cpuUsageTitle} points={summary.cpu} color="#38bdf8" yRange={CPU_Y_RANGE} formatAxisValue={ratio} describePoint={(point) => ({ primary: ratio(point.value) })} />
+              <TimeSeriesChart title={t.memoryUsedTitle} points={summary.memory_used_bytes.length > 0 ? summary.memory_used_bytes : summary.memory} color="#f8d66d" formatAxisValue={(value) => (summary.memory_used_bytes.length > 0 ? bytes(value) : ratio(value))} describePoint={(point) => {
                 if (summary.memory_used_bytes.length === 0) return { primary: ratio(point.value) };
                 const total = memoryTotalByTS.get(point.ts) ?? latest(summary.memory_total_bytes)?.value;
                 const available = memoryAvailableByTS.get(point.ts) ?? memoryAvailable?.value;
-                return {
-                  primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value),
-                  secondary: available ? t.memoryAvailable(bytes(available)) : undefined,
-                };
-              }}
-            />
+                const used = memoryRatioByTS.get(point.ts) ?? (total ? point.value / total : undefined);
+                const context: string[] = [];
+                if (used !== undefined) context.push(t.memoryUsedRatio(ratio(used)));
+                if (available) context.push(t.memoryAvailable(bytes(available)));
+                return { primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value), secondary: context.length > 0 ? context.join(" · ") : undefined };
+              }} />
+            </div>
+          </section>
+          <section className="metrics-grid">
+            <TimeSeriesChart title={t.networkTrafficTitle} series={[
+              { name: t.networkReceiveLabel, points: summary.network_rx_bytes_per_second, color: "#38bdf8", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
+              { name: t.networkTransmitLabel, points: summary.network_tx_bytes_per_second, color: "#4ade80", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
+            ]} formatAxisValue={bytesPerSecond} />
+          </section>
+
+          {/* The host is reachable from the internet, so "am I being
+              attacked right now" belongs beside the other window signals,
+              not buried under inventory. */}
+          <section className="public-surface-grid" aria-label={t.publicSurfaceSectionLabel}>
+            <PublicSurfacePanel surface={summary.public_surface} windowMinutes={windowMinutes} />
+          </section>
+
+          {/* "Can I still get in?" is the same family of question as "is
+              anyone attacking me?" — both describe how this host meets the
+              outside world right now, not what it contains. */}
+          <section className="access-grid" aria-label={t.accessSectionLabel}>
+            <AccessTunnelsPanel inventory={tunnels} />
+          </section>
+
+          {/* Containers come after the host-level signals: they explain what is
+              consuming the machine, once the operator has seen what the machine
+              is doing. A host running none simply says so. */}
+          <section className="metrics-grid">
+            <ContainerPanel containers={summary.containers ?? []} formatBytes={bytes} />
           </section>
 
           <section className="lower-grid">
             <article className="control-panel events-panel">
               <div className="panel-title-row">
-                <h2>{t.eventsHeading(windowMinutes)}</h2>
+                <h2>{t.eventsHeading}</h2>
                 <span>{summary.events.length}</span>
               </div>
-              <EventsList events={summary.events} />
+              <EventsList events={summary.events} onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
+            </article>
+
+            <article className="control-panel events-panel">
+              <div className="panel-title-row"><h2>{t.jobsHeading}</h2><span>{summary.jobs.length}</span></div>
+              <JobsList jobs={summary.jobs} onShowLogs={(job, target) => showReferencedLogs(job.job_name, target)} />
             </article>
 
             <article className="control-panel signal-panel">
@@ -339,6 +664,12 @@ export default function App() {
                 )}
               </dl>
             </article>
+          </section>
+
+          <section className="inventory-grid" aria-label={t.inventorySectionLabel}>
+            <DiskArrayPanel inventory={disks} />
+            <PackageUpdatePanel hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
+            <SharesPanel shares={shares} usage={shareUsage} users={shareUsers} />
           </section>
         </>
       )}

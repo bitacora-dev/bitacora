@@ -2,15 +2,23 @@ package ingestreceiver
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
+	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/storage"
 	"github.com/bitacora-dev/bitacora/internal/transport"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
+
+type metricAppenderFunc func(context.Context, schema.Metric) error
+
+func (f metricAppenderFunc) Append(ctx context.Context, metric schema.Metric) error {
+	return f(ctx, metric)
+}
 
 // Receiver must satisfy transport.BatchReceiver: that's the whole point of
 // this package.
@@ -85,6 +93,20 @@ func validLogLine(hostID string, ts time.Time) *bitacorapb.LogLine {
 		HostId:  hostID,
 		Source:  "journald",
 		Message: "hello from the agent",
+	}
+}
+
+func validInventory(hostID string, ts time.Time) *bitacorapb.Inventory {
+	return &bitacorapb.Inventory{
+		HostId:       hostID,
+		Kind:         string(schema.InventoryDisk),
+		ReportedAtMs: ts.UnixMilli(),
+		Schema:       1,
+		Items: []*bitacorapb.InventoryItem{{
+			Id:    "/mnt/disk1",
+			Name:  "disk1",
+			Attrs: map[string]string{"health": "passed", "used_bytes": "42"},
+		}},
 	}
 }
 
@@ -171,11 +193,31 @@ func TestReceiveBatch_WritesLogLine(t *testing.T) {
 	}
 }
 
+func TestReceiveBatch_WritesInventory(t *testing.T) {
+	events := newRelationalStore(t)
+	logs, _ := newLogStore(t)
+	r := New(newMetricStore(t), events, logs, WithInventoryUpserter(events))
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+
+	batch := &bitacorapb.Batch{BatchId: "b1", HostId: "host-a", Inventories: []*bitacorapb.Inventory{validInventory("host-a", ts)}}
+	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, ok, err := events.GetInventory(context.Background(), "host-a", schema.InventoryDisk)
+	if err != nil || !ok {
+		t.Fatalf("getting inventory: ok=%v err=%v", ok, err)
+	}
+	if !got.ReportedAt.Equal(ts) || len(got.Items) != 1 || got.Items[0].Attrs["health"] != "passed" {
+		t.Errorf("inventory did not round-trip: %+v", got)
+	}
+}
+
 func TestReceiveBatch_MixedBatchWritesEveryType(t *testing.T) {
 	ms := newMetricStore(t)
 	events := newRelationalStore(t)
 	logs, dir := newLogStore(t)
-	r := New(ms, events, logs)
+	r := New(ms, events, logs, WithInventoryUpserter(events))
 	ts := time.Now().UTC().Truncate(time.Millisecond)
 
 	batch := &bitacorapb.Batch{
@@ -186,6 +228,7 @@ func TestReceiveBatch_MixedBatchWritesEveryType(t *testing.T) {
 		LogLines: []*bitacorapb.LogLine{
 			validLogLine("host-a", ts),
 		},
+		Inventories: []*bitacorapb.Inventory{validInventory("host-a", ts)},
 	}
 
 	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
@@ -201,9 +244,12 @@ func TestReceiveBatch_MixedBatchWritesEveryType(t *testing.T) {
 	if result, err := logstore.ScanIndex(dir); err != nil || len(result.Blocks) != 1 {
 		t.Errorf("expected 1 log block on disk, got %d (err=%v)", len(result.Blocks), err)
 	}
+	if got, ok, err := events.GetInventory(context.Background(), "host-a", schema.InventoryDisk); err != nil || !ok || len(got.Items) != 1 {
+		t.Errorf("expected 1 inventory item, got %+v (ok=%v err=%v)", got, ok, err)
+	}
 }
 
-func TestReceiveBatch_MalformedItemDoesNotBlockTheRest(t *testing.T) {
+func TestReceiveBatch_InvalidMetricRecordsRejectionAndPersistsValidMetric(t *testing.T) {
 	ms := newMetricStore(t)
 	events := newRelationalStore(t)
 	logs, _ := newLogStore(t)
@@ -213,14 +259,12 @@ func TestReceiveBatch_MalformedItemDoesNotBlockTheRest(t *testing.T) {
 	goodMetric := validMetric("bitacora_cpu_usage_ratio", "host-a", ts)
 	badMetric := validMetric("not_a_valid_metric_name", "host-a", ts) // missing bitacora_ prefix
 	goodEvent := validEvent("evt-good", "host-a", ts)
-	badEvent := validEvent("evt-bad", "host-a", ts)
-	badEvent.Severity = "not-a-real-severity"
 
 	batch := &bitacorapb.Batch{
 		BatchId: "b1",
 		HostId:  "host-a",
 		Metrics: []*bitacorapb.Metric{badMetric, goodMetric},
-		Events:  []*bitacorapb.Event{badEvent, goodEvent},
+		Events:  []*bitacorapb.Event{goodEvent},
 	}
 
 	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
@@ -232,9 +276,164 @@ func TestReceiveBatch_MalformedItemDoesNotBlockTheRest(t *testing.T) {
 		t.Errorf("expected the good metric to survive, got %d samples (err=%v)", len(gotMetrics), err)
 	}
 
-	gotEvents, err := events.ListEvents(context.Background(), ts.Add(-time.Minute), ts.Add(time.Minute), "host-a")
-	if err != nil || len(gotEvents) != 1 || gotEvents[0].ID != "evt-good" {
-		t.Errorf("expected only the good event to survive, got %+v (err=%v)", gotEvents, err)
+	gotEvents, err := events.ListEvents(context.Background(), ts.Add(-time.Minute), time.Now().UTC().Add(time.Minute), "host-a")
+	if err != nil {
+		t.Fatalf("listing events: %v", err)
+	}
+	if len(gotEvents) != 2 {
+		t.Fatalf("expected valid event and validation rejection, got %+v", gotEvents)
+	}
+	var rejection *schema.Event
+	for i := range gotEvents {
+		if gotEvents[i].Type == "ingest.validation_rejected" {
+			rejection = &gotEvents[i]
+		}
+	}
+	if rejection == nil {
+		t.Fatal("expected an ADR-0006 validation rejection event")
+	}
+	if rejection.HostID != "host-a" || rejection.Attrs["data_kind"] != "metric" || rejection.Attrs["data_name"] != "not_a_valid_metric_name" || rejection.Attrs["reason"] == "" {
+		t.Errorf("unexpected validation rejection event: %+v", rejection)
+	}
+}
+
+func TestReceiveBatch_ValidationRejectionsAreRateLimited(t *testing.T) {
+	events := newRelationalStore(t)
+	logs, _ := newLogStore(t)
+	r := New(newMetricStore(t), events, logs)
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
+
+	batch := &bitacorapb.Batch{
+		BatchId: "b1",
+		HostId:  "host-a",
+		Metrics: []*bitacorapb.Metric{validMetric("not_a_valid_metric_name", "host-a", now)},
+	}
+	for i := 0; i < 2; i++ {
+		if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
+			t.Fatalf("receiving rejected batch %d: %v", i, err)
+		}
+	}
+
+	listRejections := func() []schema.Event {
+		t.Helper()
+		got, err := events.ListEvents(context.Background(), now.Add(-time.Hour), now.Add(time.Hour), "host-a")
+		if err != nil {
+			t.Fatalf("listing rejection events: %v", err)
+		}
+		return got
+	}
+	if got := listRejections(); len(got) != 1 {
+		t.Fatalf("expected one rejection inside rate limit, got %+v", got)
+	}
+
+	now = now.Add(validationRejectionInterval)
+	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
+		t.Fatalf("receiving batch after rate limit: %v", err)
+	}
+	if got := listRejections(); len(got) != 2 {
+		t.Fatalf("expected a second rejection after rate limit, got %+v", got)
+	}
+}
+
+func TestReceiveBatch_ValidationRejectionsKeepDistinctDataNames(t *testing.T) {
+	events := newRelationalStore(t)
+	logs, _ := newLogStore(t)
+	r := New(newMetricStore(t), events, logs)
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
+
+	batch := &bitacorapb.Batch{
+		BatchId: "b1",
+		HostId:  "host-a",
+		Metrics: []*bitacorapb.Metric{
+			validMetric("not_a_valid_metric_name", "host-a", now),
+			validMetric("another_invalid_metric_name", "host-a", now),
+		},
+	}
+	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
+		t.Fatalf("receiving rejected batch: %v", err)
+	}
+
+	got, err := events.ListEvents(context.Background(), now.Add(-time.Hour), now.Add(time.Hour), "host-a")
+	if err != nil {
+		t.Fatalf("listing rejection events: %v", err)
+	}
+	seen := make(map[string]bool)
+	for _, event := range got {
+		if event.Type == "ingest.validation_rejected" {
+			seen[event.Attrs["data_name"]] = true
+		}
+	}
+	for _, name := range []string{"not_a_valid_metric_name", "another_invalid_metric_name"} {
+		if !seen[name] {
+			t.Errorf("expected a validation rejection for %q, got %+v", name, got)
+		}
+	}
+}
+
+func TestReceiveBatch_RecordsValidationRejectionsForEveryDataKind(t *testing.T) {
+	events := newRelationalStore(t)
+	logs, _ := newLogStore(t)
+	r := New(newMetricStore(t), events, logs, WithInventoryUpserter(events), WithJobInserter(events))
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
+
+	batch := &bitacorapb.Batch{
+		BatchId: "b1",
+		HostId:  "host-a",
+		Metrics: []*bitacorapb.Metric{validMetric("not_a_valid_metric_name", "host-a", now)},
+		Events: []*bitacorapb.Event{{
+			Id: "bad-event", HostId: "host-a", TsMs: now.UnixMilli(), Source: "kernel", Type: "kernel.segfault", Severity: "invalid", Title: "bad", Schema: 1,
+		}},
+		LogLines:    []*bitacorapb.LogLine{{HostId: "host-a", TsMs: now.UnixMilli()}},
+		Inventories: []*bitacorapb.Inventory{{HostId: "host-a", ReportedAtMs: now.UnixMilli(), Schema: 1}},
+		Jobs:        []*bitacorapb.Job{{Id: "bad-job", HostId: "host-a"}},
+	}
+	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
+		t.Fatalf("rejected items must not fail the batch: %v", err)
+	}
+
+	got, err := events.ListEvents(context.Background(), now.Add(-time.Hour), now.Add(time.Hour), "host-a")
+	if err != nil {
+		t.Fatalf("listing validation rejection events: %v", err)
+	}
+	seen := make(map[string]bool)
+	for _, event := range got {
+		if event.Type == "ingest.validation_rejected" {
+			seen[event.Attrs["data_kind"]] = true
+		}
+	}
+	for _, dataKind := range []string{"metric", "event", "log", "inventory", "job"} {
+		if !seen[dataKind] {
+			t.Errorf("expected validation rejection for %s, got %+v", dataKind, got)
+		}
+	}
+}
+
+func TestReceiveBatch_BackendErrorsAreNotValidationRejections(t *testing.T) {
+	events := newRelationalStore(t)
+	logs, _ := newLogStore(t)
+	r := New(metricAppenderFunc(func(context.Context, schema.Metric) error {
+		return errors.New("metric store unavailable")
+	}), events, logs)
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+
+	batch := &bitacorapb.Batch{
+		BatchId: "b1",
+		HostId:  "host-a",
+		Metrics: []*bitacorapb.Metric{validMetric("bitacora_cpu_usage_ratio", "host-a", now)},
+	}
+	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
+		t.Fatalf("backend error must not fail the batch: %v", err)
+	}
+
+	got, err := events.ListEvents(context.Background(), now.Add(-time.Hour), now.Add(time.Hour), "host-a")
+	if err != nil {
+		t.Fatalf("listing events: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("backend error must not be recorded as a validation rejection: %+v", got)
 	}
 }
 

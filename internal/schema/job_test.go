@@ -8,13 +8,36 @@ import (
 )
 
 func validJob() Job {
+	startedAt := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
 	return Job{
-		ID:        "01J8XR000000000000000000",
-		JobName:   "rclone-aginsur-sync",
-		HostID:    "01J8X0000000000000000000",
-		StartedAt: time.Now().UTC(),
-		Status:    JobSuccess,
-		Schema:    CurrentSchemaVersion,
+		ID:         "01J8XR000000000000000000",
+		JobName:    "rclone-aginsur-sync",
+		HostID:     "01J8X0000000000000000000",
+		StartedAt:  startedAt,
+		FinishedAt: startedAt.Add(time.Minute),
+		Status:     JobSuccess,
+		Schema:     CurrentSchemaVersion,
+	}
+}
+
+func TestJob_Validate_LifecycleInvariants(t *testing.T) {
+	tests := []struct {
+		name string
+		job  Job
+		want bool
+	}{
+		{"running without finish", func() Job { j := validJob(); j.Status = JobRunning; j.FinishedAt = time.Time{}; return j }(), true},
+		{"running with finish", func() Job { j := validJob(); j.Status = JobRunning; return j }(), false},
+		{"terminal without finish", func() Job { j := validJob(); j.FinishedAt = time.Time{}; return j }(), false},
+		{"terminal before start", func() Job { j := validJob(); j.FinishedAt = j.StartedAt.Add(-time.Second); return j }(), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.job.Validate()
+			if (err == nil) != tt.want {
+				t.Fatalf("Validate() error = %v, want valid=%t", err, tt.want)
+			}
+		})
 	}
 }
 

@@ -103,11 +103,63 @@ body {
   font-weight: 780;
 }
 
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.brand-mark {
+  width: 2.7rem;
+  height: 2.7rem;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.auth-panel .brand-mark {
+  width: 3.25rem;
+  height: 3.25rem;
+}
+
 .auth-panel p,
 .muted-text,
 .loading-text {
   margin: 0;
   color: var(--muted);
+}
+
+.login-panel h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.login-panel .host-form p {
+  margin: -0.35rem 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.notice-panel {
+  border: 1px solid var(--gold);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  padding: 0.85rem;
+}
+
+.secondary-button {
+  display: grid;
+  min-height: 3rem;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  text-align: center;
+  text-decoration: none;
+}
+
+.secondary-button:hover {
+  border-color: var(--cyan);
 }
 
 .host-form {
@@ -183,6 +235,55 @@ body {
   color: var(--muted);
 }
 
+.host-identity,
+.dashboard-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.65rem;
+  margin-top: 0.6rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.host-identity strong {
+  color: var(--text);
+  font-size: 0.98rem;
+}
+
+.host-id {
+  max-width: min(52vw, 30rem);
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-id-copy-button {
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--cyan);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.2rem 0.55rem;
+}
+
+.host-id-copy-button:hover {
+  color: #7dd3fc;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
@@ -199,42 +300,746 @@ body {
   white-space: nowrap;
 }
 
-.status-strip,
 .metrics-grid,
-.lower-grid {
+.lower-grid,
+.inventory-grid,
+.processor-layout,
+.public-surface-grid,
+.access-grid,
+.power-strip {
   display: grid;
   gap: 1rem;
 }
 
-.status-strip {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.dashboard-metadata {
+  justify-content: end;
+  margin-top: 0;
 }
 
-.status-strip article {
-  min-width: 0;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: rgb(13 19 28 / 0.72);
-  padding: 1rem;
+.dashboard-metadata div {
+  display: flex;
+  gap: 0.35rem;
 }
 
-.status-strip span {
-  display: block;
-  margin-bottom: 0.45rem;
+.dashboard-metadata dt {
+  color: var(--dim);
+}
+
+.dashboard-metadata dd {
+  margin: 0;
   color: var(--muted);
-  font-size: 0.78rem;
-  text-transform: uppercase;
-}
-
-.status-strip strong {
-  display: block;
-  overflow-wrap: anywhere;
-  font-size: 1.45rem;
-  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
 }
 
 .metrics-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.processor-layout {
+  grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.75fr);
+  align-items: stretch;
+}
+
+/* The attack-rate chart is the scan target; the totals beside it are the
+   context that explains it. Same split as the processor row. */
+.public-surface-grid {
+  grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.75fr);
+  align-items: stretch;
+}
+
+/* A host that reports nothing renders one explanatory panel, not an empty
+   chart plus a column of dashes. */
+.public-surface-grid > .public-surface-panel--pending {
+  grid-column: 1 / -1;
+}
+
+.public-surface-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.public-surface-note {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.public-surface-details {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.public-surface-details > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 0.5rem;
+}
+
+.public-surface-details > div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.public-surface-details dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.public-surface-details dd {
+  display: flex;
+  flex-direction: column;
+  align-items: end;
+  gap: 0.15rem;
+  margin: 0;
+  text-align: right;
+}
+
+.public-surface-details dd strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.public-surface-details dd span {
+  color: var(--dim);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Unreported is a word, never a colour on its own and never a zero: the
+   operator has to be able to tell "nothing measured" from "measured none". */
+.public-surface-unreported {
+  color: var(--dim);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.processor-identity {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.processor-summary {
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.processor-summary .chart-panel {
+  min-height: 0;
+}
+
+.processor-summary .chart-canvas {
+  height: clamp(10rem, 14vw, 13.75rem);
+}
+
+.cpu-core-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.cpu-core-panel .panel-title-row {
+  margin-bottom: 0;
+}
+
+.cpu-core-panel-header {
+  display: flex;
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.cpu-core-identity {
+  min-width: 0;
+}
+
+.cpu-core-header-meta {
+  display: flex;
+  justify-content: end;
+  gap: 1.1rem;
+  margin: 0;
+}
+
+.cpu-core-header-meta div {
+  display: grid;
+  justify-items: end;
+  gap: 0.1rem;
+}
+
+.cpu-core-header-meta dt {
+  color: var(--dim);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cpu-core-header-meta dd {
+  margin: 0;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cpu-core-power { color: var(--gold); }
+.cpu-core-temperature { color: var(--cyan); }
+
+.cpu-core-temperature small {
+  display: block;
+  color: var(--dim);
+  font-size: 0.62rem;
+  font-weight: 400;
+  text-transform: none;
+}
+
+/* Total load is the first answer the panel owes: one wide bar and one number
+   above the per-core detail, as the reference dashboard does. */
+.cpu-total-load {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.cpu-total-load-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.cpu-total-load-head strong {
+  color: var(--text);
+  font-size: 1.45rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.cpu-core-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.cpu-core-controls label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.cpu-core-controls select {
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font: inherit;
+  padding: 0 0.45rem;
+}
+
+/* Shared disclosure button style; ContainerPanel reuses it. */
+.cpu-details-toggle {
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.25rem 0.65rem;
+}
+
+.cpu-details-toggle:hover { border-color: var(--cyan); }
+
+/* The dot says "this panel is receiving samples" and the sentence beside it
+   says how old the newest one is. Colour alone would claim freshness the page
+   cannot know once the agent goes quiet. */
+.cpu-core-refresh {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--dim);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cpu-core-pulse {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 99px;
+  background: var(--green);
+  animation: cpu-pulse 2s ease-in-out infinite;
+}
+
+.cpu-core-refresh--stale { color: var(--gold); }
+.cpu-core-refresh--stale .cpu-core-pulse { background: var(--gold); animation: none; }
+
+@keyframes cpu-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+.cpu-core-reservations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cpu-core-model,
+.cpu-core-empty {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.cpu-core-power {
+  color: var(--gold);
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.motherboard-panel {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+}
+
+.motherboard-panel .panel-title-row { margin: 0; }
+
+.motherboard-details,
+.motherboard-temperatures ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+}
+
+.motherboard-details > div,
+.motherboard-temperatures li {
+  min-width: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 0.65rem;
+}
+
+.motherboard-details dt,
+.motherboard-temperatures h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.motherboard-details dd {
+  margin: 0.3rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.bios-stale {
+  display: inline-block;
+  margin-left: 0.45rem;
+  border: 1px solid var(--gold);
+  border-radius: 999px;
+  color: var(--gold);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.08rem 0.4rem;
+}
+
+.motherboard-temperatures { display: grid; gap: 0.45rem; }
+.motherboard-temperatures ul { list-style: none; padding: 0; }
+.motherboard-temperatures li { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; color: var(--muted); font-size: 0.8rem; }
+.motherboard-temperatures li strong { color: var(--cyan); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* One compact row per physical core, one thin bar per logical CPU inside it.
+   The previous card grid spent a whole bordered box on each core, so a
+   sixteen-core host could not be read without scrolling. */
+/* No inner scroll: a clipped half-row reads as a rendering fault, and the
+   whole point of this panel is seeing every core at once. */
+.cpu-core-rows {
+  display: grid;
+  align-content: start;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cpu-core-row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 11rem) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.6rem;
+  border-radius: 6px;
+  padding: 0.25rem 0.35rem;
+}
+
+.cpu-core-row:nth-child(odd) {
+  background: var(--panel-strong);
+}
+
+/* A core the kernel took offline is dimmed and labelled, never hidden: a
+   missing row reads as a CPU that never existed. */
+.cpu-core-row--offline {
+  opacity: 0.45;
+}
+
+.cpu-core-row-label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.cpu-core-row-label strong {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cpu-core-row-type,
+.cpu-core-row-ht {
+  color: var(--dim);
+}
+
+.cpu-core-row-ht {
+  font-variant-numeric: tabular-nums;
+}
+
+.cpu-core-row-state {
+  color: var(--gold);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.cpu-core-row-threads {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.cpu-thread-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.45rem;
+}
+
+/* Only a host with isolated CPUs pays for the tag column. Reserving it for
+   every host would shorten every bar on the dashboard to label a state most
+   machines never reach, and leaving it unreserved shortens exactly the one
+   bar that carries the tag. */
+.cpu-core-rows--reserved .cpu-thread-row {
+  position: relative;
+  padding-right: 5rem;
+}
+
+.cpu-core-rows--reserved .cpu-thread-isolated {
+  position: absolute;
+  right: 0;
+}
+
+/* Always rendered, empty on a core with a single thread, so the bars of a
+   P-core row and an E-core row start on the same vertical line. */
+.cpu-thread-id {
+  flex: 0 0 auto;
+  min-width: 1.6rem;
+  color: var(--dim);
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.cpu-thread-value {
+  flex: 0 0 auto;
+  min-width: 3.2rem;
+  color: var(--text);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.cpu-thread-row--offline .cpu-thread-value {
+  color: var(--dim);
+}
+
+.cpu-meter {
+  position: relative;
+  height: 0.5rem;
+  flex: 1 1 auto;
+  min-width: 1.5rem;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line-soft);
+}
+
+.cpu-meter--total {
+  height: 0.85rem;
+}
+
+/* An offline thread inside an otherwise running core needs the dim treatment
+   on its own; a fully offline core already carries it on the row, and
+   stacking both made the empty track disappear altogether. */
+.cpu-meter--offline {
+  opacity: 0.4;
+}
+
+.cpu-core-row--offline .cpu-meter--offline {
+  opacity: 1;
+}
+
+/* The width transition interpolates between two measured samples so the bar
+   travels instead of snapping. transition-duration comes from the component
+   so the value stays next to the comment that explains the cadence. */
+.cpu-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--cyan);
+  transition-property: width;
+  transition-timing-function: ease-out;
+}
+
+.cpu-meter--high .cpu-meter-fill { background: var(--gold); }
+.cpu-meter--critical .cpu-meter-fill { background: var(--red); }
+
+.cpu-meter-peak {
+  position: absolute;
+  top: -0.25rem;
+  bottom: -0.25rem;
+  left: min(calc(var(--cpu-peak) - 1px), calc(100% - 2px));
+  width: 2px;
+  background: var(--gold);
+  box-shadow: 0 0 0 1px var(--panel-strong);
+}
+
+.cpu-load-history {
+  display: grid;
+  gap: 0.3rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+}
+
+.cpu-load-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.cpu-load-history-head strong {
+  color: var(--text);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cpu-load-history-canvas {
+  height: 3.75rem;
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cpu-meter-fill { transition-property: none; }
+  .cpu-core-pulse { animation: none; }
+}
+
+.container-panel {
+  display: grid;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.container-panel .panel-title-row { margin-bottom: 0.85rem; }
+
+.container-panel-totals {
+  display: flex;
+  align-items: baseline;
+  justify-content: end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.container-panel-count {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.container-panel-totals strong {
+  color: var(--cyan);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.container-panel-totals .container-panel-memory { color: var(--gold); }
+
+.container-panel-note,
+.container-empty {
+  margin: 0.25rem 0 0;
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.container-list {
+  display: grid;
+  /* Wide screens get two columns of rows rather than one ribbon with a void
+     between the name and its meters. */
+  grid-template-columns: repeat(auto-fit, minmax(min(34rem, 100%), 1fr));
+  /* Explicit: inside a scrolling, height-capped grid the implicit rows resolve
+     to min-content and a wrapped row's readings escape its own border. */
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 0.35rem;
+  max-height: 28.5rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0 0.2rem 0 0;
+  list-style: none;
+}
+
+.container-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  /* A row whose id wraps must not stand taller than its neighbours. */
+  min-height: 3rem;
+  padding: 0.5rem 0.65rem;
+}
+
+/* A container that stopped reporting is history, not an error: recede it,
+   keep it readable, and never let the meters imply a live reading. */
+.container-row--stopped { background: transparent; }
+.container-row--stopped .container-identity strong { color: var(--muted); }
+
+.container-identity {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
+  min-width: 0;
+}
+
+.container-identity strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.container-identity small {
+  color: var(--dim);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.container-stopped-badge {
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  padding: 0.05rem 0.4rem;
+  color: var(--muted);
+}
+
+.container-reading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.container-meter {
+  height: 0.42rem;
+  flex: 1 1 auto;
+  min-width: 1.5rem;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line-soft);
+}
+
+.container-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--cyan);
+}
+
+.container-meter--memory > span { background: var(--gold); }
+
+.container-reading strong {
+  flex: 0 0 auto;
+  min-width: 4.4rem;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.container-row--stopped .container-reading strong { color: var(--dim); }
+
+@media (max-width: 720px) {
+  .container-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .container-identity { grid-column: 1 / -1; }
+}
+
+@media (max-width: 560px) {
+  .container-panel .panel-title-row {
+    flex-direction: column;
+    align-items: start;
+    gap: 0.65rem;
+  }
+
+  .container-panel-totals { justify-content: start; }
+}
+
+/* The network chart is the third metric: give it a complete row instead of
+   leaving an unfillable second grid cell beside it. */
+.metrics-grid > :last-child,
+.lower-grid > .signal-panel {
+  grid-column: 1 / -1;
 }
 
 .chart-panel {
@@ -275,6 +1080,15 @@ body {
   text-align: right;
 }
 
+.chart-series-value {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.chart-series-value + .chart-series-value {
+  margin-top: 0.4rem;
+}
+
 .chart-value strong {
   color: var(--text);
   font-size: 1.75rem;
@@ -290,7 +1104,7 @@ body {
 
 .chart-canvas {
   width: 100%;
-  min-height: 220px;
+  height: 220px;
   padding: 0.5rem 0.75rem 0.75rem;
 }
 
@@ -304,9 +1118,408 @@ body {
   cursor: crosshair;
 }
 
+/* Power sits in one fixed slot above the dashboard and changes intensity in
+   place. On mains it is a single quiet line of chrome; on battery it becomes
+   the loudest thing on the page without having moved, so the eye already
+   knows where to look. A host with no UPS renders nothing here at all. */
+.power-panel {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0.6rem 1rem;
+}
+
+.power-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.85rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.power-line strong {
+  color: var(--text);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+}
+
+.power-line .power-unit {
+  color: var(--dim);
+}
+
+.power-panel--alarm {
+  display: grid;
+  gap: 0.85rem;
+  border-color: var(--red);
+  background: var(--panel-strong);
+  box-shadow: inset 0.3rem 0 0 var(--red);
+  padding: 1rem 1.25rem;
+}
+
+.power-alarm-heading h2 {
+  margin: 0;
+  color: var(--red);
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+}
+
+.power-alarm-heading p {
+  margin: 0.25rem 0 0;
+  max-width: 60ch;
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.power-alarm-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem 2rem;
+}
+
+.power-runtime {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+}
+
+.power-runtime strong {
+  color: var(--text);
+  font-size: 2.1rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.power-runtime span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.power-runtime--unknown {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.power-charge {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 12rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.power-context {
+  margin: 0;
+  color: var(--dim);
+  font-size: 0.78rem;
+}
+
+/* Remote access answers "can I still get in?", so it shares the window-signal
+   width with the public surface rather than the two-column inventory grid. */
+.access-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tunnels-panel,
+.shares-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.inventory-badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.tunnel-list,
+.share-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tunnel-row,
+.share-row {
+  display: grid;
+  gap: 0.4rem;
+  border-top: 1px solid var(--line-soft);
+  padding: 0.75rem 0;
+}
+
+.tunnel-row:first-child,
+.share-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.tunnel-row-heading,
+.share-row-heading,
+.share-account-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.6rem;
+  min-width: 0;
+}
+
+.tunnel-row-heading strong,
+.share-row-heading strong,
+.share-account-heading strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+/* State is never carried by colour alone: the word is the answer and the
+   colour only reinforces it. */
+.tunnel-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.tunnel-state::before {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: currentcolor;
+}
+
+.tunnel-state--active { color: var(--green); }
+.tunnel-state--inactive { color: var(--muted); }
+.tunnel-state--unreported { color: var(--dim); }
+
+.tunnel-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 15rem));
+  justify-content: start;
+  gap: 0.35rem 1.5rem;
+  margin: 0;
+}
+
+.tunnel-details dt {
+  color: var(--dim);
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
+}
+
+.tunnel-details dd {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+/* Shares span the inventory grid: one row carries a name, a path, a size and
+   an access summary, and squeezing that into half the width turns every row
+   into four wrapped lines. */
+.shares-panel {
+  grid-column: 1 / -1;
+}
+
+.share-mode {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.share-size {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.share-size strong {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.share-size-pending { color: var(--dim); }
+
+.share-path {
+  margin: 0;
+  color: var(--dim);
+  font: 0.76rem/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.share-access {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.share-accounts {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 0.75rem;
+}
+
+.share-accounts summary {
+  cursor: pointer;
+  color: var(--cyan);
+  font-size: 0.82rem;
+}
+
+.share-accounts ul {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-accounts li p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+
 .lower-grid {
   grid-template-columns: minmax(0, 1.4fr) minmax(22rem, 0.6fr);
   align-items: start;
+}
+
+.inventory-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.inventory-panel {
+  min-width: 0;
+  padding: 1rem;
+}
+
+.package-update-panel {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.package-update-panel .inventory-list { margin: 0; }
+.package-not-automatic { margin-top: 1rem; }
+.package-not-automatic h3 { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--dim); }
+
+.cache-age,
+.action-notice {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.cache-age--stale { color: var(--gold); font-weight: 650; }
+
+.package-action-controls,
+.action-confirmation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.package-action-button { min-width: min(100%, 18rem); padding: 0.7rem 1rem; }
+
+.action-confirmation,
+.action-progress {
+  display: grid;
+  gap: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 1rem;
+}
+
+.action-confirmation h3,
+.action-progress p { margin: 0; }
+.action-confirmation h3 { font-size: 1rem; }
+.action-confirmation dl { display: grid; gap: 0.65rem; margin: 0; }
+.action-confirmation dl > div { display: grid; gap: 0.2rem; border-top: 1px solid var(--line-soft); padding-top: 0.55rem; }
+.action-confirmation dt { color: var(--dim); font-size: 0.72rem; text-transform: uppercase; }
+.action-confirmation dd { margin: 0; color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
+.action-progress p { color: var(--muted); }
+.action-progress pre,
+.error-panel pre { max-height: 16rem; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 0.78rem/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+.inventory-reported,
+.inventory-empty {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* Same treatment as .cache-age--stale, for the same reason: an inventory the
+   operator is about to act on must look different when it is behind. The text
+   says so too, so this never carries the state on colour alone. */
+.inventory-reported--stale { color: var(--gold); font-weight: 650; }
+.inventory-reported time { color: inherit; }
+
+.inventory-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inventory-list li {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 0.75rem;
+}
+
+.inventory-list li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.inventory-list strong {
+  overflow-wrap: anywhere;
+}
+
+.inventory-list dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
+
+.inventory-list dt {
+  color: var(--dim);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.inventory-list dd {
+  margin: 0.18rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .events-panel,
@@ -315,7 +1528,60 @@ body {
   padding: 1rem;
 }
 
-.panel-title-row span {
+.events-history-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.events-history-panel > p {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.events-retention-notice { color: var(--gold) !important; }
+
+.events-history-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.events-history-filters label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.events-history-filters input,
+.events-history-filters select {
+  min-height: 2.5rem;
+  padding: 0 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font: inherit;
+}
+
+.events-history-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.events-history-pagination .link-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.inventory-count {
   display: inline-grid;
   min-width: 2rem;
   height: 2rem;
@@ -325,6 +1591,225 @@ body {
   color: var(--gold);
   font-variant-numeric: tabular-nums;
 }
+
+.inventory-title-metrics {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.disk-array-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.disk-group {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.disk-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.6rem;
+}
+
+.disk-group-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.86rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.disk-group-summary {
+  margin: 0;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Each function group renders its own table, so the columns only line up
+   down the panel if their widths are declared rather than measured from
+   the content of one group. */
+.disk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+}
+
+.disk-col-device { width: 30%; }
+.disk-col-state { width: 18%; }
+.disk-col-temperature { width: 8%; }
+.disk-col-smart { width: 15%; }
+.disk-col-usage { width: 29%; }
+
+.disk-table th,
+.disk-table td {
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.disk-table thead th {
+  border-bottom: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.disk-table tbody tr + tr th,
+.disk-table tbody tr + tr td { border-top: 1px solid var(--line-soft); }
+
+.disk-table-row--critical th,
+.disk-table-row--critical td { background: color-mix(in srgb, var(--red) 8%, transparent); }
+
+.disk-cell-device {
+  display: table-cell;
+  min-width: 0;
+  font-weight: 400;
+}
+
+.disk-cell-device strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.disk-cell-identity,
+.disk-cell-mounts {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.disk-mounts { font-size: 0.74rem; }
+.disk-mounts summary { color: var(--cyan); cursor: pointer; }
+
+.disk-mounts ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.disk-mounts li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
+  color: var(--muted);
+}
+
+.disk-mounts code { color: var(--text); overflow-wrap: anywhere; }
+
+/* Both labels wrap rather than run under the next column: "Atención
+   requerida" and "Fallo detectado" do not fit on one line while the panel
+   shares a row with another one. Neither cell may become a flex container:
+   `display: flex` on a `<td>` takes it out of the table box model, and the
+   column stops lining up with its header. */
+.disk-cell-state,
+.disk-cell-smart {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.disk-cell-numeric {
+  color: var(--text);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+/* The status light reports the health state the collectors actually
+   reported, so "unknown" has to look like absence of data and not like a
+   verdict: a dim grey dot next to an em dash, never a reassuring green. */
+.disk-status-light {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  flex: 0 0 auto;
+  margin-right: 0.4rem;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.disk-status-light--ok { background: var(--green); }
+.disk-status-light--critical { background: var(--red); }
+.disk-status-light--unknown { background: var(--line); border: 1px solid var(--dim); }
+
+.disk-usage-cell { display: grid; gap: 0.3rem; }
+
+.disk-usage-cell-values {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.45rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.disk-usage-cell-values b { color: var(--text); font-size: 0.84rem; }
+.disk-usage-warning { color: var(--gold); font-style: normal; font-weight: 700; }
+
+.array-badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--cyan);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.2rem 0.5rem;
+}
+
+.array-badge--degraded { border-color: var(--red); color: var(--red); }
+
+.usage-ring {
+  display: grid;
+  position: relative;
+  width: 3.5rem;
+  height: 3.5rem;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(var(--cyan) var(--usage), var(--line-soft) 0);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-ring::before {
+  position: absolute;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: inherit;
+  background: var(--panel-strong);
+  content: "";
+}
+
+.usage-ring span { z-index: 1; }
+
+/* Sized around its widest label rather than around the glyphs that happen
+   to fit: "100 %" is five characters and a separator, and at 2rem across
+   it spilled over the arc on both sides. The hole has to hold the text,
+   not the other way round. */
+.usage-ring--compact { width: 2.5rem; height: 2.5rem; font-size: 0.58rem; }
+.usage-ring--compact::before { width: 2.05rem; height: 2.05rem; }
+
+.usage-bar { height: 0.42rem; overflow: hidden; border-radius: 999px; background: var(--line-soft); }
+.usage-bar span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); }
+.usage-bar--nearly-full span { background: var(--gold); }
+/* Declared after .usage-bar span, not beside the power rules above: at equal
+   specificity the later rule wins, and a battery drawn in the cyan "all is
+   well" colour is the wrong signal during a power cut. */
+.usage-bar--battery span { background: var(--red); }
+
+.disk-usage-unavailable { margin: 0; color: var(--muted); font-size: 0.75rem; }
 
 .events-empty {
   display: grid;
@@ -349,12 +1834,53 @@ body {
   line-height: 1.6;
 }
 
+/* The events and operations panels show the newest rows, not a window, so a
+   row can be from today or from three months ago. The date is stated once
+   per calendar day rather than repeated on every line: five identical
+   "29/9/2026" prefixes are noise the eye has to step over, and no date at
+   all makes an event from last March look like one from a minute ago. */
+.event-days {
+  display: grid;
+  max-width: 78ch;
+}
+
+.event-day-heading {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 1.1rem 0 0;
+  color: var(--dim);
+  font-size: 0.76rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.event-day-heading::after {
+  content: "";
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.event-day:first-child .event-day-heading {
+  margin-top: 0.75rem;
+}
+
+.event-day .event-list {
+  margin-top: 0;
+}
+
 .event-list {
   display: grid;
   max-width: 78ch;
   margin: 0.75rem 0 0;
   padding: 0;
   list-style: none;
+}
+
+/* Timestamps change on every poll; tabular figures keep them from jumping. */
+.event-time {
+  font-variant-numeric: tabular-nums;
 }
 
 .event-list li {
@@ -381,6 +1907,152 @@ body {
   max-width: 72ch;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.event-details {
+  max-width: 72ch;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.event-details summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+
+.event-details summary span {
+  flex: 1 1 18rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-details dl {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.6rem 0 0;
+}
+
+.event-details dl > div {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
+  gap: 0.65rem;
+}
+
+.event-details dt {
+  color: var(--gold);
+  overflow-wrap: anywhere;
+}
+
+.event-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.log-list { display: grid; gap: 0; margin: 0.75rem 0 0; padding: 0; list-style: none; }
+.log-list li { min-width: 0; border-top: 1px solid var(--line-soft); padding: 0.8rem 0; }
+.log-list li > div { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; color: var(--dim); font-size: 0.78rem; }
+.log-list pre { margin: 0.35rem 0 0; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 0.82rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+/* A referenced line is marked with a border, a tint and its own visible
+   label — never by colour alone (see web/DESIGN.md, Accessibility). */
+.log-entry--referenced {
+  margin: 0 -0.6rem;
+  padding: 0.8rem 0.6rem;
+  border-top-color: var(--gold);
+  border-left: 2px solid var(--gold);
+  background: rgb(248 214 109 / 0.07);
+}
+
+.log-referenced-badge {
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.log-ref-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0.75rem 0 0;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.log-ref-notice > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.log-ref-notice strong {
+  color: var(--text);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.log-ref-notice span {
+  color: var(--dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.event-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.event-actions .link-button {
+  font-size: 0.8rem;
+}
+
+.job-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  max-width: 72ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reserved CPUs read as permanently idle unless they are labelled. */
+.cpu-core-isolated {
+  color: var(--gold);
+}
+
+.cpu-core-offline-count {
+  color: var(--dim);
+}
+
+.cpu-thread-isolated {
+  flex: 0 0 auto;
+  color: var(--gold);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.host-metadata--stale,
+.host-stale-note {
+  color: var(--gold);
 }
 
 .signal-panel {
@@ -417,6 +2089,10 @@ body {
   background: rgb(127 29 29 / 0.35);
   color: #fecdd3;
   padding: 0.85rem;
+}
+
+.error-recovery-panel {
+  border-color: rgb(251 113 133 / 0.5);
 }
 
 .icon-button {
@@ -474,6 +2150,25 @@ body {
   padding: 1rem 0;
 }
 
+/* From laptop width up, a share row reads across instead of down: the name,
+   the size, and who can reach it line up in columns so several shares can be
+   compared at a glance. Below this the same row stacks. */
+@media (width >= 980px) {
+  .share-row {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 0.9fr);
+    grid-template-areas:
+      "name size access"
+      "path path access";
+    align-items: baseline;
+    column-gap: 1.5rem;
+  }
+
+  .share-row-heading { grid-area: name; }
+  .share-size { grid-area: size; }
+  .share-path { grid-area: path; }
+  .share-access { grid-area: access; }
+}
+
 @media (width >= 1920px) {
   .dashboard-shell {
     grid-template-columns: minmax(0, 1fr);
@@ -486,12 +2181,17 @@ body {
     grid-template-columns: repeat(2, minmax(44rem, 1fr));
   }
 
+  .processor-layout,
+  .public-surface-grid {
+    grid-template-columns: minmax(0, 1.65fr) minmax(24rem, 0.75fr);
+  }
+
   .lower-grid {
     grid-template-columns: minmax(56rem, 1.25fr) minmax(30rem, 0.75fr);
   }
 
-  .status-strip strong {
-    font-size: 1.7rem;
+  .inventory-grid {
+    grid-template-columns: minmax(56rem, 1.25fr) minmax(30rem, 0.75fr);
   }
 
   .chart-value strong {
@@ -511,12 +2211,24 @@ body {
   }
 
   .metrics-grid,
-  .lower-grid {
+  .lower-grid,
+  .inventory-grid,
+  .processor-layout,
+  .public-surface-grid,
+  .access-grid {
     grid-template-columns: 1fr;
   }
 
-  .status-strip {
-    grid-template-columns: 1fr;
+  .processor-summary {
+    grid-template-rows: none;
+  }
+
+  .processor-summary .chart-canvas {
+    height: 220px;
+  }
+
+  .dashboard-metadata {
+    justify-content: start;
   }
 }
 
@@ -535,7 +2247,16 @@ body {
     font-size: 1.65rem;
   }
 
-  .status-strip strong,
+  .brand-mark {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .auth-panel .brand-mark {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
   .chart-value strong {
     font-size: 1.25rem;
   }
@@ -547,7 +2268,92 @@ body {
   }
 
   .chart-canvas {
+    height: 200px;
     padding-right: 0.35rem;
     padding-left: 0.35rem;
+  }
+
+  .events-history-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .disk-table { table-layout: auto; }
+  .disk-table colgroup { display: none; }
+  .disk-table thead { display: none; }
+
+  .disk-table,
+  .disk-table tbody,
+  .disk-table-row,
+  .disk-table-row th,
+  .disk-table-row td { display: block; }
+
+  .disk-table-row {
+    padding-block: 0.6rem;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .disk-table tbody tr + tr th,
+  .disk-table tbody tr + tr td { border-top: 0; }
+
+  .disk-table-row th,
+  .disk-table-row td { padding-inline: 0; }
+
+  /* The header row is gone, so each stacked cell names itself: two bare
+     em dashes under one another say nothing about which is temperature
+     and which is the SMART verdict. */
+  /* Qualified by `td` on purpose: the `display: block` above is written
+     as `.disk-table-row td`, which outranks a lone class and would leave
+     these cells stacked without their label column. */
+  .disk-table-row td.disk-cell-state,
+  .disk-table-row td.disk-cell-smart,
+  .disk-table-row td.disk-cell-numeric { display: flex; align-items: baseline; gap: 0.4rem; }
+
+  .disk-cell-state::before,
+  .disk-cell-smart::before,
+  .disk-cell-numeric::before {
+    min-width: 5rem;
+    color: var(--dim);
+    content: attr(data-label);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .disk-group-summary { margin-left: 0; }
+
+  .power-runtime strong { font-size: 1.6rem; }
+
+  .power-charge { min-width: 0; }
+
+  .tunnel-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .cpu-core-panel-header,
+  .cpu-core-controls {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .cpu-core-header-meta {
+    justify-content: start;
+  }
+
+  .cpu-core-header-meta div {
+    justify-items: start;
+  }
+
+  .cpu-core-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+  }
+}
+
+@media (orientation: portrait) and (min-width: 900px) and (min-height: 1500px) {
+  .dashboard-shell--tall-portrait .metrics-grid,
+  .dashboard-shell--tall-portrait .public-surface-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-shell--tall-portrait .chart-canvas {
+    height: clamp(16rem, 18vh, 20rem);
   }
 }

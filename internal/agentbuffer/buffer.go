@@ -17,6 +17,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/sys/unix"
 
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
@@ -39,7 +40,7 @@ const (
 	DefaultSegmentBytes = 4 << 20
 )
 
-// Item is one buffered record. Exactly one of Metric/Event/LogLine/Inventory
+// Item is one buffered record. Exactly one payload field is set.
 // is set.
 type Item struct {
 	Seq       uint64            `json:"seq"`
@@ -49,6 +50,7 @@ type Item struct {
 	Event     *schema.Event     `json:"event,omitempty"`
 	LogLine   *schema.LogLine   `json:"log_line,omitempty"`
 	Inventory *schema.Inventory `json:"inventory,omitempty"`
+	Job       *schema.Job       `json:"job,omitempty"`
 }
 
 // Buffer is the on-disk WAL. Safe for concurrent use.
@@ -59,6 +61,7 @@ type Buffer struct {
 	maxBytes     int64
 
 	mu       sync.Mutex
+	lockFile *os.File
 	nextSeq  uint64
 	active   *segmentWriter
 	sealed   []sealedSegment // oldest first
@@ -91,9 +94,14 @@ func Open(dir string, opts ...Option) (*Buffer, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("creating buffer dir %s: %w", dir, err)
 	}
+	lockFile, err := lockSpool(dir)
+	if err != nil {
+		return nil, err
+	}
 
 	b := &Buffer{
 		dir:          dir,
+		lockFile:     lockFile,
 		segmentBytes: DefaultSegmentBytes,
 		maxAge:       DefaultMaxAge,
 		maxBytes:     DefaultMaxBytes,
@@ -103,6 +111,7 @@ func Open(dir string, opts ...Option) (*Buffer, error) {
 	}
 
 	if err := b.recover(); err != nil {
+		_ = b.closeLock()
 		return nil, fmt.Errorf("recovering buffer at %s: %w", dir, err)
 	}
 	return b, nil
@@ -115,15 +124,51 @@ func Open(dir string, opts ...Option) (*Buffer, error) {
 func (b *Buffer) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	var closeErr error
 	if b.active == nil {
-		return nil
+		return b.closeLock()
 	}
 	seg, err := b.active.seal()
 	if err != nil {
-		return err
+		closeErr = err
+	} else {
+		b.sealed = append(b.sealed, seg)
+		b.active = nil
 	}
-	b.sealed = append(b.sealed, seg)
-	b.active = nil
+	if err := b.closeLock(); err != nil && closeErr == nil {
+		closeErr = err
+	}
+	return closeErr
+}
+
+func lockSpool(dir string) (*os.File, error) {
+	lockPath := filepath.Join(dir, ".bitacora-agent.lock")
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o640)
+	if err != nil {
+		return nil, fmt.Errorf("opening outbound buffer lock %s: %w", lockPath, err)
+	}
+	if err := unix.Flock(int(lockFile.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if err == unix.EWOULDBLOCK || err == unix.EAGAIN {
+			return nil, fmt.Errorf("outbound buffer at %s is already in use by another bitacora-agent instance", dir)
+		}
+		return nil, fmt.Errorf("locking outbound buffer at %s: %w", dir, err)
+	}
+	return lockFile, nil
+}
+
+func (b *Buffer) closeLock() error {
+	if b.lockFile == nil {
+		return nil
+	}
+	if err := unix.Flock(int(b.lockFile.Fd()), unix.LOCK_UN); err != nil {
+		return fmt.Errorf("unlocking outbound buffer at %s: %w", b.dir, err)
+	}
+	if err := b.lockFile.Close(); err != nil {
+		return fmt.Errorf("closing outbound buffer lock at %s: %w", b.dir, err)
+	}
+	b.lockFile = nil
 	return nil
 }
 

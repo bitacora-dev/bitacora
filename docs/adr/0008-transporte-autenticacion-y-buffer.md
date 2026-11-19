@@ -120,3 +120,10 @@ reintentar sea seguro y que el backfill tras una reconexión no duplique datos.
   reinicio del hub, sin jitter llegan sincronizados.
 - El endpoint de ingesta necesita límite de tasa por token, para que un agente
   con un bug no tumbe el hub.
+- Un elemento que falle validación local en el receptor se descarta sin
+  reintento, pero deja un evento `ingest.validation_rejected` persistido. El
+  evento incluye host, tipo de dato, nombre o identificador y causa. Se limita
+  a una ocurrencia cada cinco minutos por `(host_id, data_kind, data_name,
+  reason)` para
+  que un agente defectuoso no inunde la cronología; errores de backend o una
+  configuración de almacenamiento ausente no se presentan como validaciones.

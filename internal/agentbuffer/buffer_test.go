@@ -3,6 +3,7 @@ package agentbuffer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,23 @@ func TestBuffer_AppendAndReadBack(t *testing.T) {
 	}
 	if len(items) != 2 || items[0].LogLine == nil || items[1].Metric == nil {
 		t.Fatalf("unexpected items: %+v", items)
+	}
+}
+
+func TestOpen_RejectsSecondInstanceForSameSpool(t *testing.T) {
+	dir := t.TempDir()
+	first, err := Open(dir)
+	if err != nil {
+		t.Fatalf("opening first buffer: %v", err)
+	}
+	defer first.Close()
+
+	_, err = Open(dir)
+	if err == nil {
+		t.Fatal("expected opening the same spool from a second instance to fail")
+	}
+	if !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("expected a clear already-in-use error, got %v", err)
 	}
 }
 
@@ -140,9 +158,11 @@ func TestBuffer_SurvivesUncleanRestart(t *testing.T) {
 		}
 	}
 
-	// Simulate a crash: no Close(), no seal — just walk away from the
-	// active .wal file exactly as an unclean shutdown would leave it.
-	// (Not calling b.Close() is the point of this test.)
+	// Simulate a crash: release only the process lock, leaving the active WAL
+	// unsealed exactly as an abrupt process exit would.
+	if err := b.lockFile.Close(); err != nil {
+		t.Fatalf("releasing simulated crashed process lock: %v", err)
+	}
 
 	b2, err := Open(dir)
 	if err != nil {

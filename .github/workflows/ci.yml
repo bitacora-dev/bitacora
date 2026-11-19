@@ -37,6 +37,27 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Test frontend
+        working-directory: web
+        run: npm test
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Verify committed frontend build
+        run: git diff --exit-code -- internal/webui/dist
+
       - name: Install libsystemd-dev
         # internal/collector/journald's Linux reader uses sdjournal (cgo
         # binding over libsystemd) — a scoped, documented exception to
@@ -48,6 +69,28 @@ jobs:
       - name: Build both binaries
         run: go build ./...
 
+      - name: Build for macOS arm64
+        run: GOOS=darwin GOARCH=arm64 go build ./...
+
+      - name: Build Linux amd64 agent with journald
+        run: >-
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64
+          go build -o dist/bitacora-agent-linux-amd64-journald ./cmd/bitacora-agent
+
+      - name: Verify journald is compiled into the agent
+        run: |
+          if strings dist/bitacora-agent-linux-amd64-journald | grep -Fq 'requires cgo and libsystemd'; then
+            echo 'the journald fallback was compiled into the deployment artifact' >&2
+            exit 1
+          fi
+
+      - name: Publish Linux amd64 journald agent
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitacora-agent-linux-amd64-journald
+          path: dist/bitacora-agent-linux-amd64-journald
+          if-no-files-found: error
+
       - name: Vet
         run: go vet ./...
 
@@ -56,6 +99,12 @@ jobs:
 
       - name: os/exec lint (ADR-0012 — only helpers and bitacora-run may exec)
         run: ./scripts/ci/check-no-exec.sh
+
+      - name: Internal package importer lint
+        run: ./scripts/ci/check-internal-importers.sh
+
+      - name: Generated frontend merge driver test
+        run: ./scripts/ci/test-dist-merge-driver.sh
 
       - name: License boundary lint (ADR-0013 / ADR-0018)
         run: ./scripts/ci/check-license-boundary.sh

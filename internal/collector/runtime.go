@@ -39,8 +39,16 @@ type Runtime struct {
 	Sink   Sink
 	Events Events
 
-	wg     sync.WaitGroup
-	cancel context.CancelFunc
+	wg        sync.WaitGroup
+	cancel    context.CancelFunc
+	triggerMu sync.RWMutex
+	triggers  map[string]*collectionTrigger
+}
+
+type collectionTrigger struct {
+	ch      chan struct{}
+	pending bool
+	mu      sync.Mutex
 }
 
 // Start launches one goroutine per registration and returns immediately.
@@ -51,6 +59,12 @@ func (r *Runtime) Start(ctx context.Context, registrations []Registration) {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
+	r.triggerMu.Lock()
+	r.triggers = make(map[string]*collectionTrigger, len(registrations))
+	for _, reg := range registrations {
+		r.triggers[reg.Collector.Name()] = &collectionTrigger{ch: make(chan struct{}, 1)}
+	}
+	r.triggerMu.Unlock()
 	for _, reg := range registrations {
 		reg := reg
 		// The ticker is created here, synchronously, so it's already
@@ -65,12 +79,39 @@ func (r *Runtime) Start(ctx context.Context, registrations []Registration) {
 	}
 }
 
+// RequestCollection schedules one extra collection for name without waiting
+// for it. Requests received while an extra collection is pending or running
+// are coalesced, so an event burst cannot make a slow collector repeat work.
+func (r *Runtime) RequestCollection(name string) {
+	r.triggerMu.RLock()
+	trigger := r.triggers[name]
+	r.triggerMu.RUnlock()
+	if trigger == nil {
+		return
+	}
+
+	trigger.mu.Lock()
+	defer trigger.mu.Unlock()
+	if trigger.pending {
+		return
+	}
+	trigger.pending = true
+	select {
+	case trigger.ch <- struct{}{}:
+	default:
+		// pending keeps the request coalesced if the loop has not observed it yet.
+	}
+}
+
 // Close stops every collector loop and waits for them to exit.
 func (r *Runtime) Close() {
 	if r.cancel != nil {
 		r.cancel()
 	}
 	r.wg.Wait()
+	r.triggerMu.Lock()
+	r.triggers = nil
+	r.triggerMu.Unlock()
 }
 
 func effectiveTimeout(interval, configured time.Duration) time.Duration {
@@ -81,56 +122,74 @@ func effectiveTimeout(interval, configured time.Duration) time.Duration {
 }
 
 func (r *Runtime) runLoop(ctx context.Context, reg Registration, ticker Ticker) {
-	interval := reg.Interval
 	defer ticker.Stop()
 
 	consecutiveErrors := 0
 	consecutiveTimeouts := 0
+	r.triggerMu.RLock()
+	trigger := r.triggers[reg.Collector.Name()]
+	r.triggerMu.RUnlock()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C():
-			timeout := effectiveTimeout(interval, reg.Timeout)
-			err, timedOut := r.collectOnce(ctx, reg.Collector, timeout)
-
-			switch {
-			case timedOut:
-				consecutiveTimeouts++
-				r.reportError(reg.Collector.Name(), fmt.Errorf("collect exceeded timeout %s", timeout))
-				if consecutiveTimeouts >= maxConsecutiveTimeouts {
-					r.reportDisabled(reg.Collector.Name(), "exceeded timeout 3 times in a row")
-					return
-				}
-
-			case err != nil:
-				consecutiveTimeouts = 0
-				consecutiveErrors++
-				r.reportError(reg.Collector.Name(), err)
-
-				multiplier := 1
-				for i := 0; i < consecutiveErrors; i++ {
-					multiplier *= 2
-					if multiplier >= maxBackoffMultiplier {
-						multiplier = maxBackoffMultiplier
-						break
-					}
-				}
-				ticker.Stop()
-				ticker = r.Clock.NewTicker(interval * time.Duration(multiplier))
-
-			default:
-				consecutiveTimeouts = 0
-				if consecutiveErrors > 0 {
-					consecutiveErrors = 0
-					r.reportRecovered(reg.Collector.Name())
-					ticker.Stop()
-					ticker = r.Clock.NewTicker(interval)
-				}
+			if r.collect(ctx, reg, &ticker, &consecutiveErrors, &consecutiveTimeouts) {
+				return
+			}
+		case <-trigger.ch:
+			disabled := r.collect(ctx, reg, &ticker, &consecutiveErrors, &consecutiveTimeouts)
+			trigger.mu.Lock()
+			trigger.pending = false
+			trigger.mu.Unlock()
+			if disabled {
+				return
 			}
 		}
 	}
+}
+
+func (r *Runtime) collect(ctx context.Context, reg Registration, ticker *Ticker, consecutiveErrors, consecutiveTimeouts *int) (disabled bool) {
+	interval := reg.Interval
+	timeout := effectiveTimeout(interval, reg.Timeout)
+	err, timedOut := r.collectOnce(ctx, reg.Collector, timeout)
+
+	switch {
+	case timedOut:
+		(*consecutiveTimeouts)++
+		r.reportError(reg.Collector.Name(), fmt.Errorf("collect exceeded timeout %s", timeout))
+		if *consecutiveTimeouts >= maxConsecutiveTimeouts {
+			r.reportDisabled(reg.Collector.Name(), "exceeded timeout 3 times in a row")
+			return true
+		}
+
+	case err != nil:
+		*consecutiveTimeouts = 0
+		(*consecutiveErrors)++
+		r.reportError(reg.Collector.Name(), err)
+
+		multiplier := 1
+		for i := 0; i < *consecutiveErrors; i++ {
+			multiplier *= 2
+			if multiplier >= maxBackoffMultiplier {
+				multiplier = maxBackoffMultiplier
+				break
+			}
+		}
+		(*ticker).Stop()
+		*ticker = r.Clock.NewTicker(interval * time.Duration(multiplier))
+
+	default:
+		*consecutiveTimeouts = 0
+		if *consecutiveErrors > 0 {
+			*consecutiveErrors = 0
+			r.reportRecovered(reg.Collector.Name())
+			(*ticker).Stop()
+			*ticker = r.Clock.NewTicker(interval)
+		}
+	}
+	return false
 }
 
 // collectOnce runs one Collect call in its own goroutine so a collector
@@ -141,6 +200,11 @@ func (r *Runtime) collectOnce(ctx context.Context, c Collector, timeout time.Dur
 	collectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// The cycle's instant is taken here, once, before the collector runs, so
+	// everything it emits shares it — see CycleSink. It comes from the
+	// injected Clock (ADR-0007), never time.Now().
+	sink := r.cycleSink()
+
 	done := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -148,7 +212,7 @@ func (r *Runtime) collectOnce(ctx context.Context, c Collector, timeout time.Dur
 				done <- fmt.Errorf("panic in collector: %v", p)
 			}
 		}()
-		done <- c.Collect(collectCtx, r.Sink)
+		done <- c.Collect(collectCtx, sink)
 	}()
 
 	select {
@@ -157,6 +221,21 @@ func (r *Runtime) collectOnce(ctx context.Context, c Collector, timeout time.Dur
 	case <-collectCtx.Done():
 		return collectCtx.Err(), true
 	}
+}
+
+// cycleSink resolves the Sink handed to one Collect call. A Sink that
+// implements CycleSink gets a fresh per-cycle view stamped with a single
+// instant; any other Sink (test fakes, simple recorders) is passed through
+// untouched, so this stays a capability rather than a contract change.
+func (r *Runtime) cycleSink() Sink {
+	cycle, ok := r.Sink.(CycleSink)
+	if !ok || r.Clock == nil {
+		return r.Sink
+	}
+	if scoped := cycle.BeginCycle(r.Clock.Now()); scoped != nil {
+		return scoped
+	}
+	return r.Sink
 }
 
 func (r *Runtime) reportError(name string, err error) {

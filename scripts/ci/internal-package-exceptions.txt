@@ -1,0 +1,5 @@
+# Each exception must have an explicit reason. Remove an entry once the
+# package gains a production importer.
+internal/collector/example | Reference implementation for ADR-0007; documentation code, not a runtime collector.
+internal/netconsole | Pending integration of the ADR-0011 diagnostic console.
+internal/hubauth/oidctest | Fake OIDC issuer shared by the hubauth flow tests and the hub wiring regression that proves agent ingest survives ADR-0019. Test-only by design: a production importer would mean shipping a fake issuer.

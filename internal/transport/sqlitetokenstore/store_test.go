@@ -126,3 +126,52 @@ func TestStore_DoesNotStorePlaintextToken(t *testing.T) {
 		t.Fatal("expected token hash, got plaintext token")
 	}
 }
+
+func TestStore_DeviceTokensPersistSeparatelyFromIngestTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.db")
+
+	store, err := New(path)
+	if err != nil {
+		t.Fatalf("opening token store: %v", err)
+	}
+	if err := store.AddDeviceToken("device-token"); err != nil {
+		t.Fatalf("adding device token: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("closing token store: %v", err)
+	}
+
+	reopened, err := New(path)
+	if err != nil {
+		t.Fatalf("reopening token store: %v", err)
+	}
+	defer reopened.Close()
+
+	hasAny, err := reopened.HasAnyDeviceToken(context.Background())
+	if err != nil {
+		t.Fatalf("checking device tokens: %v", err)
+	}
+	if !hasAny {
+		t.Fatal("expected persisted device token")
+	}
+	valid, err := reopened.LookupDeviceToken(context.Background(), "device-token")
+	if err != nil {
+		t.Fatalf("looking up device token: %v", err)
+	}
+	if !valid {
+		t.Fatal("expected persisted device token to validate")
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("opening raw db: %v", err)
+	}
+	defer db.Close()
+	var stored string
+	if err := db.QueryRow(`SELECT token_hash FROM device_tokens LIMIT 1`).Scan(&stored); err != nil {
+		t.Fatalf("reading device token hash: %v", err)
+	}
+	if stored == "device-token" {
+		t.Fatal("expected device token hash, got plaintext token")
+	}
+}

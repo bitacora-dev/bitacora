@@ -21,12 +21,14 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/bitacora-dev/bitacora/internal/websecurity"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )
@@ -318,11 +320,14 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "invalid local login request")
 		return
 	}
-	generation, err := a.local.Authenticate(password, factor)
+	ip := websecurity.ClientIPString(r)
+	generation, err := a.local.AuthenticateFromIP(password, factor, ip)
 	if err != nil {
+		reason := "local_authentication_failed"
 		status := http.StatusUnauthorized
 		if errors.Is(err, ErrLocalAuthLocked) {
 			status = http.StatusTooManyRequests
+			reason = "local_account_locked"
 		}
 		if errors.Is(err, ErrInvalidLocalCredentials) {
 			if lockedUntil, lockErr := a.local.LockedUntil(); lockErr == nil && !lockedUntil.IsZero() {
@@ -330,15 +335,19 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		if errors.Is(err, ErrLocalAuthNotInitialized) {
+			slog.Warn("authentication event", "event", "auth_login_failure", "method", "local", "subject", localOperatorSubject, "ip", ip, "reason", "local_authentication_not_initialized")
 			writeJSONError(w, http.StatusUnauthorized, "local authentication is not initialized")
 			return
 		}
 		if !errors.Is(err, ErrInvalidLocalCredentials) && !errors.Is(err, ErrLocalAuthLocked) && !errors.Is(err, ErrLocalAuthDisabled) {
 			status = http.StatusInternalServerError
+			reason = "local_authentication_error"
 		}
+		slog.Warn("authentication event", "event", "auth_login_failure", "method", "local", "subject", localOperatorSubject, "ip", ip, "reason", reason)
 		if status == http.StatusTooManyRequests {
 			lockedUntil, lockErr := a.local.LockedUntil()
 			if lockErr == nil {
+				slog.Warn("authentication event", "event", "auth_lockout", "method", "local", "subject", localOperatorSubject, "ip", ip, "until", lockedUntil.UTC().Format(time.RFC3339))
 				writeJSON(w, status, map[string]string{"error": "local account is locked", "locked_until": lockedUntil.Format(time.RFC3339)})
 				return
 			}
@@ -359,6 +368,7 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 		localGeneration: &generation,
 	}
 	a.mu.Unlock()
+	slog.Info("authentication event", "event", "auth_login_success", "method", "local", "subject", localOperatorSubject, "ip", ip)
 	http.SetCookie(w, a.cookie(sessionCookie, sid, DefaultSessionTTL))
 	if acceptsHTML(r) || r.Header.Get("Content-Type") == "application/x-www-form-urlencoded" {
 		http.Redirect(w, r, safeReturnTo(returnTo), http.StatusFound)
@@ -447,6 +457,7 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, retur
 
 func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
+		auditLoginFailure(r, "oidc", "provider_rejected")
 		writeJSONError(w, http.StatusUnauthorized, "provider rejected the login: "+errParam)
 		return
 	}
@@ -454,6 +465,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	stateFromCookie, err := r.Cookie(stateCookie)
 	if state == "" || err != nil || stateFromCookie.Value != state {
+		auditLoginFailure(r, "oidc", "invalid_state")
 		writeJSONError(w, http.StatusBadRequest, "invalid authentication state")
 		return
 	}
@@ -465,32 +477,38 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	expired := ok && a.now().After(p.expiresAt)
 	a.mu.Unlock()
 	if !ok || expired {
+		auditLoginFailure(r, "oidc", "expired_or_unknown_state")
 		writeJSONError(w, http.StatusBadRequest, "invalid authentication state")
 		return
 	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
+		auditLoginFailure(r, "oidc", "missing_code")
 		writeJSONError(w, http.StatusBadRequest, "missing authorization code")
 		return
 	}
 
 	token, err := a.oauth.Exchange(r.Context(), code, oauth2.VerifierOption(p.verifier))
 	if err != nil {
+		auditLoginFailure(r, "oidc", "code_exchange_failed")
 		writeJSONError(w, http.StatusUnauthorized, "could not exchange the authorization code")
 		return
 	}
 	rawID, ok := token.Extra("id_token").(string)
 	if !ok || rawID == "" {
+		auditLoginFailure(r, "oidc", "missing_id_token")
 		writeJSONError(w, http.StatusUnauthorized, "provider returned no id_token")
 		return
 	}
 	idToken, err := a.verifier.Verify(r.Context(), rawID)
 	if err != nil {
+		auditLoginFailure(r, "oidc", "id_token_verification_failed")
 		writeJSONError(w, http.StatusUnauthorized, "could not verify the id_token")
 		return
 	}
 	if idToken.Nonce != p.nonce {
+		auditLoginFailure(r, "oidc", "nonce_mismatch")
 		writeJSONError(w, http.StatusUnauthorized, "id_token nonce does not match")
 		return
 	}
@@ -505,6 +523,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	sid, err := randomToken()
 	if err != nil {
+		auditLoginFailure(r, "oidc", "session_creation_failed")
 		writeJSONError(w, http.StatusInternalServerError, "could not create the session")
 		return
 	}
@@ -516,17 +535,26 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 
+	slog.Info("authentication event", "event", "auth_login_success", "method", "oidc", "subject", idToken.Subject, "ip", websecurity.ClientIPString(r))
 	http.SetCookie(w, a.cookie(sessionCookie, sid, a.ttl))
 	http.Redirect(w, r, p.returnTo, http.StatusFound)
 }
 
+func auditLoginFailure(r *http.Request, method, reason string) {
+	slog.Warn("authentication event", "event", "auth_login_failure", "method", method, "ip", websecurity.ClientIPString(r), "reason", reason)
+}
+
 func (a *Authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
+	identity, hasIdentity := a.Identity(r)
 	if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
 		a.mu.Lock()
 		delete(a.sessions, cookie.Value)
 		a.mu.Unlock()
 	}
 	http.SetCookie(w, a.expiredCookie(sessionCookie))
+	if hasIdentity {
+		slog.Info("authentication event", "event", "auth_logout", "method", identity.Source, "subject", identity.Subject, "ip", websecurity.ClientIPString(r))
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

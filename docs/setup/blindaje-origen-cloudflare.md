@@ -54,6 +54,28 @@ Este patrón establece una conexión saliente desde el host a Cloudflare. El fir
 
 No hay degradación funcional si no se usa Cloudflare. Para una instalación puramente autoalojada, priorice una VPN privada (por ejemplo, Tailscale), un firewall restrictivo y un proxy inverso operado por usted. Si decide exponer el hub directamente, asuma que la IP del origen es pública y aplique autenticación, TLS, actualizaciones y controles de red propios.
 
+## Cabeceras de proxy y límites del hub
+
+El hub usa la dirección TCP remota como IP del cliente por defecto. Solo acepta
+`CF-Connecting-IP`, `X-Forwarded-For`, `X-Forwarded-Host` y
+`X-Forwarded-Proto` cuando la conexión inmediata pertenece a uno de los CIDR
+de `BITACORA_TRUSTED_PROXY_CIDRS`. No configure esa variable en una instalación
+sin proxy; hacerlo permite que un cliente directo suplante su IP y su host.
+
+Para Cloudflare, copie los rangos oficiales vigentes a esa variable y mantenga
+el firewall del patrón A: confiar en una cabecera sin restringir quién llega al
+origen no protege nada. El hub no descarga ni actualiza esos rangos.
+
+Los límites por IP usan estas variables opcionales, expresadas en solicitudes
+por minuto salvo los `BURST`: `BITACORA_LOGIN_RATE_PER_MINUTE` (5),
+`BITACORA_LOGIN_RATE_BURST` (5), `BITACORA_PAIR_RATE_PER_MINUTE` (10) y
+`BITACORA_PAIR_RATE_BURST` (10). Los valores predeterminados limitan el inicio
+de sesión local y el emparejamiento/canje de dispositivo. Después de un inicio
+local correcto, solo los fallos desde esa misma IP avanzan el bloqueo persistido
+de cinco fallos durante quince minutos; los fallos de otra IP siguen limitados,
+pero no prolongan el bloqueo del operador. El primer inicio no tiene una IP
+conocida, así que conserva el bloqueo de ADR-0023.
+
 ## Límites y responsabilidad
 
 Cloudflare no sustituye la autenticación del hub ni el endurecimiento del host. Para autenticar personas dentro del propio hub, vea [Autenticación humana del hub con OIDC](autenticacion-humana-oidc.md) (ADR-0019) o [Autenticación local del hub](autenticacion-local.md) (ADR-0023), que es además el camino que queda cuando Cloudflare no responde. El operador decide si acepta el intercambio entre ocultar el origen y depender de un tercero. Bitácora no crea reglas, no almacena tokens de Cloudflare y no soporta la automatización de esta configuración.

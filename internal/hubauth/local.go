@@ -64,6 +64,8 @@ type localAuthState struct {
 	TOTP              encryptedSecret `json:"totp"`
 	Recovery          []passwordHash  `json:"recovery_codes"`
 	Failures          int             `json:"failures"`
+	FailureIP         string          `json:"failure_ip,omitempty"`
+	LastSuccessIP     string          `json:"last_success_ip,omitempty"`
 	LockedUntil       time.Time       `json:"locked_until,omitempty"`
 	SessionGeneration uint64          `json:"session_generation"`
 	Disabled          bool            `json:"disabled,omitempty"`
@@ -338,6 +340,15 @@ func (s *LocalStore) VerifyPassword(password string) error {
 // Authenticate verifies password plus TOTP or one recovery code. Failed
 // attempts and lockout are persisted before the error returns.
 func (s *LocalStore) Authenticate(password, factor string) (uint64, error) {
+	return s.AuthenticateFromIP(password, factor, "")
+}
+
+// AuthenticateFromIP verifies the local credential and records the peer that
+// made the attempt. Once a successful peer is known, failures from another
+// peer do not advance the persisted subject lockout. The HTTP per-IP limiter
+// still throttles those attempts; this policy prevents a remote peer from
+// extending the operator's own lockout window.
+func (s *LocalStore) AuthenticateFromIP(password, factor, clientIP string) (uint64, error) {
 	if s == nil {
 		return 0, ErrLocalAuthNotConfigured
 	}
@@ -386,9 +397,15 @@ func (s *LocalStore) Authenticate(password, factor string) (uint64, error) {
 		}
 	}
 	if !validPassword || !validFactor {
-		state.Failures++
-		if state.Failures >= localAuthMaxFailures {
-			state.LockedUntil = now.Add(localAuthLockout)
+		if clientIP == "" || state.LastSuccessIP == "" || clientIP == state.LastSuccessIP {
+			if state.FailureIP != clientIP {
+				state.Failures = 0
+				state.FailureIP = clientIP
+			}
+			state.Failures++
+			if state.Failures >= localAuthMaxFailures {
+				state.LockedUntil = now.Add(localAuthLockout)
+			}
 		}
 		if err := s.writeState(state); err != nil {
 			return 0, err
@@ -398,7 +415,10 @@ func (s *LocalStore) Authenticate(password, factor string) (uint64, error) {
 	if usedRecovery >= 0 {
 		state.Recovery = append(state.Recovery[:usedRecovery], state.Recovery[usedRecovery+1:]...)
 	}
-	state.Failures, state.LockedUntil = 0, time.Time{}
+	state.Failures, state.FailureIP, state.LockedUntil = 0, "", time.Time{}
+	if clientIP != "" {
+		state.LastSuccessIP = clientIP
+	}
 	if err := s.writeState(state); err != nil {
 		return 0, err
 	}

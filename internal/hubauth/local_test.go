@@ -120,6 +120,32 @@ func TestLocalStorePersistsLockoutAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestLocalStoreDoesNotLetAnotherIPAdvanceKnownOperatorLockout(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	secret, _, err := store.Initialize("password")
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		t.Fatalf("decoding TOTP secret: %v", err)
+	}
+	defer zero(key)
+	if _, err := store.AuthenticateFromIP("password", totpCode(key, now), "198.51.100.10"); err != nil {
+		t.Fatalf("successful baseline login: %v", err)
+	}
+	for attempt := 0; attempt < localAuthMaxFailures; attempt++ {
+		if _, err := store.AuthenticateFromIP("wrong", "000000", "203.0.113.7"); !errors.Is(err, ErrInvalidLocalCredentials) {
+			t.Fatalf("other-IP failure %d: %v", attempt, err)
+		}
+	}
+	if _, err := store.AuthenticateFromIP("password", totpCode(key, now), "198.51.100.10"); err != nil {
+		t.Fatalf("other-IP failures locked the operator: %v", err)
+	}
+}
+
 func TestLocalStoreVerifiesCurrentPasswordWithoutCreatingASession(t *testing.T) {
 	store := newLocalStoreForTest(t)
 	if _, _, err := store.Initialize("current-password"); err != nil {

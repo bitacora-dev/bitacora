@@ -58,6 +58,53 @@ type LocalStore struct {
 	required bool
 	mu       sync.Mutex
 	now      func() time.Time
+
+	// status caches what the hot paths need from the credential file
+	// (enabled, generation) so that every panel request does not queue
+	// behind s.mu, which a login holds for a whole 64 MiB Argon2id. It has
+	// its own lock and is revalidated against the file's size and mtime,
+	// so a change made by another process (the CLI) is still seen.
+	statusMu sync.Mutex
+	status   credentialStatus
+}
+
+type credentialStatus struct {
+	valid      bool
+	modTime    time.Time
+	size       int64
+	readable   bool
+	disabled   bool
+	generation uint64
+}
+
+// cachedStatus reports the credential's enabled state and generation without
+// taking s.mu. A missing file is "not initialized"; any other unreadable
+// state is treated as not enabled, which is the fail-closed answer.
+func (s *LocalStore) cachedStatus() credentialStatus {
+	info, err := os.Stat(s.path)
+	if err != nil {
+		return credentialStatus{}
+	}
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	if s.status.valid && s.status.size == info.Size() && s.status.modTime.Equal(info.ModTime()) {
+		return s.status
+	}
+	// readState only reads: writes replace the file by atomic rename, so a
+	// reader never sees a partial file and needs no s.mu.
+	state, err := s.readState()
+	status := credentialStatus{valid: true, modTime: info.ModTime(), size: info.Size()}
+	if err == nil {
+		status.readable, status.disabled, status.generation = true, state.Disabled, state.SessionGeneration
+	}
+	s.status = status
+	return status
+}
+
+func (s *LocalStore) invalidateStatus() {
+	s.statusMu.Lock()
+	s.status = credentialStatus{}
+	s.statusMu.Unlock()
 }
 
 type localAuthState struct {
@@ -172,10 +219,8 @@ func (s *LocalStore) IsEnabled() bool {
 	if s == nil {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, err := s.readState()
-	return err == nil && !state.Disabled
+	status := s.cachedStatus()
+	return status.readable && !status.disabled
 }
 
 // Initialize creates the encryption key and the credential. The returned
@@ -467,10 +512,8 @@ func (s *LocalStore) generationValid(generation uint64) bool {
 	if s == nil {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, err := s.readState()
-	return err == nil && !state.Disabled && state.SessionGeneration == generation
+	status := s.cachedStatus()
+	return status.readable && !status.disabled && status.generation == generation
 }
 
 type generatedSecondFactor struct {
@@ -523,7 +566,8 @@ func hashSecret(secret []byte) (passwordHash, error) {
 	if err != nil {
 		return passwordHash{}, err
 	}
-	hash := argon2.IDKey(secret, salt, 3, 64*1024, 4, localAuthKeyBytes)
+	cost := currentArgon2Cost()
+	hash := argon2.IDKey(secret, salt, cost.time, cost.memoryKiB, cost.threads, localAuthKeyBytes)
 	result := passwordHash{Salt: base64.RawStdEncoding.EncodeToString(salt), Hash: base64.RawStdEncoding.EncodeToString(hash)}
 	zero(salt)
 	zero(hash)
@@ -539,7 +583,8 @@ func verifySecret(record passwordHash, secret []byte) (bool, error) {
 	if err != nil || len(expected) != localAuthKeyBytes {
 		return false, errors.New("invalid local authentication hash")
 	}
-	actual := argon2.IDKey(secret, salt, 3, 64*1024, 4, localAuthKeyBytes)
+	cost := currentArgon2Cost()
+	actual := argon2.IDKey(secret, salt, cost.time, cost.memoryKiB, cost.threads, localAuthKeyBytes)
 	ok := subtle.ConstantTimeCompare(actual, expected) == 1
 	zero(salt)
 	zero(expected)
@@ -641,6 +686,10 @@ func (s *LocalStore) writeState(state localAuthState) error {
 	if err != nil {
 		return err
 	}
+	// Invalidate on both sides of the write: a same-size rewrite within the
+	// filesystem's mtime granularity must not leave a stale generation.
+	s.invalidateStatus()
+	defer s.invalidateStatus()
 	return writePrivateFile(s.path, append(bytes, '\n'))
 }
 

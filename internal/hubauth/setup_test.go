@@ -502,3 +502,115 @@ func TestCredentialStatusDoesNotWaitOnLoginsAndSeesExternalChanges(t *testing.T)
 		t.Fatal("a change written by another store was not seen")
 	}
 }
+
+// A same-size rewrite that keeps the old mtime (within the timestamp
+// granularity, or restored on purpose) must still be seen: the generation is
+// a revocation decision and may never be served stale.
+func TestCredentialStatusSeesASameSizeSameMtimeReplacement(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	if _, _, err := store.Initialize(setupTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !store.generationValid(state.SessionGeneration) {
+		t.Fatal("the current generation is not valid")
+	}
+	before, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1 -> 9 keeps the digit count: same size, different content.
+	state.SessionGeneration += 8
+	if err := store.writeState(state); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() {
+		t.Fatalf("test setup: size changed %d -> %d", before.Size(), after.Size())
+	}
+	if err := os.Chtimes(store.path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if store.generationValid(state.SessionGeneration - 8) {
+		t.Fatal("a stale generation was accepted after a same-size, same-mtime rewrite")
+	}
+	if !store.generationValid(state.SessionGeneration) {
+		t.Fatal("the new generation is not valid")
+	}
+}
+
+// The 0600 mode check runs on every status read, not only at startup.
+func TestCredentialStatusRechecksTheFileModeEveryTime(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	if _, _, err := store.Initialize(setupTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	if !store.IsEnabled() {
+		t.Fatal("credential not enabled")
+	}
+	if err := os.Chmod(store.path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if store.IsEnabled() {
+		t.Fatal("a world-readable credential still counts as enabled")
+	}
+}
+
+// `auth local recover` and its redemption may run in another process: a live
+// session must be rejected on its very next request, with no cache window.
+func TestSessionIsRevokedImmediatelyByAnotherProcess(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	secret, _, err := store.Initialize(setupTestPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := NewBoundary(context.Background(), Config{InsecureCookies: true}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]string{"password": setupTestPassword, "totp": totpEncodingCode(t, secret)})
+	req := httptest.NewRequest(http.MethodPost, "/auth/local/login", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	auth.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login = %d %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	probe := httptest.NewRequest(http.MethodGet, "/", nil)
+	for _, c := range cookies {
+		probe.AddCookie(c)
+	}
+	if !auth.HasSession(probe) {
+		t.Fatal("no session after login")
+	}
+
+	cli := NewLocalStore(store.path, store.keyPath)
+	token, _, err := cli.IssueSetupToken(SetupRecovery, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSecret, _, _ := newTOTPSecret()
+	record, _ := hashSecret([]byte("a replacement password"))
+	if _, _, _, err := cli.CompleteSetup(token, "after", record, newSecret); err != nil {
+		t.Fatal(err)
+	}
+	if auth.HasSession(probe) {
+		t.Fatal("a session survived a recovery redeemed by another process")
+	}
+}
+
+func totpEncodingCode(t *testing.T, secret string) string {
+	t.Helper()
+	key, err := totpEncoding.DecodeString(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return totpCode(key, time.Now())
+}

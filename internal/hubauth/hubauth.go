@@ -7,9 +7,12 @@
 // or from the single local credential of ADR-0023, whose whole lifecycle lives
 // on the server's TTY-only CLI.
 //
-// The whole package is optional. When Config.Enabled reports false the hub
-// behaves exactly as it did before, which keeps working the installations that
-// today put an identity proxy in front of the origin.
+// ADR-0025 amends the "no web enrolment" rule for one narrow case: a single-use
+// token, delivered only through the server's console or a local command, lets
+// the web interface create or replace that one credential. The hub wires the
+// boundary with NewBoundary, which fails closed: with no login source at all
+// it serves only the setup screen. New and NewWithLocal keep returning nil for
+// an unconfigured boundary, which is the library-level "no boundary" mode.
 package hubauth
 
 import (
@@ -110,6 +113,8 @@ type Authenticator struct {
 	mu       sync.Mutex
 	sessions map[string]session
 	pendings map[string]pending
+	// enrollment is the single in-flight ADR-0025 web setup, if any.
+	enrollment *setupEnrollment
 
 	now func() time.Time
 }
@@ -133,7 +138,22 @@ func NewWithLocal(ctx context.Context, cfg Config, local *LocalStore) (*Authenti
 	if !cfg.Enabled() && !localEnabled {
 		return nil, nil
 	}
+	return newAuthenticator(ctx, cfg, local)
+}
 
+// NewBoundary is the fail-closed constructor ADR-0025 requires of the hub: it
+// always returns an Authenticator, even when neither OIDC nor a local
+// credential exists yet. In that state SetupRequired reports true and the hub
+// serves nothing but the setup screen, instead of serving its dashboard to
+// whoever reaches the origin first.
+func NewBoundary(ctx context.Context, cfg Config, local *LocalStore) (*Authenticator, error) {
+	if local == nil {
+		return nil, errors.New("the human boundary needs a local credential store, even an uninitialized one")
+	}
+	return newAuthenticator(ctx, cfg, local)
+}
+
+func newAuthenticator(ctx context.Context, cfg Config, local *LocalStore) (*Authenticator, error) {
 	auth := &Authenticator{
 		ttl:      DefaultSessionTTL,
 		secure:   !cfg.InsecureCookies,
@@ -183,6 +203,10 @@ func (a *Authenticator) Handler() http.Handler {
 	mux.HandleFunc("/auth/callback", a.handleCallback)
 	mux.HandleFunc("/auth/logout", a.handleLogout)
 	mux.HandleFunc("/auth/me", a.handleMe)
+	// ADR-0025: redeeming a locally delivered install or recovery token.
+	// There is deliberately no route that issues, resends or reveals one.
+	mux.HandleFunc("/auth/setup/begin", a.handleSetupBegin)
+	mux.HandleFunc("/auth/setup/complete", a.handleSetupComplete)
 	return mux
 }
 
@@ -315,13 +339,13 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	password, factor, returnTo, err := localLoginInput(r)
+	username, password, factor, returnTo, err := localLoginInput(r)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid local login request")
 		return
 	}
 	ip := websecurity.ClientIPString(r)
-	generation, err := a.local.AuthenticateFromIP(password, factor, ip)
+	generation, err := a.local.AuthenticateUserFromIP(username, password, factor, ip)
 	if err != nil {
 		reason := "local_authentication_failed"
 		status := http.StatusUnauthorized
@@ -378,9 +402,10 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(Identity{Source: sourceLocal, Subject: localOperatorSubject, Name: "Local operator"})
 }
 
-func localLoginInput(r *http.Request) (password, factor, returnTo string, err error) {
+func localLoginInput(r *http.Request) (username, password, factor, returnTo string, err error) {
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		var body struct {
+			Username     string `json:"username"`
 			Password     string `json:"password"`
 			TOTP         string `json:"totp"`
 			RecoveryCode string `json:"recovery_code"`
@@ -389,37 +414,37 @@ func localLoginInput(r *http.Request) (password, factor, returnTo string, err er
 		decoder := json.NewDecoder(r.Body)
 		decoder.DisallowUnknownFields()
 		if err = decoder.Decode(&body); err != nil {
-			return "", "", "", err
+			return "", "", "", "", err
 		}
 		if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-			return "", "", "", errors.New("multiple JSON values")
+			return "", "", "", "", errors.New("multiple JSON values")
 		}
 		if (body.TOTP == "") == (body.RecoveryCode == "") {
-			return "", "", "", errors.New("one second factor is required")
+			return "", "", "", "", errors.New("one second factor is required")
 		}
 		if body.TOTP != "" {
-			return body.Password, body.TOTP, body.ReturnTo, nil
+			return body.Username, body.Password, body.TOTP, body.ReturnTo, nil
 		}
-		return body.Password, body.RecoveryCode, body.ReturnTo, nil
+		return body.Username, body.Password, body.RecoveryCode, body.ReturnTo, nil
 	}
 	if err = r.ParseForm(); err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
 	factor = r.Form.Get("totp")
 	if recovery := r.Form.Get("recovery_code"); recovery != "" {
 		if factor != "" {
-			return "", "", "", errors.New("one second factor is required")
+			return "", "", "", "", errors.New("one second factor is required")
 		}
 		factor = recovery
 	}
 	if factor == "" {
-		return "", "", "", errors.New("second factor is required")
+		return "", "", "", "", errors.New("second factor is required")
 	}
-	return r.Form.Get("password"), factor, r.Form.Get("return_to"), nil
+	return r.Form.Get("username"), r.Form.Get("password"), factor, r.Form.Get("return_to"), nil
 }
 
 func localLoginPage(returnTo string) string {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Bitácora sign in</title></head><body><form method="post" action="/auth/local/login"><input type="hidden" name="return_to" value="` + html.EscapeString(returnTo) + `"><label>Password <input name="password" type="password" autocomplete="current-password" required></label><label>Authentication code <input name="totp" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Sign in</button></form></body></html>`
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Bitácora sign in</title></head><body><form method="post" action="/auth/local/login"><input type="hidden" name="return_to" value="` + html.EscapeString(returnTo) + `"><label>Username <input name="username" autocomplete="username"></label><label>Password <input name="password" type="password" autocomplete="current-password" required></label><label>Authentication code <input name="totp" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Sign in</button></form></body></html>`
 }
 
 func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, returnTo string) {
@@ -567,6 +592,8 @@ func (a *Authenticator) handleMe(w http.ResponseWriter, r *http.Request) {
 			"local_enabled":                local,
 			"oidc_enabled":                 oidc,
 			"local_pending_initialization": a.LocalPendingInitialization(),
+			"setup_required":               a.SetupRequired(),
+			"setup_available":              a.SetupAvailable(),
 		})
 		return
 	}

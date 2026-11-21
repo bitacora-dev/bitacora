@@ -35,8 +35,13 @@ func runLocalAuthCommand(args []string, in *os.File, out io.Writer) error {
 		promptNew:     promptNewPassword,
 		promptCurrent: promptCurrentPassword,
 		ensureOwner:   func() error { return ensureLocalAuthOwner(path, keyPath) },
+		ensureSetupOwner: func() error {
+			return ensureLocalAuthOwner(hubauth.NewLocalStore(path, keyPath).SetupTokenPath())
+		},
 	})
 }
+
+const localAuthUsage = "usage: bitacora-hub auth local <init|rotate-password|rotate-totp|regenerate-recovery-codes|disable|recover>"
 
 type localAuthCommandDependencies struct {
 	newStore      func() *hubauth.LocalStore
@@ -44,15 +49,18 @@ type localAuthCommandDependencies struct {
 	promptNew     func(*os.File, io.Writer) (string, error)
 	promptCurrent func(*os.File, io.Writer) (string, error)
 	ensureOwner   func() error
+	// ensureSetupOwner hands the setup token file to the hub's account, so
+	// the running hub can read and consume a token issued by root.
+	ensureSetupOwner func() error
 }
 
 func runLocalAuthCommandWithDependencies(args []string, in *os.File, out io.Writer, dependencies localAuthCommandDependencies) error {
 	if len(args) != 2 || args[0] != "local" {
-		return errors.New("usage: bitacora-hub auth local <init|rotate-password|rotate-totp|regenerate-recovery-codes|disable>")
+		return errors.New(localAuthUsage)
 	}
 	command := args[1]
 	store := dependencies.newStore()
-	if command != "init" {
+	if command != "init" && command != "recover" {
 		opened, err := dependencies.openStore()
 		if err != nil {
 			return err
@@ -128,8 +136,23 @@ func runLocalAuthCommandWithDependencies(args []string, in *os.File, out io.Writ
 			return err
 		}
 		fmt.Fprintln(out, "Local authentication disabled; existing local sessions were revoked.")
+	case "recover":
+		// ADR-0025 total recovery. Running this needs write access to the
+		// credential directory, which is the local administrative access the
+		// design requires; it takes no argument, reveals no username and
+		// never accepts a secret. The token replaces any earlier one.
+		token, expiresAt, err := store.IssueSetupToken(hubauth.SetupRecovery, hubauth.DefaultSetupTokenTTL)
+		if err != nil {
+			return err
+		}
+		if err := dependencies.ensureSetupOwner(); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "One-time recovery token (shown once; valid until %s):\n%s\n", expiresAt.UTC().Format("2006-01-02T15:04:05Z07:00"), token)
+		fmt.Fprintln(out, "Open /auth/setup on the hub and enter it to replace the username, password, TOTP and recovery codes.")
+		fmt.Fprintln(out, "Redeeming it revokes every existing local session.")
 	default:
-		return errors.New("usage: bitacora-hub auth local <init|rotate-password|rotate-totp|regenerate-recovery-codes|disable>")
+		return errors.New(localAuthUsage)
 	}
 	return nil
 }

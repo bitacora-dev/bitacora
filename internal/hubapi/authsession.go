@@ -16,6 +16,14 @@ type humanLoginStatus interface {
 	LocalPendingInitialization() bool
 }
 
+// humanSetupStatus is the ADR-0025 fail-closed side of the boundary. When
+// SetupRequired reports true there is no way to sign in at all, so the Server
+// serves only what the setup screen and the agents need.
+type humanSetupStatus interface {
+	SetupRequired() bool
+	SetupAvailable() bool
+}
+
 // authSessionResponse is the body of GET /v1/auth/session. It describes the
 // hub's boundary and the caller's session — never the credential itself, so it
 // stays safe to answer before anyone has signed in.
@@ -28,6 +36,11 @@ type authSessionResponse struct {
 	LocalEnabled               bool              `json:"local_enabled"`
 	OIDCEnabled                bool              `json:"oidc_enabled"`
 	LocalPendingInitialization bool              `json:"local_pending_initialization"`
+	// SetupRequired means the hub has no login source and serves only the
+	// setup screen. SetupAvailable means an install or recovery token is
+	// waiting to be redeemed there. Neither reveals the token.
+	SetupRequired  bool `json:"setup_required"`
+	SetupAvailable bool `json:"setup_available"`
 }
 
 // handleAuthSession serves GET /v1/auth/session: the state of the hub's human
@@ -54,6 +67,10 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		if status, ok := s.Humans.(humanLoginStatus); ok {
 			response.LocalEnabled, response.OIDCEnabled = status.LoginSources()
 			response.LocalPendingInitialization = status.LocalPendingInitialization()
+		}
+		if setup, ok := s.Humans.(humanSetupStatus); ok {
+			response.SetupRequired = setup.SetupRequired()
+			response.SetupAvailable = setup.SetupAvailable()
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

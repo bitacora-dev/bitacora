@@ -56,6 +56,7 @@ func main() {
 	notificationsPath := flag.String("notifications", hubpipeline.DefaultNotificationsPath, "notification destinations YAML file")
 	hubURL := flag.String("hub-url", "", "public hub URL used in notification deep links")
 	addToken := flag.String("add-token", "", "register an ingest token and exit, without starting the server: <host_id>:<token-en-texto-plano>")
+	setupTokenTTL := flag.Duration("setup-token-ttl", hubauth.DefaultSetupTokenTTL, "lifetime of the install token printed on a start without any login source (ADR-0025)")
 	flag.Parse()
 
 	if *addToken != "" {
@@ -73,11 +74,10 @@ func main() {
 	if err != nil {
 		log.Fatal(fmt.Errorf("opening local authentication: %w", err))
 	}
-	if localAuth.PendingInitialization() {
-		// Said out loud because the hub is now refusing every human request:
-		// an operator who only sees a login screen they cannot pass needs to
-		// know the remaining step is on this server, not in their browser.
-		log.Printf("bitacora-hub: local authentication is enabled but not initialized; run `bitacora-hub auth local init` on this server (credential: %s, key: %s)", localConfig.StatePath(), localConfig.KeyStatePath())
+	if localAuth == nil {
+		// ADR-0025: an uninitialized store is still a store. The web setup
+		// writes the credential here, at the configured paths.
+		localAuth = hubauth.NewLocalStore(localConfig.StatePath(), localConfig.KeyStatePath())
 	}
 	h, err := newHubWithLocalAuth(*dataDir, localAuth, hubpipeline.Config{
 		ExtractionRulesDir: *extractionRulesDir,
@@ -89,14 +89,14 @@ func main() {
 		log.Fatal(err)
 	}
 	defer h.Close()
+	if err := announceSetup(h.auth, localAuth, *setupTokenTTL, os.Stderr); err != nil {
+		log.Fatal(err)
+	}
 	securityConfig, err := websecurity.ConfigFromEnv()
 	if err != nil {
 		log.Fatal(fmt.Errorf("reading trusted proxy configuration: %w", err))
 	}
-	var hasSession func(*http.Request) bool
-	if h.auth != nil {
-		hasSession = h.auth.HasSession
-	}
+	hasSession := h.auth.HasSession
 
 	log.Printf("bitacora-hub listening on %s (data: %s)", *addr, *dataDir)
 	httpSrv := &http.Server{
@@ -159,17 +159,16 @@ func (h *hub) Close() {
 	}
 }
 
-// newHub wires the read API and web UI (hubapi.Server) and the real
-// /v1/ingest endpoint (transport.Server, per ADR-0008) against storage
+// newHubWithLocalAuth wires the read API and web UI (hubapi.Server) and the
+// real /v1/ingest endpoint (transport.Server, per ADR-0008) against storage
 // rooted at dataDir, merged into a single handler served by one listener.
-func newHub(dataDir string, pipelineConfig ...hubpipeline.Config) (*hub, error) {
-	return newHubWithLocalAuth(dataDir, nil, pipelineConfig...)
-}
-
-// newHubWithLocalAuth exists so production can load the fixed credential
-// paths while tests can exercise a private temporary credential without ever
-// reading or writing /etc.
+// localAuth is required, initialized or not: production passes the configured
+// credential paths and tests a private temporary credential, so neither ever
+// reads or writes /etc by accident.
 func newHubWithLocalAuth(dataDir string, localAuth *hubauth.LocalStore, pipelineConfig ...hubpipeline.Config) (*hub, error) {
+	if localAuth == nil {
+		return nil, fmt.Errorf("configuring human authentication: a local credential store is required")
+	}
 	relStore, err := storage.NewSQLiteStore(filepath.Join(dataDir, "db"))
 	if err != nil {
 		return nil, fmt.Errorf("opening relational store: %w", err)
@@ -242,42 +241,42 @@ func newHubWithLocalAuth(dataDir string, localAuth *hubauth.LocalStore, pipeline
 		Manifests: relStore,
 	}
 
-	// ADR-0019: human authentication, optional and off unless the operator
-	// configures a provider. Failing to reach a configured issuer stops the
-	// hub on purpose — booting with authentication silently disabled would
-	// serve the interface to anyone who can reach the origin, which is the
-	// exact hole the ADR exists to close.
-	auth, err := hubauth.NewWithLocal(context.Background(), hubauth.ConfigFromEnv(), localAuth)
+	// ADR-0019/0023/0025: the human boundary always exists and fails closed.
+	// With neither OIDC nor an enabled local credential, the hub serves only
+	// the setup screen — never its dashboard to whoever reaches the origin
+	// first. Failing to reach a configured issuer stops the hub on purpose,
+	// for the same reason.
+	auth, err := hubauth.NewBoundary(context.Background(), hubauth.ConfigFromEnv(), localAuth)
 	if err != nil {
+		relStore.Close()
+		metricsStore.Close()
+		tokenStore.Close()
 		return nil, fmt.Errorf("configuring human authentication: %w", err)
 	}
-	// Assigning a nil *Authenticator straight into the interface field would
-	// leave it non-nil and gate the UI behind a login that does not exist.
-	if auth != nil {
-		readSrv.Humans = auth
-		// ADR-0022 stays disabled until a configured human identity exists.
-		// The persistent store is also the ingest pull source, so confirmed
-		// orders travel only in the established response channel.
-		actions := actionconfirm.NewStore(relStore)
-		readSrv.Actions = actions
-		ingestSrv.Orders = actions
-	}
+	readSrv.Humans = auth
+	// ADR-0022 actions need a verified human identity, which only a session
+	// provides; in setup mode the boundary withholds the route entirely. The
+	// persistent store is also the ingest pull source, so confirmed orders
+	// travel only in the established response channel.
+	actions := actionconfirm.NewStore(relStore)
+	readSrv.Actions = actions
+	ingestSrv.Orders = actions
 
 	mux := http.NewServeMux()
 	// Registered as an exact path, so it wins over "/" in the ServeMux and
 	// the agent-facing ingest never passes through the human boundary:
 	// requiring a browser session here would silence every agent at once.
 	mux.Handle("/v1/ingest", ingestSrv.Handler())
-	if auth != nil {
-		// This exact route wins over /auth/: it is the unguarded, embedded
-		// login shell. API endpoints remain owned by the authenticator below.
-		mux.Handle("/auth/login", readSrv.LoginHandler())
-		// The login shell's own committed assets must be reachable before a
-		// session exists. They are embedded files, never third-party URLs.
-		mux.Handle("/assets/", http.FileServer(http.FS(webui.FS())))
-		mux.Handle("/bitacora-logo.png", http.FileServer(http.FS(webui.FS())))
-		mux.Handle("/auth/", auth.Handler())
-	}
+	// These exact routes win over /auth/: they are the unguarded, embedded
+	// login and setup shells. API endpoints remain owned by the
+	// authenticator below.
+	mux.Handle("/auth/login", readSrv.LoginHandler())
+	mux.Handle("/auth/setup", readSrv.LoginHandler())
+	// The shells' own committed assets must be reachable before a session
+	// exists. They are embedded files, never third-party URLs.
+	mux.Handle("/assets/", http.FileServer(http.FS(webui.FS())))
+	mux.Handle("/bitacora-logo.png", http.FileServer(http.FS(webui.FS())))
+	mux.Handle("/auth/", auth.Handler())
 	mux.Handle("/", readSrv.Handler())
 
 	return &hub{

@@ -91,6 +91,11 @@ func (a *Authenticator) handleSetupBegin(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusUnauthorized, "invalid_setup_token")
 		return
 	}
+	if err := a.local.CheckSetupWritable(); err != nil {
+		slog.Error("authentication event", "event", "local_setup_failed", "ip", ip, "reason", "state_not_writable", "error", err.Error())
+		writeJSONError(w, http.StatusServiceUnavailable, "setup_state_read_only")
+		return
+	}
 	username, err := ValidateSetupInput(body.Username, body.Password)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": setupInputErrorCode(err), "min_password_length": MinLocalPasswordLength})
@@ -188,6 +193,13 @@ func (a *Authenticator) handleSetupComplete(w http.ResponseWriter, r *http.Reque
 		if errors.Is(err, ErrSetupTokenInvalid) {
 			slog.Warn("authentication event", "event", "local_setup_token_rejected", "ip", ip)
 			writeJSONError(w, http.StatusUnauthorized, "invalid_setup_token")
+			return
+		}
+		if errors.Is(err, ErrSetupStateNotWritable) {
+			// Checked before the token was consumed: fixing the mount and
+			// starting again with the same token works.
+			slog.Error("authentication event", "event", "local_setup_failed", "ip", ip, "reason", "state_not_writable", "error", err.Error())
+			writeJSONError(w, http.StatusServiceUnavailable, "setup_state_read_only")
 			return
 		}
 		slog.Error("authentication event", "event", "local_setup_failed", "ip", ip, "error", err.Error())

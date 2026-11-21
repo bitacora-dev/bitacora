@@ -21,6 +21,9 @@ import (
 const (
 	// DefaultSetupTokenTTL bounds how long a printed setup token stays valid.
 	DefaultSetupTokenTTL = 30 * time.Minute
+	// MaxSetupTokenTTL caps how long a printed token may live: the console
+	// or journal that carries it is sensitive for that whole window.
+	MaxSetupTokenTTL = 24 * time.Hour
 	// MinLocalPasswordLength is the shortest password the web setup accepts.
 	MinLocalPasswordLength = 12
 	maxLocalPasswordBytes  = 1024
@@ -43,6 +46,10 @@ const (
 )
 
 var (
+	// ErrSetupStateNotWritable means the credential directory is read-only.
+	// It is checked before the token is consumed, so the operator can fix the
+	// mount and retry with the same token.
+	ErrSetupStateNotWritable = errors.New("the local credential directory is not writable")
 	// ErrSetupTokenInvalid deliberately covers unknown, expired, consumed and
 	// superseded tokens alike: the caller learns nothing about which.
 	ErrSetupTokenInvalid = errors.New("setup token is invalid, expired or already used")
@@ -96,8 +103,8 @@ func (s *LocalStore) IssueSetupToken(kind SetupKind, ttl time.Duration) (string,
 	if kind != SetupInstall && kind != SetupRecovery {
 		return "", time.Time{}, fmt.Errorf("unknown setup token kind %q", kind)
 	}
-	if ttl <= 0 {
-		ttl = DefaultSetupTokenTTL
+	if err := ValidateSetupTokenTTL(ttl); err != nil {
+		return "", time.Time{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,16 +127,54 @@ func (s *LocalStore) IssueSetupToken(kind SetupKind, ttl time.Duration) (string,
 	return token, expiresAt, nil
 }
 
+// ValidateSetupTokenTTL rejects a lifetime that is not positive or exceeds
+// MaxSetupTokenTTL.
+func ValidateSetupTokenTTL(ttl time.Duration) error {
+	if ttl <= 0 || ttl > MaxSetupTokenTTL {
+		return fmt.Errorf("setup token lifetime must be greater than 0 and at most %s, got %s", MaxSetupTokenTTL, ttl)
+	}
+	return nil
+}
+
+// CheckSetupWritable verifies that the credential and key directories accept
+// new files. A read-only mount would otherwise surface only after the token
+// had been consumed.
+func (s *LocalStore) CheckSetupWritable() error {
+	if s == nil {
+		return ErrLocalAuthNotConfigured
+	}
+	seen := map[string]bool{}
+	for _, dir := range []string{filepath.Dir(s.path), filepath.Dir(s.keyPath)} {
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrSetupStateNotWritable, dir, err)
+		}
+		probe, err := os.CreateTemp(dir, ".local-auth-probe-")
+		if err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrSetupStateNotWritable, dir, err)
+		}
+		name := probe.Name()
+		closeErr := probe.Close()
+		removeErr := os.Remove(name)
+		if closeErr != nil || removeErr != nil {
+			return fmt.Errorf("%w: %s", ErrSetupStateNotWritable, dir)
+		}
+	}
+	return nil
+}
+
 // SetupTokenPending reports whether a usable setup token exists. It reveals
 // nothing about the token, only that the setup screen has something to redeem.
+// It takes no lock, so it never waits behind a login's Argon2id.
 func (s *LocalStore) SetupTokenPending() bool {
 	if s == nil {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	state, err := s.readSetupState()
-	return err == nil && s.usableLocked(state)
+	return err == nil && s.usable(state)
 }
 
 // CheckSetupToken validates a token without consuming it. The web flow calls
@@ -166,6 +211,9 @@ func (s *LocalStore) CompleteSetup(token, username string, password passwordHash
 	defer s.mu.Unlock()
 	setup, err := s.lookupSetupTokenLocked(token)
 	if err != nil {
+		return "", nil, 0, err
+	}
+	if err := s.CheckSetupWritable(); err != nil {
 		return "", nil, 0, err
 	}
 	setup.Consumed, setup.ConsumedAt = true, s.now().UTC()
@@ -242,7 +290,7 @@ func (s *LocalStore) lookupSetupTokenLocked(token string) (setupTokenState, erro
 	if err != nil {
 		return setupTokenState{}, ErrSetupTokenInvalid
 	}
-	if !s.usableLocked(state) {
+	if !s.usable(state) {
 		return setupTokenState{}, ErrSetupTokenInvalid
 	}
 	if subtle.ConstantTimeCompare([]byte(hashSetupToken(token)), []byte(state.Hash)) != 1 {
@@ -251,9 +299,10 @@ func (s *LocalStore) lookupSetupTokenLocked(token string) (setupTokenState, erro
 	return state, nil
 }
 
-// usableLocked applies every rule a token must pass apart from matching:
+// usable takes no lock: both files are replaced by atomic rename, so reading
+// them is safe while a login holds s.mu. It applies every rule a token must pass apart from matching:
 // unconsumed, unexpired and, for an install token, no credential yet.
-func (s *LocalStore) usableLocked(state setupTokenState) bool {
+func (s *LocalStore) usable(state setupTokenState) bool {
 	if state.Consumed || !s.now().UTC().Before(state.ExpiresAt) {
 		return false
 	}

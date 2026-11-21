@@ -593,7 +593,7 @@ func (a *Authenticator) handleMe(w http.ResponseWriter, r *http.Request) {
 			"oidc_enabled":                 oidc,
 			"local_pending_initialization": a.LocalPendingInitialization(),
 			"setup_required":               a.SetupRequired(),
-			"setup_available":              a.SetupAvailable(),
+			"setup_available":              a.SetupRequired() && a.SetupAvailable(),
 		})
 		return
 	}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"strings"
@@ -14,9 +15,11 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
+	"golang.org/x/time/rate"
 
 	"github.com/bitacora-dev/bitacora/internal/hubauth"
 	"github.com/bitacora-dev/bitacora/internal/transport"
+	"github.com/bitacora-dev/bitacora/internal/websecurity"
 	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
 
@@ -294,8 +297,10 @@ func TestLocalRecoveryCommandReplacesTheCredentialThroughTheWeb(t *testing.T) {
 		t.Fatalf("unexpected recovery output:\n%s", out.String())
 	}
 	recoveryToken := strings.TrimSpace(lines[1])
-	if session := authSession(t, noRedirectClient(t), baseURL); session["setup_available"] != true || session["setup_required"] != false {
-		t.Fatalf("/v1/auth/session = %v; want a redeemable token on a configured hub", session)
+	// A configured hub does not advertise a pending recovery to anonymous
+	// callers; the token still redeems at /auth/setup.
+	if session := authSession(t, noRedirectClient(t), baseURL); session["setup_available"] != false || session["setup_required"] != false {
+		t.Fatalf("/v1/auth/session = %v; want the pending recovery hidden on a configured hub", session)
 	}
 
 	newClient := noRedirectClient(t)
@@ -339,5 +344,33 @@ func TestDisabledCredentialWithoutOIDCPointsAtRecovery(t *testing.T) {
 	}
 	if !h.auth.SetupRequired() {
 		t.Fatal("a hub whose only credential is disabled is not fail-closed")
+	}
+}
+
+// The setup steps go through the same per-IP login budget as the login, on
+// the real production wiring rather than only in the middleware's unit test.
+func TestSetupStepsAreRateLimitedOnTheRealWiring(t *testing.T) {
+	h, _, err := newSetupModeHub(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	handler := websecurity.Middleware(h.handler, websecurity.Config{LoginRate: rate.Limit(1.0 / 60), LoginBurst: 2, PairRate: 1, PairBurst: 1}, h.auth.HasSession)
+	for _, path := range []string{"/auth/setup/begin", "/auth/setup/complete"} {
+		codes := make([]int, 0, 3)
+		for range 3 {
+			req := httptest.NewRequest(http.MethodPost, "http://hub"+path, strings.NewReader(`{"token":"guess"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.RemoteAddr = "198.51.100.7:4000"
+			if path == "/auth/setup/complete" {
+				req.RemoteAddr = "198.51.100.8:4000"
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			codes = append(codes, rec.Code)
+		}
+		if codes[0] == http.StatusTooManyRequests || codes[1] == http.StatusTooManyRequests || codes[2] != http.StatusTooManyRequests {
+			t.Fatalf("%s answered %v; want the third attempt throttled", path, codes)
+		}
 	}
 }

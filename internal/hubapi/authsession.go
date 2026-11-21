@@ -37,8 +37,9 @@ type authSessionResponse struct {
 	OIDCEnabled                bool              `json:"oidc_enabled"`
 	LocalPendingInitialization bool              `json:"local_pending_initialization"`
 	// SetupRequired means the hub has no login source and serves only the
-	// setup screen. SetupAvailable means an install or recovery token is
-	// waiting to be redeemed there. Neither reveals the token.
+	// setup screen. SetupAvailable means a token is waiting to be redeemed
+	// there; it is reported only while SetupRequired is true. Neither
+	// reveals the token.
 	SetupRequired  bool `json:"setup_required"`
 	SetupAvailable bool `json:"setup_available"`
 }
@@ -70,7 +71,9 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		}
 		if setup, ok := s.Humans.(humanSetupStatus); ok {
 			response.SetupRequired = setup.SetupRequired()
-			response.SetupAvailable = setup.SetupAvailable()
+			// Only while setup is required: on a configured hub a pending
+			// recovery token is not advertised to anonymous callers.
+			response.SetupAvailable = response.SetupRequired && setup.SetupAvailable()
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")

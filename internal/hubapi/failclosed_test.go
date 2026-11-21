@@ -80,3 +80,17 @@ func TestSetupGateStepsAsideOnceALoginSourceExists(t *testing.T) {
 		t.Fatalf("GET / = %d %q; want the ordinary login redirect", rec.Code, rec.Header().Get("Location"))
 	}
 }
+
+// On a configured hub a pending recovery token is not advertised.
+func TestSessionHidesAPendingTokenWhenSetupIsNotRequired(t *testing.T) {
+	srv := &Server{Humans: setupBoundary{available: true}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/auth/session", nil))
+	var body authSessionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.SetupRequired || body.SetupAvailable {
+		t.Fatalf("/v1/auth/session = %+v; want no setup advertised", body)
+	}
+}

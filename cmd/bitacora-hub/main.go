@@ -56,9 +56,12 @@ func main() {
 	notificationsPath := flag.String("notifications", hubpipeline.DefaultNotificationsPath, "notification destinations YAML file")
 	hubURL := flag.String("hub-url", "", "public hub URL used in notification deep links")
 	addToken := flag.String("add-token", "", "register an ingest token and exit, without starting the server: <host_id>:<token-en-texto-plano>")
-	setupTokenTTL := flag.Duration("setup-token-ttl", hubauth.DefaultSetupTokenTTL, "lifetime of the install token printed on a start without any login source (ADR-0025)")
+	setupTokenTTL := flag.Duration("setup-token-ttl", hubauth.DefaultSetupTokenTTL, "lifetime of the install token printed on a start without any login source, at most 24h (ADR-0025)")
 	flag.Parse()
 
+	if err := hubauth.ValidateSetupTokenTTL(*setupTokenTTL); err != nil {
+		log.Fatal(fmt.Errorf("-setup-token-ttl: %w", err))
+	}
 	if *addToken != "" {
 		if err := runAddToken(*dataDir, *addToken); err != nil {
 			log.Fatal(err)

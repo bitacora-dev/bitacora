@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -363,5 +365,140 @@ func TestSetupCodeAttemptsAreBounded(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("form post = %d", rec.Code)
+	}
+}
+
+func TestProductionArgon2CostMatchesADR0023(t *testing.T) {
+	if productionArgon2Cost != (argon2Cost{time: 3, memoryKiB: 64 * 1024, threads: 4}) {
+		t.Fatalf("production Argon2id cost = %+v; ADR-0023 fixes 3 iterations, 64 MiB, parallelism 4", productionArgon2Cost)
+	}
+}
+
+func TestSetupTokenTTLIsCapped(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	for _, ttl := range []time.Duration{0, -time.Minute, MaxSetupTokenTTL + time.Second} {
+		if _, _, err := store.IssueSetupToken(SetupInstall, ttl); err == nil {
+			t.Errorf("IssueSetupToken accepted ttl %s", ttl)
+		}
+	}
+	if _, _, err := store.IssueSetupToken(SetupInstall, MaxSetupTokenTTL); err != nil {
+		t.Fatalf("IssueSetupToken(max): %v", err)
+	}
+}
+
+// A read-only state directory is reported before the token is consumed, so
+// the operator can fix the mount and retry with the same token.
+func TestReadOnlyStateDirectoryDoesNotBurnTheToken(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	store := NewLocalStore(filepath.Join(dir, "local-auth.json"), filepath.Join(dir, "local-auth.key"))
+	token, _, err := store.IssueSetupToken(SetupInstall, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	secret, _, _ := newTOTPSecret()
+	record, _ := hashSecret([]byte(setupTestPassword))
+	if _, _, _, err := store.CompleteSetup(token, "operator", record, secret); !errors.Is(err, ErrSetupStateNotWritable) {
+		t.Fatalf("CompleteSetup on a read-only dir err = %v; want ErrSetupStateNotWritable", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.CompleteSetup(token, "operator", record, secret); err != nil {
+		t.Fatalf("the token did not survive the read-only failure: %v", err)
+	}
+}
+
+// Two concurrent confirmations of the same enrolment: exactly one wins.
+func TestConcurrentSetupCompletionHasOneWinner(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	auth, err := NewBoundary(context.Background(), Config{}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := store.IssueSetupToken(SetupInstall, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := auth.Handler()
+	post := func(path string, body any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	var begun setupBeginResponse
+	if err := json.Unmarshal(post("/auth/setup/begin", map[string]string{"token": token, "username": "setup-user-name", "password": setupTestPassword}).Body.Bytes(), &begun); err != nil {
+		t.Fatal(err)
+	}
+	secret, _ := totpEncoding.DecodeString(begun.TOTPSecret)
+	body := map[string]string{"token": token, "enrollment_id": begun.EnrollmentID, "totp": totpCode(secret, time.Now())}
+	const racers = 8
+	codes := make(chan int, racers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			codes <- post("/auth/setup/complete", body).Code
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+	wins := 0
+	for code := range codes {
+		if code == http.StatusOK {
+			wins++
+		} else if code != http.StatusUnauthorized {
+			t.Errorf("losing completion answered %d, want 401", code)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("%d completions won, want exactly 1", wins)
+	}
+}
+
+// Panel requests read the cached credential status and never queue behind
+// s.mu, which a login holds for its whole Argon2id; a change written by
+// another process is still picked up.
+func TestCredentialStatusDoesNotWaitOnLoginsAndSeesExternalChanges(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	if _, _, err := store.Initialize(setupTestPassword); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.readState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	done := make(chan bool, 1)
+	go func() { done <- store.IsEnabled() && store.generationValid(state.SessionGeneration) }()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("cached status does not report the initialized credential")
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("IsEnabled waited on the login mutex")
+	}
+	store.mu.Unlock()
+
+	other := NewLocalStore(store.path, store.keyPath)
+	if err := other.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	if store.IsEnabled() || store.generationValid(state.SessionGeneration) {
+		t.Fatal("a change written by another store was not seen")
 	}
 }

@@ -45,7 +45,7 @@ Mientras no completes una de las tres, los agentes siguen enviando datos (no se 
 | `BITACORA_LOCAL_AUTH` | no | Booleano. Se mantiene por compatibilidad: con `true` y sin credencial, `/v1/auth/session` informa `local_pending_initialization: true`. |
 | `BITACORA_LOCAL_AUTH_PATH` | no | Ruta de la credencial. Por defecto `/etc/bitacora/local-auth.json`. |
 | `BITACORA_LOCAL_AUTH_KEY_PATH` | no | Ruta de la clave AES-256-GCM que cifra el secreto TOTP. Por defecto `/etc/bitacora/local-auth.key`. |
-| `-setup-token-ttl` | no | Vida del token de instalación que imprime el hub. Por defecto `30m`. |
+| `-setup-token-ttl` | no | Vida del token de instalación que imprime el hub. Por defecto `30m`, máximo `24h`; un valor fuera de rango impide arrancar. |
 
 El estado del token de instalación o recuperación vive en `local-auth-setup.json`, **en el mismo directorio que la credencial**. Solo guarda el hash SHA-256 del token, su caducidad y si se consumió; nunca el token en claro. Todos estos ficheros tienen modo `0600`.
 
@@ -119,13 +119,17 @@ Si se pierden a la vez usuario o contraseña, TOTP y los códigos, en el servido
 bitacora-hub auth local recover
 ```
 
-La orden no acepta argumentos ni secretos y no revela el usuario. Necesita poder escribir en el directorio de la credencial, que es justamente el acceso administrativo local que exige ADR-0025. Imprime **una vez** un token de recuperación válido 30 minutos e invalida cualquier token anterior. El hub en marcha lo detecta sin reiniciarse: abre `https://tu-hub/auth/setup` y repite el flujo web. Al canjearlo se sustituyen usuario, contraseña, TOTP y los diez códigos, se reactiva una credencial desactivada, se incrementa la generación y **se cierran todas las sesiones locales**.
+La orden no acepta argumentos ni secretos y no revela el usuario. Necesita poder escribir en el directorio de la credencial, que es justamente el acceso administrativo local que exige ADR-0025: la frontera son los permisos de esos ficheros, no una comprobación de que la orden corre dentro del proceso o el contenedor del hub. Imprime **una vez** un token de recuperación válido 30 minutos e invalida cualquier token anterior. El hub en marcha lo detecta sin reiniciarse: abre `https://tu-hub/auth/setup` y repite el flujo web. En un hub ya configurado, `/v1/auth/session` **no** anuncia que hay una recuperación pendiente (`setup_available` sigue en `false`); la pantalla de instalación ofrece el formulario igualmente y el hub valida el token. Al canjearlo se sustituyen usuario, contraseña, TOTP y los diez códigos, se reactiva una credencial desactivada, se incrementa la generación y **se cierran todas las sesiones locales**.
 
 Perder también el acceso administrativo al servidor elimina toda vía de recuperación: solo queda reconstruir o redesplegar.
 
 ## Contenedores: volumen persistente obligatorio
 
 La credencial (`local-auth.json`), la clave que cifra el TOTP (`local-auth.key`) y el estado del token (`local-auth-setup.json`) **tienen que vivir en un volumen persistente**. La imagen declara `VOLUME /etc/bitacora`, pero un volumen anónimo se pierde al recrear el contenedor: monta uno con nombre o un bind mount explícito.
+
+Ese mismo directorio contiene también, por defecto, la configuración del hub: `rules/` (reglas de extracción), `alert-rules/` (reglas de alerta) y `notifications.yaml`. El volumen las cubre a la vez.
+
+**No montes `/etc/bitacora` en solo lectura** (o, si lo haces para proteger la configuración, mueve la credencial a otra ruta escribible con `BITACORA_LOCAL_AUTH_PATH` y `BITACORA_LOCAL_AUTH_KEY_PATH`). Con el directorio de la credencial en solo lectura el hub no puede emitir el token al arrancar ni completar la instalación. Si ocurre durante el flujo web, la instalación se detiene con un aviso claro **antes** de consumir el token, de modo que basta con corregir el montaje y volver a intentarlo con el mismo token.
 
 ```sh
 docker run -d --name bitacora-hub \
@@ -165,7 +169,7 @@ Responde `200` siempre, incluso sin sesión, y no revela nada de la credencial n
 | Respuesta | Significado |
 | --- | --- |
 | `setup_required: true` | No hay ninguna fuente de acceso: el hub solo sirve `/auth/setup`. |
-| `setup_available: true` | Hay un token de instalación o recuperación pendiente de canjear. |
+| `setup_available: true` | Hay un token pendiente de canjear. Solo se informa cuando `setup_required` es `true`. |
 | `local_pending_initialization: true` | `BITACORA_LOCAL_AUTH=true` pero aún no hay credencial. |
 | `local_enabled: true` | Credencial lista; la pantalla muestra usuario, contraseña y TOTP. |
 | `authenticated: true` | Esta petición trae una sesión válida; incluye `identity`. |

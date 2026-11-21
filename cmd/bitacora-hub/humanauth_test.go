@@ -120,30 +120,6 @@ func TestUIRedirectsToTheProviderWhenHumanAuthIsEnabled(t *testing.T) {
 	}
 }
 
-// Leaving the variables unset must change nothing: installations that put an
-// identity proxy in front of the origin keep working exactly as before.
-func TestUIStaysOpenWhenHumanAuthIsNotConfigured(t *testing.T) {
-	h, err := newHub(t.TempDir())
-	if err != nil {
-		t.Fatalf("newHub without OIDC: %v", err)
-	}
-	defer h.Close()
-
-	baseURL := serveHub(t, h)
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}
-	resp, err := client.Get(baseURL + "/")
-	if err != nil {
-		t.Fatalf("requesting the UI: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusFound {
-		t.Fatal("an unconfigured hub redirected to a login that does not exist")
-	}
-}
-
 // A configured local credential is a human identity source just like OIDC, so
 // the production wiring must also enable ADR-0022's action store. A 401 proves
 // the route is wired but still requires a real authenticated human.

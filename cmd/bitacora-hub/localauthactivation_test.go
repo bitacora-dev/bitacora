@@ -89,8 +89,10 @@ func TestConfiguredLocalAuthGuardsAnUninitializedHub(t *testing.T) {
 		t.Fatalf("requesting the dashboard: %v", err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusFound || !strings.HasPrefix(response.Header.Get("Location"), "/auth/login") {
-		t.Fatalf("dashboard status = %d, Location = %q; want a redirect to the login screen", response.StatusCode, response.Header.Get("Location"))
+	// ADR-0025: with no usable login source the hub fails closed onto the
+	// setup screen.
+	if response.StatusCode != http.StatusFound || response.Header.Get("Location") != "/auth/setup" {
+		t.Fatalf("dashboard status = %d, Location = %q; want a redirect to the setup screen", response.StatusCode, response.Header.Get("Location"))
 	}
 
 	session := authSession(t, client, baseURL)
@@ -98,8 +100,9 @@ func TestConfiguredLocalAuthGuardsAnUninitializedHub(t *testing.T) {
 		t.Fatalf("/v1/auth/session = %v; want an enabled boundary pending initialization", session)
 	}
 
-	// No request may create the operator account: ADR-0023 keeps that on the
-	// server's TTY, and ADR-0025's tokenized web enrolment is not implemented.
+	// No request may create the operator account without a setup token: the
+	// login route never enrols, and ADR-0025's web setup needs a token that
+	// only the server's console or a local command can deliver.
 	for _, attempt := range []struct {
 		path, contentType, body string
 		status                  int
@@ -108,6 +111,8 @@ func TestConfiguredLocalAuthGuardsAnUninitializedHub(t *testing.T) {
 		{"/auth/local/login", "application/x-www-form-urlencoded", "password=first-visitor&totp=000000", http.StatusUnauthorized},
 		// The login shell is a page, not a submission endpoint.
 		{"/auth/login", "application/json", `{"password":"first-visitor","totp":"000000"}`, http.StatusMethodNotAllowed},
+		{"/auth/setup/begin", "application/json", `{"token":"guess","username":"first","password":"first-visitor-password"}`, http.StatusUnauthorized},
+		{"/auth/setup/complete", "application/json", `{"token":"guess","enrollment_id":"guess","totp":"000000"}`, http.StatusUnauthorized},
 	} {
 		response, err := client.Post(baseURL+attempt.path, attempt.contentType, strings.NewReader(attempt.body))
 		if err != nil {

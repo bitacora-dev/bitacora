@@ -131,7 +131,9 @@ type Server struct {
 	HostRecords HostRecordStore
 	// Humans is the human authentication boundary of ADR-0019. Nil keeps the
 	// pre-OIDC behaviour exactly: the UI is served to anyone who reaches the
-	// origin and data routes rely on device tokens alone.
+	// origin and data routes rely on device tokens alone. The hub binary never
+	// leaves it nil: it wires a fail-closed boundary (ADR-0025), and a
+	// boundary that reports SetupRequired withholds everything but setup.
 	Humans HumanIdentityProvider
 	// Actions is nil by default, leaving package actions disabled. Production
 	// wires it only when human authentication is configured.
@@ -195,7 +197,37 @@ func (s *Server) Handler() http.Handler {
 		// now needs a session of its own.
 		mux.Handle("/", s.requireHuman(http.FileServer(http.FS(s.WebUI))))
 	}
-	return mux
+	return s.failClosed(mux)
+}
+
+// failClosed implements the ADR-0025 fail-closed state. While the boundary
+// reports SetupRequired there is no login source, so no request can carry a
+// human session: the dashboard and every data or control route are withheld,
+// device tokens included, because the first-device pairing path would
+// otherwise hand a stranger a working token. Only the routes the setup screen
+// and the agents need stay reachable. /v1/ingest is mounted outside this
+// handler and is never affected.
+func (s *Server) failClosed(next http.Handler) http.Handler {
+	setup, ok := s.Humans.(humanSetupStatus)
+	if !ok {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !setup.SetupRequired() {
+			next.ServeHTTP(w, r)
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/auth/session", "/v1/enroll":
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v1/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			writeJSONError(w, http.StatusServiceUnavailable, "setup_required")
+			return
+		}
+		http.Redirect(w, r, "/auth/setup", http.StatusFound)
+	})
 }
 
 // LoginHandler serves only the SPA shell at the public login route. Its

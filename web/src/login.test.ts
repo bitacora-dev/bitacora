@@ -8,11 +8,21 @@ function session(overrides: Partial<AuthSession> = {}): AuthSession {
     local_enabled: false,
     oidc_enabled: false,
     local_pending_initialization: false,
+    setup_required: false,
+    setup_available: false,
     ...overrides,
   };
 }
 
 describe("loginScreen", () => {
+  it("shows no form and points at setup when the hub has no login source", () => {
+    expect(loginScreen(session({ setup_required: true, local_pending_initialization: true }))).toEqual({
+      localForm: false,
+      oidcLink: false,
+      notice: "setup_required",
+    });
+  });
+
   it("offers the local password and TOTP form when the credential exists", () => {
     expect(loginScreen(session({ local_enabled: true }))).toEqual({
       localForm: true,

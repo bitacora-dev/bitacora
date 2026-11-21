@@ -200,7 +200,9 @@ func Middleware(next http.Handler, cfg Config, hasSession func(*http.Request) bo
 
 		var limiter *perIPLimiter
 		switch r.URL.Path {
-		case "/auth/local/login", "/auth/login":
+		// The ADR-0025 setup steps share the login budget: they are the
+		// other unauthenticated routes that take a secret.
+		case "/auth/local/login", "/auth/login", "/auth/setup/begin", "/auth/setup/complete":
 			if r.Method == http.MethodPost {
 				limiter = loginLimiter
 			}

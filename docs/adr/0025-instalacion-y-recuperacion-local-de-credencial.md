@@ -1,6 +1,6 @@
 # ADR-0025: Instalación y recuperación local de la credencial
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado
 - **Fecha:** 2026-09-20
 - **Sustituye a:** parcialmente, ADR-0023 (solo la cláusula que prohíbe alta web y restablecimiento remoto)
 

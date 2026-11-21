@@ -19,6 +19,7 @@ import ContainerPanel from "./components/ContainerPanel";
 import { formatBytes } from "./bytes";
 import { useTranslation } from "./i18n";
 import LoginPanel from "./components/LoginPanel";
+import SetupPanel from "./components/SetupPanel";
 
 const POLL_INTERVAL_MS = 10_000;
 // Shares, accounts, and share sizes are collected every five minutes, five
@@ -79,6 +80,7 @@ function Brand() {
 export default function App() {
   const { t, intlTag } = useTranslation();
   if (window.location.pathname === "/auth/login") return <LoginPanel />;
+  if (window.location.pathname === "/auth/setup") return <SetupPanel />;
   const [hostID, setHostID] = useState(hostIDFromURL);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);

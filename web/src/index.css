@@ -147,6 +147,34 @@ body {
   padding: 0.85rem;
 }
 
+.setup-recovery-codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  gap: 0.4rem 1rem;
+  margin: 0;
+  padding: 0.85rem 0.85rem 0.85rem 2rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #080d14;
+}
+
+.setup-recovery-codes code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font: 0.85rem/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.host-form .setup-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+}
+
+.host-form .setup-confirm-row input {
+  min-height: auto;
+}
+
 .secondary-button {
   display: grid;
   min-height: 3rem;

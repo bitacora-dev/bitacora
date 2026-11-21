@@ -1,6 +1,6 @@
 # Autenticación humana del hub con OIDC
 
-Implementa [ADR-0019](../adr/0019-autenticacion-humana.md). Es **opcional**: si no configuras nada, el hub se comporta exactamente igual que antes.
+Implementa [ADR-0019](../adr/0019-autenticacion-humana.md). OIDC es **opcional**, pero el hub ya no funciona sin ninguna fuente de acceso: desde [ADR-0025](../adr/0025-instalacion-y-recuperacion-local-de-credencial.md), un hub sin OIDC y sin credencial local **no sirve el panel ni los datos** y solo muestra la pantalla de instalación. Ver [autenticación local](autenticacion-local.md#cambio-incompatible-el-hub-ya-no-arranca-abierto).
 
 > ADR-0023 añade una segunda fuente de identidad humana que convive con esta: la [autenticación local con contraseña y TOTP](autenticacion-local.md). Activar una no desactiva la otra.
 
@@ -50,9 +50,11 @@ BITACORA_OIDC_REDIRECT_URL=https://tu-hub/auth/callback
 
 ## Qué cambia al activarlo
 
+La columna «Sin OIDC» supone que existe una credencial local; sin ninguna de las dos fuentes, todo lo que no sea `/v1/ingest` queda cerrado tras la pantalla de instalación.
+
 | Ruta | Sin OIDC | Con OIDC |
 | --- | --- | --- |
-| `/` (interfaz web) | abierta a quien alcance el origen | exige sesión; redirige al proveedor |
+| `/` (interfaz web) | exige sesión local | exige sesión; redirige al proveedor |
 | `/v1/summary`, `/v1/events`, `/v1/logs`, `/v1/inventory` | token de dispositivo | token de dispositivo **o** sesión humana |
 | `/v1/ingest` | token de máquina (ADR-0008) | **sin cambios**, token de máquina |
 | `/v1/devices/pair`, `/v1/devices/claim` | arranque de emparejamiento | **sin cambios** |
@@ -71,6 +73,6 @@ Una persona con sesión no necesita además un token de dispositivo: preguntarle
 
 ## Límites conocidos
 
-- **Las sesiones viven en memoria.** Reiniciar el hub obliga a volver a entrar. Es coherente con ADR-0003, que mantiene todas las capas embebidas y sin servicio externo obligatorio.
+- **Las sesiones viven en memoria.** Reiniciar el hub cierra la sesión de todo el mundo y obliga a volver a entrar. Es coherente con ADR-0003, que mantiene todas las capas embebidas y sin servicio externo obligatorio.
 - **Si configuras un emisor y el hub no puede alcanzarlo al arrancar, no arranca.** Es deliberado: arrancar con la autenticación silenciosamente desactivada serviría la interfaz a cualquiera, que es justo el agujero que esto viene a cerrar.
 - **No hay autorización todavía.** Cualquiera que el proveedor autentique entra. Restringir por grupo o por correo es una decisión aparte y necesita su propio ADR.

@@ -1,61 +1,95 @@
 # Autenticación local del hub (usuario, contraseña y TOTP)
 
-Implementa [ADR-0023](../adr/0023-autenticacion-local-y-alcance-por-servidor.md). Es **opcional** y convive con [OIDC](autenticacion-humana-oidc.md): ninguna de las dos desactiva a la otra.
+Implementa [ADR-0023](../adr/0023-autenticacion-local-y-alcance-por-servidor.md) y [ADR-0025](../adr/0025-instalacion-y-recuperacion-local-de-credencial.md). Convive con [OIDC](autenticacion-humana-oidc.md): ninguna de las dos desactiva a la otra.
 
 ## Por qué existe
 
-OIDC y Cloudflare Access protegen bien el borde, pero si el proveedor o el túnel se degradan te quedan sin panel justo durante una incidencia. La credencial local es el camino que no depende de terceros: vive en el servidor, la crea una persona con acceso administrativo local y el hub la verifica por sí mismo.
+OIDC y Cloudflare Access protegen bien el borde, pero si el proveedor o el túnel se degradan te quedan sin panel justo durante una incidencia. La credencial local es el camino que no depende de terceros: vive en el servidor, la crea una persona que demuestra acceso administrativo local y el hub la verifica por sí mismo.
 
 > **Blindar el origen no sustituye a autenticar.** Sigue aplicando la [guía de blindaje del origen](blindaje-origen-cloudflare.md).
 
 ## Lo que el hub NO hace
 
-No hay registro, ni alta desde la web, ni recuperación por correo, ni restablecimiento remoto, ni credenciales por defecto. Existe **un solo sujeto**, `local:operator`, y todo su ciclo de vida pasa por la CLI del servidor con la contraseña pedida por TTY. Si pierdes contraseña, TOTP y los diez códigos de recuperación a la vez, la única salida es acceso administrativo local al servidor para rotar la credencial.
+No hay registro de usuarios, ni recuperación por correo, ni enlaces de activación, ni credenciales por defecto, ni roles creados desde la interfaz. Existe **un solo sujeto**, `local:operator`. La web solo puede crear o sustituir su credencial **canjeando un token de un solo uso** que únicamente se entrega por la consola o el journal del hub, o por una orden local en el servidor. No existe ningún endpoint, botón ni API que emita, reenvíe o revele un token.
+
+## Cambio incompatible: el hub ya no arranca abierto
+
+Hasta ahora, un hub sin OIDC y sin credencial local servía el panel a cualquiera que alcanzara el origen. **Eso se acabó.** Ahora el hub falla cerrado:
+
+| Ruta | Sin ninguna fuente de acceso |
+| --- | --- |
+| `/` y cualquier página | redirige a `/auth/setup` |
+| `/v1/summary`, `/v1/events`, `/v1/logs`, `/v1/inventory`, `/v1/jobs/`, `/v1/hosts`, `/v1/enrollments`, `/v1/devices/*`, `/v1/actions/*` | `503 {"error":"setup_required"}`, **también con token de dispositivo** |
+| `/v1/ingest` | **sin cambios**: los agentes siguen enviando con su token de máquina |
+| `/v1/enroll` | sin cambios (canje de un código de alta de agente ya emitido) |
+| `/v1/auth/session`, `/auth/setup`, `/auth/setup/*` | disponibles |
+
+Los tokens de dispositivo se bloquean a propósito: el emparejamiento del primer dispositivo no exige credencial, así que dejarlo abierto le daría a un desconocido un token válido. Los dispositivos ya emparejados vuelven a funcionar en cuanto termina la instalación.
+
+**No hay interruptor para volver al modo abierto.** ADR-0025 no lo contempla y ADR-0019 establece que una instalación sin Cloudflare no puede quedar con el hub desprotegido; un proxy de identidad delante no sustituye a esta frontera.
+
+### Ruta de actualización (una sola vez)
+
+Para una instalación que hoy funciona sin autenticación, elige **una** de estas opciones antes o justo después de actualizar:
+
+1. **Instalación web** (recomendada). Actualiza y arranca el hub. En su log aparece un bloque con el token de instalación; abre `https://tu-hub/auth/setup` y sigue los pasos de la [instalación inicial](#instalación-inicial-desde-la-web).
+2. **CLI, como hasta ahora.** `bitacora-hub auth local init` sigue funcionando igual (contraseña por TTY). Si la ejecutas antes de actualizar, el hub arranca ya con la credencial y nunca entra en modo instalación.
+3. **OIDC.** Configura las variables de [OIDC](autenticacion-humana-oidc.md); con un proveedor configurado el hub no entra en modo instalación.
+
+Mientras no completes una de las tres, los agentes siguen enviando datos (no se pierde nada), pero nadie puede leerlos.
 
 ## Configuración
 
-| Variable | Obligatoria | Qué es |
+| Variable / flag | Obligatoria | Qué es |
 | --- | --- | --- |
-| `BITACORA_LOCAL_AUTH` | no | Booleano. Activa la fuente local **antes** de que exista la credencial. |
+| `BITACORA_LOCAL_AUTH` | no | Booleano. Se mantiene por compatibilidad: con `true` y sin credencial, `/v1/auth/session` informa `local_pending_initialization: true`. |
 | `BITACORA_LOCAL_AUTH_PATH` | no | Ruta de la credencial. Por defecto `/etc/bitacora/local-auth.json`. |
 | `BITACORA_LOCAL_AUTH_KEY_PATH` | no | Ruta de la clave AES-256-GCM que cifra el secreto TOTP. Por defecto `/etc/bitacora/local-auth.key`. |
+| `-setup-token-ttl` | no | Vida del token de instalación que imprime el hub. Por defecto `30m`. |
 
-Tres reglas que conviene tener claras:
+El estado del token de instalación o recuperación vive en `local-auth-setup.json`, **en el mismo directorio que la credencial**. Solo guarda el hash SHA-256 del token, su caducidad y si se consumió; nunca el token en claro. Todos estos ficheros tienen modo `0600`.
 
-1. **Una credencial ya inicializada activa la fuente local aunque no pongas `BITACORA_LOCAL_AUTH`.** Las instalaciones anteriores a esta variable siguen funcionando sin tocar nada.
-2. **`BITACORA_LOCAL_AUTH=false` no desactiva una credencial ya inicializada.** Es deliberado: si una variable de entorno pudiera revocar la credencial, una errata en un despliegue dejaría el panel sin ninguna frontera humana y sin que nada falle de forma visible. Para desactivarla de verdad está `bitacora-hub auth local disable`, que persiste la decisión y revoca las sesiones vivas.
-3. **Un valor que no sea booleano es un error de arranque.** `BITACORA_LOCAL_AUTH=on` para el hub en lugar de leerse en silencio como «desactivado»; un despliegue que *parece* autenticado y no lo está es exactamente el fallo que esta variable evita.
+Si usas rutas personalizadas, **exporta las mismas variables también para la CLI**: la CLI y el servidor resuelven las rutas desde la misma configuración.
 
-Las rutas son configurables porque [ADR-0025](../adr/0025-instalacion-y-recuperacion-local-de-credencial.md) exige que, en contenedor, **la credencial y la clave vivan en un volumen persistente**. Si no lo montas, una recreación del contenedor borra la credencial y te quedas fuera: eso es una configuración incorrecta, no un modo degradado.
+## Los estados posibles
 
-## Los tres estados posibles
+| Estado | Qué hace el hub |
+| --- | --- |
+| Sin OIDC y sin credencial | **Modo instalación.** Imprime un token de instalación y solo sirve `/auth/setup`. |
+| Sin OIDC y con la credencial desactivada (`auth local disable`) | También falla cerrado, pero **no** imprime token: un token de instalación nunca sobrescribe una credencial. Usa `bitacora-hub auth local recover`. |
+| Credencial local operativa | Login con usuario, contraseña y TOTP (o un código de recuperación). |
+| OIDC configurado (con o sin credencial local) | Login por el proveedor; la credencial local, si existe, sigue siendo un camino alternativo. |
 
-| Estado | `BITACORA_LOCAL_AUTH` | Ficheros | Qué hace el hub |
-| --- | --- | --- | --- |
-| Inerte | sin poner o `false` | no existen | Sin frontera humana: el panel se sirve a quien alcance el origen (el comportamiento anterior a ADR-0019). |
-| Activada, pendiente de inicializar | `true` | no existen | **La frontera YA está puesta.** `/` redirige a `/auth/login`, las rutas de datos responden 401 y la pantalla de acceso explica que falta ejecutar la CLI. No hay ninguna petición que pueda crear la cuenta del operador. |
-| Activada y operativa | cualquiera | existen y son válidos | Login con contraseña y TOTP (o un código de recuperación). |
+## Instalación inicial desde la web
 
-El estado intermedio es la parte que importa en seguridad: **nadie puede reclamar el hub por ser el primero en llegar.** La creación de la credencial solo ocurre en `bitacora-hub auth local init`, que exige un TTY del servidor; no existe pantalla, endpoint ni API que la cree. El alta web tokenizada que describe ADR-0025 está **propuesta, no implementada**.
+1. Arranca el hub. En su salida de error (el journal con systemd, `docker logs` en un contenedor) aparece **una sola vez**:
 
-> La frontera se pone antes de que exista la credencial a propósito. Si el hub esperase a tener credencial para empezar a pedir sesión, el hueco entre «activo» y «inicializado» sería precisamente una ventana con el panel abierto.
+   ```
+   bitacora-hub: ================================================================
+   bitacora-hub: no login source is configured; the dashboard and data API are closed until setup completes (ADR-0025).
+   bitacora-hub: open /auth/setup on this hub and enter this one-time install token (valid until 2026-11-21T10:30:00Z):
+   bitacora-hub:     <token>
+   bitacora-hub: it is shown only here. If it expires, restart the hub or run `bitacora-hub auth local recover`.
+   bitacora-hub: ================================================================
+   ```
 
-`/v1/ingest` **no pasa nunca** por esta frontera, tampoco en el estado pendiente: si lo hiciera, todos los agentes se callarían a la vez justo mientras intentas diagnosticar el hub.
+   El log pasa a ser material sensible mientras el token esté vigente: protege sus permisos y su retención.
 
-## Inicializar el primer operador y dar de alta el TOTP
+2. Abre `https://tu-hub/auth/setup` e introduce el token, un **usuario** (libre, no es un correo) y una **contraseña** de al menos 12 caracteres. La interfaz orienta sobre su fortaleza; el hub valida la longitud y la guarda con Argon2id (los parámetros de ADR-0023). En este paso no se escribe nada en disco y el token todavía no se consume.
+3. Da de alta el TOTP escaneando el QR o tecleando el secreto (SHA-1, 6 dígitos, 30 s) y confirma con el código que muestra la aplicación. Cinco códigos erróneos descartan el alta en curso; puedes empezar de nuevo con el mismo token.
+4. Al confirmar, el hub **consume el token**, escribe la credencial y muestra **una sola vez** los diez códigos de recuperación. Ya tienes sesión: el panel se abre y `/auth/setup` deja de ofrecer nada.
 
-En el servidor, con un TTY real y como el usuario que luego leerá los ficheros:
+Si el token caduca antes de terminar, **reinicia el hub** (cada arranque sin credencial emite uno nuevo e invalida el anterior) o ejecuta `bitacora-hub auth local recover`.
 
-```sh
-bitacora-hub auth local init
-```
+El usuario es solo el atributo de acceso y presentación: el sujeto de auditoría sigue siendo siempre `local:operator`, y los logs no registran ni el usuario ni ningún secreto. Una credencial creada con `auth local init` no tiene usuario y se accede dejando el campo vacío.
 
-1. Pide la contraseña nueva dos veces, siempre por TTY. **Nunca** por argumento ni por variable de entorno: un secreto en `argv` lo ve cualquiera que pueda ejecutar `ps`.
-2. Imprime **una sola vez** el secreto TOTP en base32. Dalo de alta en la aplicación autenticadora (SHA-1, 6 dígitos, periodo de 30 s, RFC 6238).
-3. Imprime **una sola vez** diez códigos de recuperación. Guárdalos fuera del servidor.
-4. Escribe `local-auth.json` y `local-auth.key` con modo `0600`. En una instalación con systemd quedan en propiedad del usuario `bitacora`; en el contenedor oficial, que no tiene esa cuenta, quedan en propiedad de root con `0600`.
+## Inicializar o rotar por CLI
 
-Si usas rutas personalizadas, **exporta las mismas variables también para la CLI**: la CLI y el servidor resuelven la ruta desde la misma configuración, y si solo la pones en el servidor inicializarás una credencial que el hub nunca va a leer.
+`bitacora-hub auth local init` sigue disponible y es equivalente a la instalación web, pero sin usuario:
+
+1. Pide la contraseña nueva dos veces, siempre por TTY. **Nunca** por argumento ni por variable de entorno.
+2. Imprime **una sola vez** el secreto TOTP en base32 y diez códigos de recuperación.
+3. Escribe `local-auth.json` y `local-auth.key` con modo `0600`. En systemd quedan en propiedad del usuario `bitacora`; en el contenedor oficial, que no tiene esa cuenta, quedan en propiedad de root con `0600`.
 
 El resto del ciclo de vida:
 
@@ -64,17 +98,49 @@ bitacora-hub auth local rotate-password            # pide la contraseña actual
 bitacora-hub auth local rotate-totp                # nuevo secreto + nuevos diez códigos
 bitacora-hub auth local regenerate-recovery-codes  # solo los diez códigos
 bitacora-hub auth local disable                    # desactiva la fuente local
+bitacora-hub auth local recover                    # token de recuperación por pérdida total
 ```
 
-Cualquiera de los cuatro incrementa la generación de sesión y **revoca todas las sesiones locales vivas**.
+Las cuatro primeras incrementan la generación de sesión y **revocan todas las sesiones locales vivas**.
 
 ## Acceso, bloqueo y recuperación
 
-- La pantalla de acceso está en `/auth/login`, servida desde el binario por `go:embed`: no depende de red ni de CDN, que es justo lo que hace falta cuando el panel es lo único que te queda.
-- El segundo factor es el código TOTP o, en su lugar, **uno de los diez códigos de recuperación**. Un código de recuperación vale para un único inicio de sesión y se borra al aceptarse.
-- **Cinco intentos fallidos consecutivos bloquean al operador durante 15 minutos.** El bloqueo se persiste: reiniciar el hub no lo esquiva, y durante el bloqueo se rechaza incluso la credencial correcta. La respuesta es `429` con el instante de desbloqueo, y la interfaz lo muestra con la hora.
-- Una sesión humana dura **12 horas absolutas**, no se renueva por actividad y se invalida al cerrar sesión, al vencer, al reiniciar el hub o al rotar la credencial.
-- Perder el TOTP teniendo la contraseña **no** es una pérdida total: usa un código de recuperación y luego `rotate-totp`. La pérdida total (contraseña + TOTP + los diez códigos) exige acceso administrativo local al servidor; ADR-0025 describe un canje tokenizado para ese caso, pero todavía no está implementado.
+- La pantalla de acceso está en `/auth/login`, servida desde el binario por `go:embed`: no depende de red ni de CDN.
+- El segundo factor es el código TOTP o, en su lugar, **uno de los diez códigos de recuperación**, que vale para un único inicio de sesión.
+- **Cinco intentos fallidos consecutivos bloquean al operador durante 15 minutos.** El bloqueo se persiste: reiniciar el hub no lo esquiva. Un usuario incorrecto cuenta como un intento fallido más, indistinguible de una contraseña incorrecta.
+- Una sesión humana dura **12 horas absolutas** y se invalida al cerrar sesión, al vencer, al rotar la credencial o al **reiniciar el hub**.
+- Perder el TOTP teniendo la contraseña **no** es una pérdida total: usa un código de recuperación y luego `rotate-totp`.
+
+### Recuperación por pérdida total
+
+Si se pierden a la vez usuario o contraseña, TOTP y los códigos, en el servidor (dentro del contenedor, si aplica):
+
+```sh
+bitacora-hub auth local recover
+```
+
+La orden no acepta argumentos ni secretos y no revela el usuario. Necesita poder escribir en el directorio de la credencial, que es justamente el acceso administrativo local que exige ADR-0025. Imprime **una vez** un token de recuperación válido 30 minutos e invalida cualquier token anterior. El hub en marcha lo detecta sin reiniciarse: abre `https://tu-hub/auth/setup` y repite el flujo web. Al canjearlo se sustituyen usuario, contraseña, TOTP y los diez códigos, se reactiva una credencial desactivada, se incrementa la generación y **se cierran todas las sesiones locales**.
+
+Perder también el acceso administrativo al servidor elimina toda vía de recuperación: solo queda reconstruir o redesplegar.
+
+## Contenedores: volumen persistente obligatorio
+
+La credencial (`local-auth.json`), la clave que cifra el TOTP (`local-auth.key`) y el estado del token (`local-auth-setup.json`) **tienen que vivir en un volumen persistente**. La imagen declara `VOLUME /etc/bitacora`, pero un volumen anónimo se pierde al recrear el contenedor: monta uno con nombre o un bind mount explícito.
+
+```sh
+docker run -d --name bitacora-hub \
+  -v bitacora-data:/var/lib/bitacora \
+  -v bitacora-etc:/etc/bitacora \
+  -p 8081:8081 ghcr.io/bitacora-dev/bitacora-hub:<versión>
+```
+
+Si prefieres un único volumen, apunta `BITACORA_LOCAL_AUTH_PATH` y `BITACORA_LOCAL_AUTH_KEY_PATH` a rutas dentro de `/var/lib/bitacora` (por ejemplo `/var/lib/bitacora/auth/local-auth.json`). Arrancar sin volumen no es un modo degradado: una recreación borra la credencial, el hub vuelve a modo instalación y emite un token nuevo en el log.
+
+Para la recuperación en un contenedor: `docker exec <contenedor> bitacora-hub auth local recover`.
+
+## Sesiones en memoria
+
+Las sesiones se guardan en memoria (ADR-0003). **Reiniciar o redesplegar el hub cierra la sesión de todo el mundo**; hay que volver a entrar con usuario, contraseña y TOTP. La credencial y el bloqueo, en cambio, sí persisten.
 
 ## Comprobar en qué estado está un hub
 
@@ -88,71 +154,38 @@ curl -s https://tu-hub/v1/auth/session
   "authenticated": false,
   "local_enabled": true,
   "oidc_enabled": false,
-  "local_pending_initialization": false
+  "local_pending_initialization": false,
+  "setup_required": false,
+  "setup_available": false
 }
 ```
 
-Responde `200` siempre, incluso sin sesión, y no revela nada de la credencial: solo qué rutas de acceso ofrece el hub. Es así a propósito, porque un `404` o un `401` ahí es indistinguible de «este binario no tiene autenticación» para quien está diagnosticando un despliegue.
-
-Cómo leerlo:
+Responde `200` siempre, incluso sin sesión, y no revela nada de la credencial ni del token.
 
 | Respuesta | Significado |
 | --- | --- |
-| `auth_enabled: false` | No hay ninguna frontera humana configurada. |
-| `local_pending_initialization: true` | Activada pero sin credencial: falta `auth local init` en el servidor. |
-| `local_enabled: true` | Credencial lista; la pantalla muestra contraseña y TOTP. |
+| `setup_required: true` | No hay ninguna fuente de acceso: el hub solo sirve `/auth/setup`. |
+| `setup_available: true` | Hay un token de instalación o recuperación pendiente de canjear. |
+| `local_pending_initialization: true` | `BITACORA_LOCAL_AUTH=true` pero aún no hay credencial. |
+| `local_enabled: true` | Credencial lista; la pantalla muestra usuario, contraseña y TOTP. |
 | `authenticated: true` | Esta petición trae una sesión válida; incluye `identity`. |
-
-`GET /auth/me` sigue existiendo y devuelve la identidad activa (`401` sin sesión).
 
 ## Pasos exactos en Dokploy para `bitacora-dev`
 
 Estos pasos **los tiene que hacer la persona propietaria del servidor**: ningún agente toca Dokploy ni el servidor.
 
-El despliegue actual monta `/var/lib/dokploy-bitacora/data-dev → /var/lib/bitacora` y `/var/lib/dokploy-bitacora/etc-dev → /etc/bitacora`. El segundo bind mount ya cubre la ruta por defecto de la credencial, así que **no hace falta cambiar las rutas**: basta con activar la fuente local.
+El despliegue actual monta `/var/lib/dokploy-bitacora/data-dev → /var/lib/bitacora` y `/var/lib/dokploy-bitacora/etc-dev → /etc/bitacora`. El segundo bind mount ya cubre la ruta por defecto de la credencial y del token.
 
-1. En la app de Dokploy de `bitacora-dev`, en **Environment**, añade:
-
-   ```
-   BITACORA_LOCAL_AUTH=true
-   ```
-
-   No añadas `BITACORA_LOCAL_AUTH_PATH` ni `BITACORA_LOCAL_AUTH_KEY_PATH` salvo que quieras mover la credencial; si las pones, apunta a una ruta **dentro de un bind mount persistente** (por ejemplo `/var/lib/bitacora/local-auth.json`), nunca al sistema de ficheros efímero del contenedor.
-
-2. Confirma que el bind mount de `/etc/bitacora` sigue declarado en **Mounts**. Si la credencial no está en un volumen persistente, el siguiente redespliegue la borra.
-
-3. Redespliega. A partir de este momento **el panel queda cerrado**: `https://bitacora-dev.acaso.es/` redirige a `/auth/login`, que mostrará el aviso de «activada pero sin inicializar». Eso es lo esperado, no un fallo. En el log del servicio aparece la línea:
-
-   ```
-   bitacora-hub: local authentication is enabled but not initialized; run `bitacora-hub auth local init` on this server (credential: /etc/bitacora/local-auth.json, key: /etc/bitacora/local-auth.key)
-   ```
-
-4. Abre una shell interactiva en el contenedor —**interactiva de verdad, con TTY**, porque la contraseña no se acepta de otra forma— y ejecuta la inicialización:
-
-   ```sh
-   docker exec -it <contenedor-del-servicio> bitacora-hub auth local init
-   ```
-
-   Si el servicio corre en Swarm, el nombre del contenedor es el de la tarea (por ejemplo `bitcora-bitcora-development-<sufijo>.1.<id>`); `docker ps` lo lista. La consola de Dokploy también sirve siempre que dé un TTY: sin TTY el comando se niega a continuar en lugar de leer la contraseña de otro sitio.
-
-5. Apunta el secreto TOTP en la aplicación autenticadora y guarda los diez códigos de recuperación fuera del servidor. **No se vuelven a mostrar.**
-
-6. Verifica desde fuera:
-
-   ```sh
-   curl -s https://bitacora-dev.acaso.es/v1/auth/session
-   ```
-
-   Debe responder `local_enabled: true` y `local_pending_initialization: false`.
-
-7. Entra en `https://bitacora-dev.acaso.es/auth/login` con la contraseña y el código de seis dígitos. Al entrar, el panel se abre con la sesión del operador.
-
-8. Deja el blindaje de Cloudflare como está. Esta credencial es el camino que te queda **cuando** Cloudflare no responde; no es un motivo para quitarla.
+1. Confirma que el bind mount de `/etc/bitacora` sigue declarado en **Mounts**.
+2. Si el hub ya tiene credencial local, no hay nada que hacer: la actualización no cambia nada visible.
+3. Si no la tiene, redespliega y busca en el log del servicio el bloque `install token`. Abre `https://bitacora-dev.acaso.es/auth/setup` y completa los pasos. Si el token caducó, redespliega o ejecuta `docker exec <contenedor-del-servicio> bitacora-hub auth local recover`.
+4. Verifica desde fuera que `curl -s https://bitacora-dev.acaso.es/v1/auth/session` responde `setup_required: false` y `local_enabled: true`.
+5. Deja el blindaje de Cloudflare como está. Esta credencial es el camino que te queda **cuando** Cloudflare no responde; no es un motivo para quitarlo.
 
 > La app de producción `bitacora.acaso.es` está parada a propósito. No la toques en este proceso.
 
 ## Fuera del alcance de este documento
 
-- **Filtrado por host de las rutas de lectura.** ADR-0023 modela `view`/`operate` por host, y `hubauth.ScopeFor` ya devuelve ambas capacidades sobre todos los hosts para `local:operator`, pero las rutas de lectura **todavía no filtran**. Hoy hay un único operador, así que no cambia nada observable; con varios operadores sí haría falta.
-- **Alta web tokenizada y recuperación remota por token** (ADR-0025): propuesto, no implementado.
+- **Filtrado por host de las rutas de lectura**: ver ADR-0023.
+- **Varios operadores, alta de usuarios o roles desde la interfaz**: prohibido por ADR-0023; necesitaría otro ADR.
 - **Cambios en OIDC**: ver [su propia guía](autenticacion-humana-oidc.md).

@@ -67,3 +67,29 @@ func TestMiddlewareRateLimitAndSecurityHeaders(t *testing.T) {
 		t.Fatalf("limited login status/retry = %d/%q", got.Code, got.Header().Get("Retry-After"))
 	}
 }
+
+// The ADR-0025 setup steps take a secret without a session, so they share the
+// login budget instead of getting an unthrottled path of their own.
+func TestMiddlewareRateLimitsTheSetupSteps(t *testing.T) {
+	h := Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }), Config{LoginRate: 1, LoginBurst: 1, PairRate: 1, PairBurst: 1}, nil)
+	for _, path := range []string{"/auth/setup/begin", "/auth/setup/complete"} {
+		t.Run(path, func(t *testing.T) {
+			request := func() int {
+				r := httptest.NewRequest(http.MethodPost, "https://hub"+path, nil)
+				r.RemoteAddr = "192.0.2.10:1234"
+				if path == "/auth/setup/complete" {
+					r.RemoteAddr = "192.0.2.11:1234"
+				}
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, r)
+				return w.Code
+			}
+			if got := request(); got != http.StatusNoContent {
+				t.Fatalf("first request = %d", got)
+			}
+			if got := request(); got != http.StatusTooManyRequests {
+				t.Fatalf("second request = %d, want 429", got)
+			}
+		})
+	}
+}

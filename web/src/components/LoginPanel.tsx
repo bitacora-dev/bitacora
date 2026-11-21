@@ -28,6 +28,7 @@ export default function LoginPanel() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const body = {
+      username: String(form.get("username") ?? ""),
       password: String(form.get("password") ?? ""),
       ...(recovery ? { recovery_code: String(form.get("recovery_code") ?? "") } : { totp: String(form.get("totp") ?? "") }),
       return_to: returnTo(),
@@ -55,6 +56,10 @@ export default function LoginPanel() {
   if (session === null) return <main className="auth-shell"><p className="loading-text">{t.loading}</p></main>;
 
   const screen = loginScreen(session);
+  if (screen.notice === "setup_required") {
+    // Nothing to sign in with yet: the hub serves only its setup screen.
+    window.location.replace("/auth/setup");
+  }
 
   return (
     <main className="auth-shell">
@@ -64,6 +69,8 @@ export default function LoginPanel() {
         {expired && <div className="notice-panel" role="status">{t.sessionExpired}</div>}
         {error && <div className="error-panel" role="alert">{error.locked_until ? t.accountLockedUntil(new Date(error.locked_until).toLocaleTimeString(intlTag)) : t.invalidCredentials}</div>}
         {screen.localForm && <form className="host-form" onSubmit={submit}>
+          <label htmlFor="login-username">{t.usernameLabel}</label>
+          <input id="login-username" name="username" autoComplete="username" />
           <label htmlFor="login-password">{t.passwordLabel}</label>
           <input id="login-password" name="password" type="password" autoComplete="current-password" required />
           {recovery ? <><label htmlFor="login-recovery-code">{t.recoveryCodeLabel}</label><input id="login-recovery-code" name="recovery_code" autoComplete="one-time-code" required /><p>{t.recoveryCodeHint}</p></> : <><label htmlFor="login-totp">{t.authenticationCodeLabel}</label><input id="login-totp" name="totp" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]*" required /><p>{t.authenticationCodeHint}</p></>}
@@ -71,6 +78,7 @@ export default function LoginPanel() {
           <button className="primary-button" type="submit" disabled={submitting}>{submitting ? t.signingIn : t.signInButton}</button>
         </form>}
         {screen.oidcLink && <a className="secondary-button" href={`/auth/oidc/login?return_to=${encodeURIComponent(returnTo())}`}>{t.signInWithOIDC}</a>}
+        {screen.notice === "setup_required" && <div className="notice-panel" role="status"><a href="/auth/setup">{t.setupRequiredNotice}</a></div>}
         {screen.notice === "pending_initialization" && <div className="notice-panel" role="status">{t.localAuthPendingInitialization}</div>}
         {screen.notice === "unavailable" && <div className="error-panel" role="alert">{t.loginUnavailable}</div>}
       </section>

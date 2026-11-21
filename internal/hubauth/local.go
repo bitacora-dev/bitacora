@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,7 @@ var (
 	ErrLocalAuthLocked         = errors.New("local authentication is temporarily locked")
 	ErrInvalidLocalCredentials = errors.New("invalid local credentials")
 	codePattern                = regexp.MustCompile(`^[0-9]{6}$`)
+	totpEncoding               = base32.StdEncoding.WithPadding(base32.NoPadding)
 )
 
 // LocalStore owns the only persistent local credential. Its mutex makes every
@@ -58,8 +60,37 @@ type LocalStore struct {
 	now      func() time.Time
 }
 
+type credentialStatus struct {
+	readable   bool
+	disabled   bool
+	generation uint64
+}
+
+// currentStatus reports the credential's enabled state and generation without
+// taking s.mu, which a login holds for its whole 64 MiB Argon2id: panel
+// requests must never queue behind it. It deliberately caches nothing. The
+// file is about a kilobyte, so reading it on every call is cheap, while any
+// cache keyed on size or mtime can serve a stale generation after a same-size
+// rewrite within the timestamp granularity, letting a revoked session survive
+// `recover` or a rotation. readState re-checks the 0600 mode on every call,
+// and writes replace the file by atomic rename, so an unlocked reader never
+// sees a partial file. Any unreadable state is "not enabled": the fail-closed
+// answer.
+func (s *LocalStore) currentStatus() credentialStatus {
+	state, err := s.readState()
+	if err != nil {
+		return credentialStatus{}
+	}
+	return credentialStatus{readable: true, disabled: state.Disabled, generation: state.SessionGeneration}
+}
+
 type localAuthState struct {
-	Version           int             `json:"version"`
+	Version int `json:"version"`
+	// Username is the free login attribute of ADR-0025, set by the web
+	// setup. It is never the audit subject (that stays local:operator) and
+	// it is empty for a credential created by `auth local init`, which then
+	// signs in without one.
+	Username          string          `json:"username,omitempty"`
 	Password          passwordHash    `json:"password"`
 	TOTP              encryptedSecret `json:"totp"`
 	Recovery          []passwordHash  `json:"recovery_codes"`
@@ -165,10 +196,8 @@ func (s *LocalStore) IsEnabled() bool {
 	if s == nil {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, err := s.readState()
-	return err == nil && !state.Disabled
+	status := s.currentStatus()
+	return status.readable && !status.disabled
 }
 
 // Initialize creates the encryption key and the credential. The returned
@@ -349,6 +378,14 @@ func (s *LocalStore) Authenticate(password, factor string) (uint64, error) {
 // still throttles those attempts; this policy prevents a remote peer from
 // extending the operator's own lockout window.
 func (s *LocalStore) AuthenticateFromIP(password, factor, clientIP string) (uint64, error) {
+	return s.AuthenticateUserFromIP("", password, factor, clientIP)
+}
+
+// AuthenticateUserFromIP is AuthenticateFromIP plus the ADR-0025 username. A
+// credential that has a username requires it to match; a mismatch is an
+// ordinary failed attempt that counts towards the lockout, indistinguishable
+// from a wrong password. A credential without one ignores the field.
+func (s *LocalStore) AuthenticateUserFromIP(username, password, factor, clientIP string) (uint64, error) {
 	if s == nil {
 		return 0, ErrLocalAuthNotConfigured
 	}
@@ -368,6 +405,9 @@ func (s *LocalStore) AuthenticateFromIP(password, factor, clientIP string) (uint
 	validPassword, err := verifySecret(state.Password, []byte(password))
 	if err != nil {
 		return 0, err
+	}
+	if state.Username != "" && subtle.ConstantTimeCompare([]byte(strings.TrimSpace(username)), []byte(state.Username)) != 1 {
+		validPassword = false
 	}
 	validFactor := false
 	usedRecovery := -1
@@ -449,10 +489,8 @@ func (s *LocalStore) generationValid(generation uint64) bool {
 	if s == nil {
 		return false
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, err := s.readState()
-	return err == nil && !state.Disabled && state.SessionGeneration == generation
+	status := s.currentStatus()
+	return status.readable && !status.disabled && status.generation == generation
 }
 
 type generatedSecondFactor struct {
@@ -469,7 +507,7 @@ func (s *LocalStore) newSecondFactor(key []byte) (generatedSecondFactor, generat
 	if err != nil {
 		return generatedSecondFactor{}, generatedRecovery{}, err
 	}
-	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secret)
+	encoded := totpEncoding.EncodeToString(secret)
 	encrypted, err := encryptSecret(key, secret)
 	zero(secret)
 	if err != nil {
@@ -505,7 +543,8 @@ func hashSecret(secret []byte) (passwordHash, error) {
 	if err != nil {
 		return passwordHash{}, err
 	}
-	hash := argon2.IDKey(secret, salt, 3, 64*1024, 4, localAuthKeyBytes)
+	cost := currentArgon2Cost()
+	hash := argon2.IDKey(secret, salt, cost.time, cost.memoryKiB, cost.threads, localAuthKeyBytes)
 	result := passwordHash{Salt: base64.RawStdEncoding.EncodeToString(salt), Hash: base64.RawStdEncoding.EncodeToString(hash)}
 	zero(salt)
 	zero(hash)
@@ -521,7 +560,8 @@ func verifySecret(record passwordHash, secret []byte) (bool, error) {
 	if err != nil || len(expected) != localAuthKeyBytes {
 		return false, errors.New("invalid local authentication hash")
 	}
-	actual := argon2.IDKey(secret, salt, 3, 64*1024, 4, localAuthKeyBytes)
+	cost := currentArgon2Cost()
+	actual := argon2.IDKey(secret, salt, cost.time, cost.memoryKiB, cost.threads, localAuthKeyBytes)
 	ok := subtle.ConstantTimeCompare(actual, expected) == 1
 	zero(salt)
 	zero(expected)

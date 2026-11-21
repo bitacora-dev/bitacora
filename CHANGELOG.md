@@ -10,6 +10,13 @@ it ships a first tagged release.
 
 ### Added
 
+- First-run web setup (ADR-0025): on a start without any login source the hub
+  prints a single-use, expiring install token to its console/journal, and
+  `/auth/setup` redeems it to create the local operator credential (username,
+  Argon2id password, TOTP enrolment by QR or manual secret, ten recovery codes
+  shown once). `bitacora-hub auth local recover` issues a recovery token for
+  total loss; redeeming it replaces the whole credential and revokes every
+  local session.
 - Build and publish a deployable `bitacora-hub` container image, including
   immutable development image tags keyed by commit SHA.
 - Persist hub ingest tokens in SQLite, so configured agent credentials
@@ -39,6 +46,14 @@ it ships a first tagged release.
 
 ### Changed
 
+- **Breaking:** the hub fails closed. With neither OIDC nor a local
+  credential it no longer serves the dashboard or any data, pairing or
+  control route (device tokens included); it serves only the setup screen.
+  Agent ingest is unaffected. Existing open installations must finish the
+  web setup, run `bitacora-hub auth local init`, or configure OIDC once after
+  upgrading. There is no opt-out. See `docs/setup/autenticacion-local.md`.
+- The container image declares `/etc/bitacora` as a volume; mount it (or the
+  configured credential paths) persistently.
 - Document the dashboard design system and contributor-facing UI rules so
   future interface changes remain coherent.
 

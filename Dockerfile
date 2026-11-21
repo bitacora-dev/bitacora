@@ -20,6 +20,11 @@ COPY --from=build /out/bitacora-hub /usr/local/bin/bitacora-hub
 # ADR-0003: all hub data (SQLite relational store + metrics tsdb) lives
 # under one base directory — mount this as a volume for real persistence.
 VOLUME /var/lib/bitacora
+# ADR-0025: the local credential, the key that encrypts its TOTP secret and
+# the setup token state live under /etc/bitacora by default. They must be on a
+# persistent named volume or bind mount: an anonymous volume is lost when the
+# container is recreated, which sends the hub back to first-run setup.
+VOLUME /etc/bitacora
 EXPOSE 8081
 
 ENTRYPOINT ["/usr/local/bin/bitacora-hub", "-addr=0.0.0.0:8081", "-data-dir=/var/lib/bitacora"]

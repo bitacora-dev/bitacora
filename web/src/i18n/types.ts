@@ -27,7 +27,6 @@ export interface Dictionary {
   setupIntroInstall: string;
   setupIntroRecovery: string;
   setupNoTokenPending: string;
-  setupNotNeeded: string;
   setupTokenLabel: string;
   setupTokenHint: string;
   setupUsernameHint: string;
@@ -52,6 +51,7 @@ export interface Dictionary {
   setupErrorInvalidCode: string;
   setupErrorRestartRequired: string;
   setupErrorRateLimited: string;
+  setupErrorStateReadOnly: string;
   setupErrorFailed: string;
   pairingDevice: string;
   notPaired: string;

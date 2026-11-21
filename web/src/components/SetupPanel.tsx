@@ -45,6 +45,7 @@ export default function SetupPanel() {
       case "invalid_code": return t.setupErrorInvalidCode;
       case "setup_restart_required": return t.setupErrorRestartRequired;
       case "rate_limited": return t.setupErrorRateLimited;
+      case "setup_state_read_only": return t.setupErrorStateReadOnly;
       default: return t.setupErrorFailed;
     }
   };
@@ -94,7 +95,9 @@ export default function SetupPanel() {
 
   if (session === null) return <main className="auth-shell"><p className="loading-text">{t.loading}</p></main>;
 
-  const canRedeem = session.setup_available || step.kind !== "credentials";
+  // A configured hub does not advertise a pending recovery token, so outside
+  // setup mode the form is always offered and the hub judges the token.
+  const canRedeem = !session.setup_required || session.setup_available || step.kind !== "credentials";
   const strength = passwordStrength(password, username);
 
   return (
@@ -104,10 +107,7 @@ export default function SetupPanel() {
         <div><h2 id="setup-heading">{t.setupHeading}</h2><p>{session.setup_required ? t.setupIntroInstall : t.setupIntroRecovery}</p></div>
         {error && <div className="error-panel" role="alert">{errorText(error)}</div>}
 
-        {!canRedeem && <div className="notice-panel" role="status">
-          {session.setup_required ? t.setupNoTokenPending : t.setupNotNeeded}
-          {!session.setup_required && <p><a className="link-button" href="/auth/login">{t.signInButton}</a></p>}
-        </div>}
+        {!canRedeem && <div className="notice-panel" role="status">{t.setupNoTokenPending}</div>}
 
         {canRedeem && step.kind === "credentials" && <form className="host-form" onSubmit={submitCredentials}>
           <label htmlFor="setup-token">{t.setupTokenLabel}</label>

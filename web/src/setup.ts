@@ -29,6 +29,7 @@ export type SetupErrorCode =
   | "invalid_code"
   | "setup_restart_required"
   | "rate_limited"
+  | "setup_state_read_only"
   | "setup_failed";
 
 export interface SetupBegin {
@@ -48,6 +49,7 @@ const knownErrors: readonly SetupErrorCode[] = [
   "password_matches_username",
   "invalid_code",
   "setup_restart_required",
+  "setup_state_read_only",
 ];
 
 // setupErrorCode maps a server answer onto the codes the screen can explain.

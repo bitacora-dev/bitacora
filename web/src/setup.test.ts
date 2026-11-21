@@ -26,6 +26,7 @@ describe("setupErrorCode", () => {
   it("keeps the codes the server sends", () => {
     expect(setupErrorCode(401, { error: "invalid_setup_token" })).toBe("invalid_setup_token");
     expect(setupErrorCode(400, { error: "password_too_short", min_password_length: 12 })).toBe("password_too_short");
+    expect(setupErrorCode(503, { error: "setup_state_read_only" })).toBe("setup_state_read_only");
   });
 
   it("reports throttling and hides anything unexpected", () => {

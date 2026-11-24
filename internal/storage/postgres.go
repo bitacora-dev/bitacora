@@ -306,6 +306,15 @@ func (s *PostgresStore) RecordHostManifest(ctx context.Context, hostID, hostname
 	return nil
 }
 
+// RecordHostSeen implements Relational.
+func (s *PostgresStore) RecordHostSeen(ctx context.Context, hostID string, receivedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO hosts (id, last_seen_at) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET last_seen_at = excluded.last_seen_at`, hostID, receivedAt.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("recording seen host %s: %w", hostID, err)
+	}
+	return nil
+}
+
 // ListHosts implements Relational.
 func (s *PostgresStore) ListHosts(ctx context.Context) ([]schema.Host, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, name, hostname, agent_version, last_seen_at FROM hosts ORDER BY CASE WHEN name = '' THEN hostname ELSE name END, id`)

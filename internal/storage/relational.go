@@ -86,6 +86,11 @@ type Relational interface {
 	// which the hub received its authenticated manifest.
 	RecordHostManifest(ctx context.Context, hostID, hostname, agentVersion string, receivedAt time.Time) error
 
+	// RecordHostSeen records an authenticated ingestion without requiring a
+	// manifest. It creates legacy hosts on first ingest and preserves any
+	// identity metadata a newer agent has already reported.
+	RecordHostSeen(ctx context.Context, hostID string, receivedAt time.Time) error
+
 	// ListHosts returns all known hosts, ordered by their display identity.
 	ListHosts(ctx context.Context) ([]schema.Host, error)
 

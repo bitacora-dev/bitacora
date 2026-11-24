@@ -44,6 +44,13 @@ type InventoryUpserter interface {
 	UpsertInventory(ctx context.Context, inv schema.Inventory) error
 }
 
+// HostSeenRecorder persists the last authenticated ingest time for a host.
+// A manifest is optional for older agents, so this narrower contract must not
+// require hostname or agent version.
+type HostSeenRecorder interface {
+	RecordHostSeen(ctx context.Context, hostID string, receivedAt time.Time) error
+}
+
 // LogAppender is the write side of a logstore.Store that Receiver needs.
 // *logstore.Store satisfies this without any change on its end.
 type LogAppender interface {
@@ -64,6 +71,7 @@ type Receiver struct {
 	Events      EventInserter
 	Jobs        JobInserter
 	Inventories InventoryUpserter
+	Hosts       HostSeenRecorder
 	Logs        LogAppender
 	Processor   LogProcessor
 
@@ -115,6 +123,12 @@ func WithLogProcessor(processor LogProcessor) Option {
 func WithInventoryUpserter(inventories InventoryUpserter) Option {
 	return func(r *Receiver) { r.Inventories = inventories }
 }
+
+// WithHostSeenRecorder records hosts that have successfully passed transport
+// authentication, including legacy agents that never send a manifest.
+func WithHostSeenRecorder(hosts HostSeenRecorder) Option {
+	return func(r *Receiver) { r.Hosts = hosts }
+}
 func WithJobInserter(jobs JobInserter) Option { return func(r *Receiver) { r.Jobs = jobs } }
 
 // ReceiveBatch writes every item in batch to its backend and never fails
@@ -136,6 +150,11 @@ func (r *Receiver) ReceiveBatch(ctx context.Context, hostID string, batch *bitac
 	}
 
 	batchID := batch.GetBatchId()
+	if r.Hosts != nil {
+		if err := r.Hosts.RecordHostSeen(ctx, hostID, r.now()); err != nil {
+			slog.Error("ingestreceiver: recording seen host", "host_id", hostID, "batch_id", batchID, "err", err)
+		}
+	}
 
 	for _, m := range batch.GetMetrics() {
 		metric := protoToMetric(m)

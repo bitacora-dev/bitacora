@@ -379,6 +379,21 @@ func (s *SQLiteStore) RecordHostManifest(ctx context.Context, hostID, hostname, 
 	})
 }
 
+// RecordHostSeen implements Relational.
+func (s *SQLiteStore) RecordHostSeen(ctx context.Context, hostID string, receivedAt time.Time) error {
+	return s.enqueueWrite(ctx, func(ctx context.Context) error {
+		db, err := s.hostDatabase()
+		if err != nil {
+			return err
+		}
+		_, err = db.ExecContext(ctx, `INSERT INTO hosts (id, last_seen_at) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET last_seen_at = excluded.last_seen_at`, hostID, receivedAt.UnixMilli())
+		if err != nil {
+			return fmt.Errorf("recording seen host %s: %w", hostID, err)
+		}
+		return nil
+	})
+}
+
 // ListHosts implements Relational.
 func (s *SQLiteStore) ListHosts(ctx context.Context) ([]schema.Host, error) {
 	db, err := s.hostDatabase()

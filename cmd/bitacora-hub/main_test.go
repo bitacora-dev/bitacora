@@ -437,6 +437,75 @@ func TestEnrollHostFromWebAPIThenIngest(t *testing.T) {
 	t.Fatalf("the batch sent with the web-issued token did not reach /v1/summary: %+v", summary.Events)
 }
 
+func TestLegacyAddTokenIngestRecoversHostRecord(t *testing.T) {
+	dataDir := t.TempDir()
+	const hostID = "legacy-host"
+	const token = "legacy-ingest-token"
+	if err := runAddToken(dataDir, hostID+":"+token); err != nil {
+		t.Fatalf("adding legacy token: %v", err)
+	}
+
+	h, err := newHub(dataDir, hubpipeline.Config{})
+	if err != nil {
+		t.Fatalf("opening hub: %v", err)
+	}
+	defer h.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	httpSrv := &http.Server{Handler: h2c.NewHandler(h.handler, &http2.Server{})}
+	go func() { _ = httpSrv.Serve(ln) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(ctx)
+	}()
+
+	batch := &bitacorapb.Batch{
+		BatchId: ulid.Make().String(),
+		HostId:  hostID,
+		Metrics: []*bitacorapb.Metric{{
+			Name:        "bitacora_cpu_usage_ratio",
+			HostId:      hostID,
+			Value:       0.42,
+			TimestampMs: time.Now().UnixMilli(),
+		}},
+	}
+	if _, err := (&transport.Client{BaseURL: "http://" + ln.Addr().String(), Token: token}).Send(context.Background(), batch); err != nil {
+		t.Fatalf("ingesting with legacy token: %v", err)
+	}
+
+	_, deviceToken, _, err := h.devices.Start(context.Background())
+	if err != nil {
+		t.Fatalf("minting device token: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/v1/hosts", nil)
+	if err != nil {
+		t.Fatalf("building host list request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+deviceToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("listing hosts: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("listing hosts status = %d", resp.StatusCode)
+	}
+	var hosts []struct {
+		ID         string `json:"id"`
+		LastSeenAt string `json:"last_seen_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&hosts); err != nil {
+		t.Fatalf("decoding hosts: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].ID != hostID || hosts[0].LastSeenAt == "" {
+		t.Fatalf("legacy ingestion did not recover host record: %+v", hosts)
+	}
+}
+
 // TestEnrolledTokenIsBoundToItsHost proves the web flow inherits ADR-0008's
 // isolation guarantee: a token minted for one host can't write data for
 // another.

@@ -20,6 +20,12 @@ func (f metricAppenderFunc) Append(ctx context.Context, metric schema.Metric) er
 	return f(ctx, metric)
 }
 
+type hostSeenRecorderFunc func(context.Context, string, time.Time) error
+
+func (f hostSeenRecorderFunc) RecordHostSeen(ctx context.Context, hostID string, receivedAt time.Time) error {
+	return f(ctx, hostID, receivedAt)
+}
+
 // Receiver must satisfy transport.BatchReceiver: that's the whole point of
 // this package.
 var _ transport.BatchReceiver = (*Receiver)(nil)
@@ -135,6 +141,39 @@ func TestReceiveBatch_WritesMetric(t *testing.T) {
 	}
 	if got[0].Value != 0.42 {
 		t.Errorf("expected value 0.42, got %v", got[0].Value)
+	}
+}
+
+func TestReceiveBatch_RecordsLegacyHostSeen(t *testing.T) {
+	hosts := newRelationalStore(t)
+	logs, _ := newLogStore(t)
+	r := New(newMetricStore(t), hosts, logs, WithHostSeenRecorder(hosts))
+	seenAt := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return seenAt }
+
+	batch := &bitacorapb.Batch{BatchId: "legacy-batch", HostId: "legacy-host", Metrics: []*bitacorapb.Metric{validMetric("bitacora_cpu_usage_ratio", "legacy-host", seenAt)}}
+	if err := r.ReceiveBatch(context.Background(), "legacy-host", batch); err != nil {
+		t.Fatalf("receiving batch: %v", err)
+	}
+
+	got, err := hosts.ListHosts(context.Background())
+	if err != nil {
+		t.Fatalf("listing hosts: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "legacy-host" || !got[0].LastSeenAt.Equal(seenAt) {
+		t.Fatalf("legacy host was not recovered: %+v", got)
+	}
+}
+
+func TestReceiveBatch_HostSeenFailureDoesNotRejectBatch(t *testing.T) {
+	logs, _ := newLogStore(t)
+	r := New(newMetricStore(t), newRelationalStore(t), logs, WithHostSeenRecorder(hostSeenRecorderFunc(func(context.Context, string, time.Time) error {
+		return errors.New("hosts unavailable")
+	})))
+	seenAt := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	batch := &bitacorapb.Batch{BatchId: "host-write-failure", HostId: "host-a", Metrics: []*bitacorapb.Metric{validMetric("bitacora_cpu_usage_ratio", "host-a", seenAt)}}
+	if err := r.ReceiveBatch(context.Background(), "host-a", batch); err != nil {
+		t.Fatalf("host metadata write must not reject an accepted batch: %v", err)
 	}
 }
 

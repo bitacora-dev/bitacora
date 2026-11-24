@@ -239,6 +239,7 @@ func newHubWithLocalAuth(dataDir string, localAuth *hubauth.LocalStore, pipeline
 			logStore,
 			ingestreceiver.WithLogProcessor(processor),
 			ingestreceiver.WithInventoryUpserter(relStore),
+			ingestreceiver.WithHostSeenRecorder(relStore),
 			ingestreceiver.WithJobInserter(relStore),
 		),
 		Manifests: relStore,

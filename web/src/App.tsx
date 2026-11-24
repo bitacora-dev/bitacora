@@ -168,7 +168,7 @@ export default function App() {
   const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
   const bytesPerSecond = useCallback((value: number) => t.bytesPerSecond(formatBytes(value, intlTag)), [intlTag, t]);
   const selectedHost = hosts.find((host) => host.id === hostID);
-  const hostName = selectedHost?.name || selectedHost?.hostname || hostID;
+  const hostName = selectedHost?.name || selectedHost?.hostname;
   const lastSeenAt = hasInstant(selectedHost?.last_seen_at) ? selectedHost.last_seen_at : null;
   const hostStale = lastSeenAt !== null && Date.now() - new Date(lastSeenAt).getTime() > HOST_STALE_AFTER_MS;
 
@@ -355,9 +355,8 @@ export default function App() {
   }, [hostID, token]);
 
   useEffect(() => {
-    if (!token) return;
     fetchHosts().then(setHosts).catch(() => setHosts([]));
-  }, [token]);
+  }, []);
 
   const bootstrapPairing = async () => {
     setBootstrapping(true);
@@ -396,27 +395,12 @@ export default function App() {
     );
   }
 
-  if (!token) {
-    return (
-      <main className="auth-shell">
-        <section className="auth-panel">
-          <Brand />
-          <p>{t.notPaired}</p>
-          {pairError && <div className="error-panel">{pairError}</div>}
-          <button type="button" onClick={bootstrapPairing} disabled={bootstrapping} className="primary-button">
-            {bootstrapping ? t.pairButtonPending : t.pairButton}
-          </button>
-        </section>
-      </main>
-    );
-  }
-
   if (!hostID) {
     return (
       <main className="auth-shell">
         <section className="auth-panel auth-panel-wide">
           <Brand />
-          {hosts.length > 1 && (
+          {hosts.length > 0 && (
             <select aria-label={t.hostSelectorLabel} value="" onChange={(event) => event.target.value && goToHost(event.target.value)}>
               <option value="">{t.hostSelectorLabel}</option>
               {hosts.map((host) => <option key={host.id} value={host.id}>{host.name || host.hostname || host.id}</option>)}
@@ -450,6 +434,21 @@ export default function App() {
     );
   }
 
+  if (!token) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel">
+          <Brand />
+          <p>{t.notPaired}</p>
+          {pairError && <div className="error-panel">{pairError}</div>}
+          <button type="button" onClick={bootstrapPairing} disabled={bootstrapping} className="primary-button">
+            {bootstrapping ? t.pairButtonPending : t.pairButton}
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="dashboard-shell dashboard-shell--tall-portrait">
       <header className="dashboard-header">
@@ -457,7 +456,7 @@ export default function App() {
           <Brand />
           <p>{t.dashboardSubtitle}</p>
           <div className="host-identity">
-            <strong>{hostName}</strong>
+            {hostName && <strong>{hostName}</strong>}
             <span className="host-id">{hostID}</span>
             <button type="button" onClick={copyHostID} className="host-id-copy-button">
               {hostIDCopyStatus === "copied" ? t.hostIdCopied : hostIDCopyStatus === "failed" ? t.hostIdCopyFailed : t.copyHostId}

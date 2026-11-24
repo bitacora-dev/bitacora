@@ -569,4 +569,38 @@ func runConformanceTests(t *testing.T, newStore func(t *testing.T) Relational) {
 			t.Fatalf("unexpected host: %+v", got)
 		}
 	})
+
+	t.Run("RecordsSeenHostWithoutOverwritingManifestMetadata", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+		manifestSeenAt := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
+		seenAt := manifestSeenAt.Add(time.Minute)
+		if err := s.RecordHostManifest(ctx, "host-with-manifest", "web-01", "1.2.3", manifestSeenAt); err != nil {
+			t.Fatalf("recording manifest: %v", err)
+		}
+		if err := s.RecordHostSeen(ctx, "host-with-manifest", seenAt); err != nil {
+			t.Fatalf("recording seen host: %v", err)
+		}
+		if err := s.RecordHostSeen(ctx, "legacy-host", seenAt); err != nil {
+			t.Fatalf("recording legacy host: %v", err)
+		}
+
+		hosts, err := s.ListHosts(ctx)
+		if err != nil {
+			t.Fatalf("listing hosts: %v", err)
+		}
+		if len(hosts) != 2 {
+			t.Fatalf("host count = %d, want 2", len(hosts))
+		}
+		byID := make(map[string]schema.Host, len(hosts))
+		for _, host := range hosts {
+			byID[host.ID] = host
+		}
+		if got := byID["host-with-manifest"]; got.Hostname != "web-01" || got.AgentVersion != "1.2.3" || !got.LastSeenAt.Equal(seenAt) {
+			t.Fatalf("seen update overwrote manifest metadata: %+v", got)
+		}
+		if got := byID["legacy-host"]; got.ID != "legacy-host" || !got.LastSeenAt.Equal(seenAt) || got.Name != "" || got.Hostname != "" || got.AgentVersion != "" {
+			t.Fatalf("legacy host was not created with only seen metadata: %+v", got)
+		}
+	})
 }

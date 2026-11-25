@@ -34,7 +34,12 @@ const (
 	localAuthRecoveryBytes              = 16
 	localAuthLockout                    = 15 * time.Minute
 	localAuthMaxFailures                = 5
-	totpPeriod                          = 30 * time.Second
+	// localAuthGlobalMaxFailures deliberately exceeds the known-peer lockout
+	// threshold. It detects distributed guessing without letting an untrusted
+	// peer lock the operator out before credentials are checked.
+	localAuthGlobalMaxFailures = 20
+	localAuthGlobalMaxDelay    = 5 * time.Minute
+	totpPeriod                 = 30 * time.Second
 )
 
 var (
@@ -42,6 +47,7 @@ var (
 	ErrLocalAuthNotInitialized = errors.New("local authentication is not initialized")
 	ErrLocalAuthDisabled       = errors.New("local authentication is disabled")
 	ErrLocalAuthLocked         = errors.New("local authentication is temporarily locked")
+	ErrLocalAuthThrottled      = errors.New("local authentication is temporarily throttled")
 	ErrInvalidLocalCredentials = errors.New("invalid local credentials")
 	codePattern                = regexp.MustCompile(`^[0-9]{6}$`)
 	totpEncoding               = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -96,6 +102,8 @@ type localAuthState struct {
 	Recovery          []passwordHash  `json:"recovery_codes"`
 	Failures          int             `json:"failures"`
 	FailureIP         string          `json:"failure_ip,omitempty"`
+	GlobalFailures    int             `json:"global_failures,omitempty"`
+	GlobalDelayUntil  time.Time       `json:"global_delay_until,omitempty"`
 	LastSuccessIP     string          `json:"last_success_ip,omitempty"`
 	LockedUntil       time.Time       `json:"locked_until,omitempty"`
 	SessionGeneration uint64          `json:"session_generation"`
@@ -437,6 +445,20 @@ func (s *LocalStore) AuthenticateUserFromIP(username, password, factor, clientIP
 		}
 	}
 	if !validPassword || !validFactor {
+		state.GlobalFailures++
+		globallyThrottled := false
+		if state.GlobalFailures >= localAuthGlobalMaxFailures {
+			// This is intentionally evaluated after checking the credentials. A
+			// valid login can always clear the distributed-failure penalty, so a
+			// remote attacker cannot turn it into an account lockout DoS.
+			excess := state.GlobalFailures - localAuthGlobalMaxFailures
+			delay := time.Second << min(excess, 8)
+			if delay > localAuthGlobalMaxDelay {
+				delay = localAuthGlobalMaxDelay
+			}
+			state.GlobalDelayUntil = now.Add(delay)
+			globallyThrottled = true
+		}
 		if clientIP == "" || state.LastSuccessIP == "" || clientIP == state.LastSuccessIP {
 			if state.FailureIP != clientIP {
 				state.Failures = 0
@@ -450,12 +472,16 @@ func (s *LocalStore) AuthenticateUserFromIP(username, password, factor, clientIP
 		if err := s.writeState(state); err != nil {
 			return 0, err
 		}
+		if globallyThrottled {
+			return 0, ErrLocalAuthThrottled
+		}
 		return 0, ErrInvalidLocalCredentials
 	}
 	if usedRecovery >= 0 {
 		state.Recovery = append(state.Recovery[:usedRecovery], state.Recovery[usedRecovery+1:]...)
 	}
 	state.Failures, state.FailureIP, state.LockedUntil = 0, "", time.Time{}
+	state.GlobalFailures, state.GlobalDelayUntil = 0, time.Time{}
 	if clientIP != "" {
 		state.LastSuccessIP = clientIP
 	}
@@ -463,6 +489,22 @@ func (s *LocalStore) AuthenticateUserFromIP(username, password, factor, clientIP
 		return 0, err
 	}
 	return state.SessionGeneration, nil
+}
+
+// GlobalDelayUntil reports the retry delay assigned to distributed failed
+// attempts. It is advisory for failed logins only: a valid credential remains
+// usable so an external peer cannot deny the operator access.
+func (s *LocalStore) GlobalDelayUntil() (time.Time, error) {
+	if s == nil {
+		return time.Time{}, ErrLocalAuthNotConfigured
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, err := s.readState()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return state.GlobalDelayUntil, nil
 }
 
 // LockedUntil reports the current local lockout without revealing anything

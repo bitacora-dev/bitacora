@@ -146,6 +146,67 @@ func TestLocalStoreDoesNotLetAnotherIPAdvanceKnownOperatorLockout(t *testing.T) 
 	}
 }
 
+func TestLocalStoreCountsDistributedFailuresWithoutLockingOutValidOperator(t *testing.T) {
+	store := newLocalStoreForTest(t)
+	secret, _, err := store.Initialize("password")
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	store.now = func() time.Time { return now }
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		t.Fatalf("decoding TOTP secret: %v", err)
+	}
+	defer zero(key)
+
+	for _, tt := range []struct {
+		name      string
+		knownPeer bool
+	}{
+		{name: "before first successful login"},
+		{name: "after a successful login", knownPeer: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.knownPeer {
+				if _, err := store.AuthenticateFromIP("password", totpCode(key, now), "198.51.100.10"); err != nil {
+					t.Fatalf("successful baseline login: %v", err)
+				}
+			}
+			for attempt := range localAuthGlobalMaxFailures {
+				ip := fmt.Sprintf("203.0.113.%d", attempt+1)
+				_, err := store.AuthenticateFromIP("wrong", "000000", ip)
+				if attempt == localAuthGlobalMaxFailures-1 {
+					if !errors.Is(err, ErrLocalAuthThrottled) {
+						t.Fatalf("failure %d error = %v, want global throttling", attempt+1, err)
+					}
+					continue
+				}
+				if !errors.Is(err, ErrInvalidLocalCredentials) {
+					t.Fatalf("failure %d error = %v, want invalid credentials", attempt+1, err)
+				}
+			}
+			state, err := store.readState()
+			if err != nil {
+				t.Fatalf("readState: %v", err)
+			}
+			if state.GlobalFailures != localAuthGlobalMaxFailures || state.GlobalDelayUntil.IsZero() {
+				t.Fatalf("global state = failures %d, delay %v; want %d and a delay", state.GlobalFailures, state.GlobalDelayUntil, localAuthGlobalMaxFailures)
+			}
+			if _, err := store.AuthenticateFromIP("password", totpCode(key, now), "198.51.100.10"); err != nil {
+				t.Fatalf("valid operator login after distributed failures: %v", err)
+			}
+			state, err = store.readState()
+			if err != nil {
+				t.Fatalf("readState after success: %v", err)
+			}
+			if state.GlobalFailures != 0 || !state.GlobalDelayUntil.IsZero() {
+				t.Fatalf("global state after success = failures %d, delay %v; want reset", state.GlobalFailures, state.GlobalDelayUntil)
+			}
+		})
+	}
+}
+
 func TestLocalStoreVerifiesCurrentPasswordWithoutCreatingASession(t *testing.T) {
 	store := newLocalStoreForTest(t)
 	if _, _, err := store.Initialize("current-password"); err != nil {

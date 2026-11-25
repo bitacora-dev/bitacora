@@ -25,8 +25,10 @@ import (
 	"html"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -353,6 +355,10 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 			status = http.StatusTooManyRequests
 			reason = "local_account_locked"
 		}
+		if errors.Is(err, ErrLocalAuthThrottled) {
+			status = http.StatusTooManyRequests
+			reason = "local_account_throttled"
+		}
 		if errors.Is(err, ErrInvalidLocalCredentials) {
 			if lockedUntil, lockErr := a.local.LockedUntil(); lockErr == nil && !lockedUntil.IsZero() {
 				status = http.StatusTooManyRequests
@@ -363,12 +369,23 @@ func (a *Authenticator) handleLocalLogin(w http.ResponseWriter, r *http.Request)
 			writeJSONError(w, http.StatusUnauthorized, "local authentication is not initialized")
 			return
 		}
-		if !errors.Is(err, ErrInvalidLocalCredentials) && !errors.Is(err, ErrLocalAuthLocked) && !errors.Is(err, ErrLocalAuthDisabled) {
+		if !errors.Is(err, ErrInvalidLocalCredentials) && !errors.Is(err, ErrLocalAuthLocked) && !errors.Is(err, ErrLocalAuthThrottled) && !errors.Is(err, ErrLocalAuthDisabled) {
 			status = http.StatusInternalServerError
 			reason = "local_authentication_error"
 		}
 		slog.Warn("authentication event", "event", "auth_login_failure", "method", "local", "subject", localOperatorSubject, "ip", ip, "reason", reason)
 		if status == http.StatusTooManyRequests {
+			if errors.Is(err, ErrLocalAuthThrottled) {
+				delayUntil, delayErr := a.local.GlobalDelayUntil()
+				if delayErr == nil {
+					delay := time.Until(delayUntil)
+					if delay > 0 {
+						w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(delay.Seconds())))))
+					}
+					writeJSON(w, status, map[string]string{"error": "local authentication is temporarily throttled", "retry_after": delayUntil.UTC().Format(time.RFC3339)})
+					return
+				}
+			}
 			lockedUntil, lockErr := a.local.LockedUntil()
 			if lockErr == nil {
 				slog.Warn("authentication event", "event", "auth_lockout", "method", "local", "subject", localOperatorSubject, "ip", ip, "until", lockedUntil.UTC().Format(time.RFC3339))

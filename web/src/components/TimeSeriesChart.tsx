@@ -28,6 +28,25 @@ export function chartSizeChanged(current: ChartSize, next: ChartSize): boolean {
   return current.width !== next.width || current.height !== next.height;
 }
 
+// mirroredRange is the symmetric y range a mirror chart plots on: both
+// halves share one bound, so a 40 MB/s download and a 40 MB/s upload draw
+// the same height in opposite directions. Scaling each half to its own peak
+// would make a trickle of uploads look like a flood whenever the download
+// was idle, which is the exact comparison this shape exists to make.
+//
+// Returns null when nothing has been sampled yet: uPlot then keeps its own
+// default range instead of being pinned to a bogus ±0.
+export function mirroredRange(series: { points: SeriesPoint[] }[]): [number, number] | null {
+  let bound = 0;
+  for (const item of series) {
+    for (const point of item.points) {
+      if (!Number.isFinite(point.value)) continue;
+      bound = Math.max(bound, Math.abs(point.value));
+    }
+  }
+  return bound === 0 ? null : [-bound, bound];
+}
+
 interface Props {
   title: string;
   // Legacy single-series props remain supported for existing callers.
@@ -37,10 +56,15 @@ interface Props {
   // New charts can provide any number of independently named series.
   series?: ChartSeries[];
   yRange?: [number, number];
+  // Plots the first series upwards and every later one downwards against one
+  // shared scale. The sign is a drawing decision only: `describePoint` still
+  // receives the measured value, so the readout never shows a negative byte
+  // rate and the axis labels are drawn through Math.abs.
+  mirror?: boolean;
   formatAxisValue: (v: number) => string;
 }
 
-export default function TimeSeriesChart({ title, points, color, describePoint, series, yRange, formatAxisValue }: Props) {
+export default function TimeSeriesChart({ title, points, color, describePoint, series, yRange, mirror = false, formatAxisValue }: Props) {
   const { t, intlTag } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -58,13 +82,14 @@ export default function TimeSeriesChart({ title, points, color, describePoint, s
     const sortedKeys = [...keys].sort((left, right) => new Date(left).getTime() - new Date(right).getTime());
     const aligned: uPlot.AlignedData = [
       sortedKeys.map((key) => Math.floor(new Date(key).getTime() / 1000)),
-      ...chartSeries.map((item) => {
-        const values = new Map(item.points.map((point) => [point.ts, point.value]));
+      ...chartSeries.map((item, index) => {
+        const sign = mirror && index > 0 ? -1 : 1;
+        const values = new Map(item.points.map((point) => [point.ts, point.value * sign]));
         return sortedKeys.map((key) => values.get(key) ?? null);
       }),
     ];
     return { data: aligned, timestampKeys: sortedKeys };
-  }, [chartSeries]);
+  }, [chartSeries, mirror]);
 
   const activeIndex = cursorIndex !== null && timestampKeys[cursorIndex] ? cursorIndex : timestampKeys.length - 1;
   const activeTimestamp = activeIndex >= 0 ? timestampKeys[activeIndex] : null;
@@ -74,6 +99,14 @@ export default function TimeSeriesChart({ title, points, color, describePoint, s
   });
   const label = cursorIndex !== null && timestampKeys[cursorIndex] ? t.inspectedValueLabel : t.currentValueLabel;
   const timeLabel = activeTimestamp ? new Date(activeTimestamp).toLocaleTimeString(intlTag) : "";
+
+  // Recomputed from the data rather than from a prop so the two halves stay
+  // comparable as the window slides; `yRange` still wins when a caller pins
+  // a fixed scale (a ratio chart).
+  const effectiveRange = useMemo(
+    () => (yRange ? yRange : mirror ? mirroredRange(chartSeries) : null),
+    [chartSeries, mirror, yRange],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -91,10 +124,10 @@ export default function TimeSeriesChart({ title, points, color, describePoint, s
       height: size.height,
       cursor: { drag: { x: true, y: false }, points: { show: false } },
       legend: { show: false },
-      scales: { x: { time: true }, ...(yRange ? { y: { range: yRange } } : {}) },
+      scales: { x: { time: true }, ...(effectiveRange ? { y: { range: effectiveRange } } : {}) },
       axes: [
         { stroke: "#94a3b8", grid: { stroke: "#1f2937", width: 1 } },
-        { size: (_u, labels) => yAxisSize(labels, measureAxisLabel), stroke: "#94a3b8", grid: { stroke: "#1f2937", width: 1 }, values: (_u, vals) => vals.map((v) => formatAxisValue(v)) },
+        { size: (_u, labels) => yAxisSize(labels, measureAxisLabel), stroke: "#94a3b8", grid: { stroke: "#1f2937", width: 1 }, values: (_u, vals) => vals.map((v) => formatAxisValue(mirror ? Math.abs(v) : v)) },
       ],
       series: [{}, ...chartSeries.map((item) => ({
         stroke: item.color,
@@ -134,9 +167,9 @@ export default function TimeSeriesChart({ title, points, color, describePoint, s
       chart.destroy();
       chartRef.current = null;
     };
-  }, [chartSeries, data, formatAxisValue, yRange]);
+  }, [chartSeries, data, effectiveRange, formatAxisValue, mirror]);
 
-  return <div className="control-panel chart-panel">
+  return <div className={mirror ? "control-panel chart-panel chart-panel--mirror" : "control-panel chart-panel"}>
     <div className="chart-head">
       <div><h2>{title}</h2><p>{label}</p></div>
       <div className="chart-value">

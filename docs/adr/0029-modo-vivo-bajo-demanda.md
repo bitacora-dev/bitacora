@@ -1,4 +1,4 @@
-# ADR-0028: Modo en vivo bajo demanda para CPU y red
+# ADR-0029: Modo en vivo bajo demanda para CPU y red
 
 - **Estado:** Propuesto
 - **Fecha:** 2026-11-27

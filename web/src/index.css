@@ -610,9 +610,6 @@ body {
   padding: 0.25rem 0.35rem;
 }
 
-.cpu-core-row:nth-child(odd) {
-  background: var(--panel-strong);
-}
 
 /* A core the kernel took offline is dimmed and labelled, never hidden: a
    missing row reads as a CPU that never existed. */
@@ -739,8 +736,6 @@ body {
   height: 100%;
   border-radius: inherit;
   background: var(--cyan);
-  transition-property: width;
-  transition-timing-function: ease-out;
 }
 
 .cpu-meter--high .cpu-meter-fill { background: var(--gold); }
@@ -1159,11 +1154,14 @@ body {
 .tunnel-state--inactive { color: var(--muted); }
 .tunnel-state--unreported { color: var(--label); }
 
-/* Shares span the inventory grid: one row carries a name, a path, a size and
-   an access summary, and squeezing that into half the width turns every row
-   into four wrapped lines. */
+/* A share row carries a name, a path, a size and an access summary. Whether
+   those read across or stack depends on how wide the panel is, not on how
+   wide the window is: in the dense overview this panel sits in a third of
+   the page, so a viewport-keyed breakpoint would lay four columns across
+   430 px. The panel is its own query container instead. */
 .shares-panel {
-  grid-column: 1 / -1;
+  container-type: inline-size;
+  container-name: shares;
 }
 
 .share-mode {
@@ -1239,7 +1237,6 @@ body {
   padding: 1rem;
 }
 
-.package-update-panel .inventory-list { margin: 0; }
 .package-not-automatic { margin-top: 1rem; }
 .package-not-automatic h3 { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--label); }
 
@@ -1297,51 +1294,6 @@ body {
 .inventory-reported--stale { color: var(--gold); font-weight: 650; }
 .inventory-reported time { color: inherit; }
 
-.inventory-list {
-  display: grid;
-  gap: 0.75rem;
-  margin: 0.9rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.inventory-list li {
-  display: grid;
-  gap: 0.55rem;
-  min-width: 0;
-  border-top: 1px solid var(--line-soft);
-  padding-top: 0.75rem;
-}
-
-.inventory-list li:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.inventory-list strong {
-  overflow-wrap: anywhere;
-}
-
-.inventory-list dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem 1rem;
-  margin: 0;
-}
-
-.inventory-list dt {
-  color: var(--label);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-}
-
-.inventory-list dd {
-  margin: 0.18rem 0 0;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-}
 
 .events-panel,
 .signal-panel,
@@ -1824,7 +1776,6 @@ body {
   text-transform: uppercase;
 }
 
-.host-metadata--stale,
 .signal-panel {
   display: grid;
   gap: 1rem;
@@ -1920,10 +1871,11 @@ body {
   padding: 1rem 0;
 }
 
-/* From laptop width up, a share row reads across instead of down: the name,
-   the size, and who can reach it line up in columns so several shares can be
-   compared at a glance. Below this the same row stacks. */
-@media (width >= 980px) {
+/* Once the panel itself is wide enough, a share row reads across instead of
+   down: the name, the size, and who can reach it line up in columns so
+   several shares can be compared at a glance. Narrower than this — which is
+   where the three-column overview puts it — the same row stacks. */
+@container shares (width >= 34rem) {
   .share-row {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 0.9fr);
     grid-template-areas:
@@ -1962,8 +1914,7 @@ body {
 
 .usage-bar span,
 .container-meter > span,
-.cpu-meter-fill,
-.sparkline {
+.cpu-meter-fill {
   transition: width var(--meter-duration) var(--meter-ease);
 }
 
@@ -2086,6 +2037,15 @@ body {
 
 .host-bar-freshness--stale .host-bar-pulse {
   background: var(--gold);
+  animation: none;
+}
+
+/* No sample has ever landed, so there is nothing to beat about. The dot
+   keeps the line's shape in a neutral fill; the words beside it already
+   say "no samples yet". */
+.host-bar-pulse--idle {
+  background: var(--line);
+  border: 1px solid var(--dim);
   animation: none;
 }
 
@@ -2285,8 +2245,6 @@ body {
   background: var(--panel-strong);
   padding: 0.1rem 0.3rem;
 }
-
-.cpu-core-rows .cpu-core-row:nth-child(odd) { background: var(--panel-strong); }
 
 .cpu-core-rows .cpu-core-row-label {
   font-size: 0.64rem;
@@ -2745,8 +2703,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .usage-bar span,
   .container-meter > span,
-  .cpu-meter-fill,
-  .sparkline { transition: none; }
+  .cpu-meter-fill { transition: none; }
 
   .host-bar-pulse { animation: none; }
   .event-row--new { animation: none; }
@@ -2839,6 +2796,16 @@ body {
     display: flex;
     align-items: center;
     min-height: 44px;
+  }
+
+  /* The close control on the panels the host bar opens. It is 2rem on a
+     desktop pointer, which is fine there and a 32 px target on a thumb;
+     ADR-0014 makes the phone the primary client, so nothing interactive
+     stays under 44 px at this width. The drawn X keeps its size: only the
+     hit area grows. */
+  .icon-button {
+    width: 44px;
+    height: 44px;
   }
 
   /* Disclosures keep their own display so the browser keeps drawing the

@@ -51,14 +51,10 @@ export default function AddServerPanel({ onClose, onViewHost }: AddServerPanelPr
     <div className="bg-neutral-900 border border-neutral-700 rounded p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium">{t.addServerHeading}</h2>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-neutral-500 hover:text-neutral-300 py-2 px-2 -mr-2"
-          aria-label={t.closeAria}
-        >
-          ✕
-        </button>
+        {/* The X is drawn by .icon-button's two rotated pseudo-elements, not
+            by a U+2715 glyph: no unicode icons, and the shared class is the
+            one the phone breakpoint grows to a 44 px target. */}
+        <button type="button" onClick={onClose} className="icon-button" aria-label={t.closeAria} />
       </div>
 
       {error && <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded p-3">{t.createServerError(error)}</div>}

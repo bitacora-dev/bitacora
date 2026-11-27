@@ -43,7 +43,7 @@ Current exceptions are transitional and should not spread:
 | Chart series colors | [`App.tsx`](src/App.tsx) passes `#38bdf8` for CPU and network receive, `#f8d66d` for memory, and `#4ade80` for network transmit. | Keep CPU and receive cyan, memory gold, and transmit green; move them behind named tokens when the chart API accepts tokens directly. |
 | Public surface chart color | [`PublicSurfacePanel.tsx`](src/components/PublicSurfacePanel.tsx) passes `#f8d66d` for the failed-SSH-login rate. | Security pressure is operational emphasis, not an error: reuse gold rather than red, so a permanently visible line does not read as a permanent alarm. |
 | uPlot axis/grid colors | [`TimeSeriesChart.tsx`](src/components/TimeSeriesChart.tsx) sets slate axis/grid colors. | Keep chart chrome muted and lower priority than the active series. |
-| Severity text colors | [`EventsList.tsx`](src/components/EventsList.tsx) uses Tailwind severity classes. | Severity color may stay semantic, but new event severity styling must remain readable on the dark panel background. |
+| Severity text colors | [`EventsList.tsx`](src/components/EventsList.tsx) uses Tailwind severity classes. | Severity color may stay semantic, but every class must measure at least 4.5:1 on `--panel`. `debug` is `text-neutral-400` (7.4:1); `text-neutral-500` measured 3.93:1 and is not allowed for severity text. |
 | Enrollment panel Tailwind classes | [`AddServerPanel.tsx`](src/components/AddServerPanel.tsx) still uses inline Tailwind utilities. | Prefer the shared CSS panel/button vocabulary for new dashboard work; do not use this as a reason to fork the visual language. |
 
 The base palette is low-light operational UI: near-black background,
@@ -135,12 +135,23 @@ version, the ULID with its copy control, and the links out of this view.
   beat says "a sample landed", which is the fact being claimed. Past six
   collector cycles the pair takes the gold stale treatment and the dot stops
   moving, the same rule the processor panel's refresh line follows.
+- The freshness line names **what** is being aged: `hostBarSampleAge` reads
+  "muestra de hace N s" / "last sample N s ago". A bare "Actualizado" ages
+  something the reader has to guess at, and the thing being claimed here is the
+  sample, not the page.
+- With no sample ever received the dot takes `.host-bar-pulse--idle`: it keeps
+  the line's shape in a neutral fill and does not beat. Motion that fires on
+  mount would assert a sample that never landed.
 - The agent's own `last_seen_at` only earns a chip once it is late. While the
   host reports normally the sample age beside it already answers "is this page
   hearing from the server", and printing both spent a third of the bar saying
   one thing twice. When they diverge the chip appears and says so in words.
 - The pending-update count is absent when the inventory is: a host whose
   `package_update` collector has never reported gets no chip, not a zero.
+- The window label is absent until the first summary arrives. `windowMinutes`
+  is `number | null`, never coerced to `0`: the averaging window is the hub's
+  fact, and "Ventana de 0 min" is a window nothing reported. This is the
+  absent-is-not-zero rule applied to the one bar that is always on screen.
 
 ### Band of constants
 
@@ -173,6 +184,14 @@ trace at all.
 Remote access sits with the host's hardware for the reason it always has: both
 describe how this host meets the outside world right now, and "can I still get
 in" is asked precisely when the rest of the page is bad news.
+
+A container's CPU reading is stated in **cores used**, not as a percentage.
+The hub reports `cpu_cores_used`; a percentage needs a denominator it never
+sends, and the two plausible ones disagree by the host's thread count — `0.25`
+cores is "25 %" of one core the way `docker stats` means it, and "1 %" of a
+24-thread host. Printing either would state a number the hub did not measure,
+so the measured unit stays and the meter scales to the busiest container
+rather than to an assumed ceiling.
 
 The two inspectable window charts (CPU and memory) sit below the columns, full
 width, under `window-detail`. The band's traces and the processor's history
@@ -257,6 +276,15 @@ Shares, share sizes, and accounts are one subject, not three. `share`,
 item `id`, never on `name`: `share_usage` identifies an NFS export by its full
 path while `share` names it by the basename, so a name join drops every NFS
 size without an error.
+
+A share row reads across only when **the panel** is wide enough, through
+`@container shares (width >= 34rem)`, not when the window is. The old
+`@media (width >= 980px)` breakpoint was written when shares spanned the whole
+page; in the three-column overview the same panel is about `430px` wide at a
+`1440px` viewport, so a viewport-keyed query laid four columns across a third
+of the page. Any panel whose internal layout depends on its own width belongs
+in a container query — the overview changed every panel's width without
+changing the viewport's.
 
 Account names and their per-share permissions stay behind a `<details>`
 disclosure. They are system usernames and declared privileges, and the screen
@@ -523,9 +551,14 @@ The current baseline comes from [`index.css`](src/index.css),
 - Text and borders must keep contrast on `--bg`, `--panel`, and
   `--panel-strong`.
 - Interactive controls need stable hit areas. Existing primary buttons are at
-  least `3rem` tall; icon buttons are `2rem` square and should not shrink.
-  Below `760px` every interactive control — link buttons, selects, inputs and
-  disclosure summaries — is at least `44px` tall. Disclosures get that height
+  least `3rem` tall; icon buttons are `2rem` square on a pointer.
+  Below `760px` every interactive control — link buttons, selects, inputs,
+  disclosure summaries **and icon buttons** — is at least `44px` in both axes.
+  There is no exemption: ADR-0014 makes the phone the primary client, and a
+  `2rem` icon button is a `32px` target under a thumb. Only the hit area grows;
+  the drawn glyph keeps its size.
+- Close controls draw their X from `.icon-button`'s two rotated pseudo-elements.
+  No interactive control carries a unicode glyph as its icon. Disclosures get that height
   from padding rather than from `display: flex`, so the browser keeps drawing
   their marker.
 - A whole-row disclosure needs its own visible focus ring. `.event-row > details

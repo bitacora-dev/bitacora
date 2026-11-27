@@ -338,6 +338,7 @@ export interface Dictionary {
   hostBarUpdatesPending: (count: number) => string;
   hostBarAgent: (version: string) => string;
   hostBarLastSeen: (age: string) => string;
+  hostBarSampleAge: (age: string) => string;
   columnSystemLabel: string;
   columnServicesLabel: string;
   columnOperationsLabel: string;

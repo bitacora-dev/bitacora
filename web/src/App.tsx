@@ -78,10 +78,11 @@ interface PairPanelData {
 }
 
 function Brand() {
+  const { t } = useTranslation();
   return (
     <div className="brand-lockup">
       <img className="brand-mark" src="/bitacora-logo.png" alt="" aria-hidden="true" />
-      <h1>Bitácora</h1>
+      <h1>{t.brand}</h1>
     </div>
   );
 }
@@ -169,7 +170,9 @@ export default function App() {
   }, [summary?.memory]);
 
   const memoryAvailable = latest(summary?.memory_available_bytes ?? []);
-  const windowMinutes = summary ? Math.round(summary.window_secs / 60) : 0;
+  // Null, not zero: the averaging window is a fact the hub reports with the
+  // summary, and the host bar is on screen before the first one arrives.
+  const windowMinutes = summary ? Math.round(summary.window_secs / 60) : null;
   const ratio = useCallback((value: number) => formatRatio(value, intlTag), [intlTag]);
   const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
   const bytesPerSecond = useCallback((value: number) => t.bytesPerSecond(formatBytes(value, intlTag)), [intlTag, t]);
@@ -587,7 +590,7 @@ export default function App() {
               <ContainerPanel containers={summary.containers ?? []} formatBytes={bytes} />
               <PackageUpdatePanel hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
               <SharesPanel shares={shares} usage={shareUsage} users={shareUsers} />
-              <PublicSurfacePanel surface={summary.public_surface} windowMinutes={windowMinutes} compact />
+              <PublicSurfacePanel surface={summary.public_surface} windowMinutes={Math.round(summary.window_secs / 60)} compact />
             </section>
 
             <section className="overview-column" aria-label={t.columnOperationsLabel}>

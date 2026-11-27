@@ -365,6 +365,7 @@ export const es: Dictionary = {
   hostBarUpdatesPending: (count) => (count === 0 ? "Sin actualizaciones pendientes" : count === 1 ? "1 actualización pendiente" : `${count} actualizaciones pendientes`),
   hostBarAgent: (version) => `Agente ${version}`,
   hostBarLastSeen: (age) => `Última señal del agente ${age}`,
+  hostBarSampleAge: (age) => `muestra de ${age}`,
   columnSystemLabel: "Sistema",
   columnServicesLabel: "Servicios",
   columnOperationsLabel: "Almacenamiento y operaciones",

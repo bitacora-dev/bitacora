@@ -23,7 +23,10 @@ interface Props {
   hostID: string;
   host: Host | undefined;
   generatedAt: string | null;
-  windowMinutes: number;
+  // Null until the first summary lands. The averaging window is the hub's
+  // fact, so before it arrives the chip is absent rather than reading
+  // "0 min window" — a window nothing reported.
+  windowMinutes: number | null;
   // The agent's own last ingest, which is a different fact from the sample
   // instant above: the hub can be answering happily about a host that went
   // quiet ten minutes ago.
@@ -88,7 +91,7 @@ export default function HostBar({
 
       <div className="host-bar-state">
         <HostFreshness generatedAt={generatedAt} />
-        <span className="host-bar-window">{t.windowLabel(windowMinutes)}</span>
+        {windowMinutes !== null && <span className="host-bar-window">{t.windowLabel(windowMinutes)}</span>}
         {/* The agent's own last ingest only earns a chip once it is late.
             While the host is reporting normally the sample age beside it
             already answers "is this page hearing from the server", and
@@ -146,8 +149,15 @@ export function HostFreshness({ generatedAt }: { generatedAt: string | null }) {
 
   return (
     <p className={stale ? "host-bar-freshness host-bar-freshness--stale" : "host-bar-freshness"}>
-      <span key={generatedAt ?? "none"} className="host-bar-pulse" aria-hidden="true" />
-      <span>{age === null ? t.noSamples : t.cpuRefreshedAge(age)}</span>
+      {/* The beat means "a sample just landed", so with no sample it must not
+          beat: an idle dot keeps the line's shape without asserting liveness
+          the page has never observed. */}
+      <span
+        key={generatedAt ?? "none"}
+        className={generatedAt === null ? "host-bar-pulse host-bar-pulse--idle" : "host-bar-pulse"}
+        aria-hidden="true"
+      />
+      <span>{age === null ? t.noSamples : t.hostBarSampleAge(age)}</span>
       {stale && <span className="host-bar-freshness-note">{t.hostStale}</span>}
     </p>
   );

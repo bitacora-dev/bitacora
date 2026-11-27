@@ -5,8 +5,12 @@ import { eventLogTarget, logEntryID, type LogRefTarget } from "../logrefs";
 import { useTranslation } from "../i18n";
 import RowInstant, { DayHeading } from "./RowInstant";
 
+// Every severity here clears 4.5:1 on --panel. neutral-500 measured 3.93:1,
+// which is a readability failure on the one severity an operator is most
+// likely to be scanning past rather than reading, so debug is neutral-400
+// (7.39:1). The severity word is printed beside the colour either way.
 const SEVERITY_COLOR: Record<BitacoraEvent["severity"], string> = {
-  debug: "text-neutral-500",
+  debug: "text-neutral-400",
   info: "text-sky-400",
   notice: "text-teal-400",
   warn: "text-amber-400",

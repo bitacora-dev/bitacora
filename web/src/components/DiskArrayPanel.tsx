@@ -24,10 +24,13 @@ export default function DiskArrayPanel({ inventory }: { inventory: Inventory | n
           <h2>{t.disksHeading}</h2>
           {inventory && <p className="inventory-reported">{t.inventoryReportedAt(new Date(inventory.reported_at).toLocaleString(intlTag))}</p>}
         </div>
-        <div className="inventory-title-metrics">
+        {/* An inventory the agent never reported has no count, and a badge
+            reading "0" beside "not reported yet" is the panel contradicting
+            itself: absent is not zero. The words below carry that state. */}
+        {inventory && <div className="inventory-title-metrics">
           {totalUsage && <UsageRing usage={totalUsage} label={t.disksUsageSummary} intlTag={intlTag} />}
           <span className="inventory-count">{devices.length}</span>
-        </div>
+        </div>}
       </div>
       {!inventory ? (
         <p className="inventory-empty">{t.inventoryPending}</p>

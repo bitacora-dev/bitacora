@@ -66,4 +66,25 @@ describe("JobsList", () => {
     expect(html).not.toContain("run-3");
     expect(html).toContain("job-running");
   });
+
+  it("keeps the trigger and the peer on the run in progress", () => {
+    // The pinned card is the row an operator came for. Dropping the peer would
+    // hide which host a replication in progress is writing to.
+    const html = render([job({
+      id: "live",
+      job_name: "borg-remote",
+      status: "running",
+      finished_at: "0001-01-01T00:00:00Z",
+      trigger: "systemd-timer",
+      peer_host_id: "host-b",
+    })]);
+    expect(html).toContain("Temporizador de systemd");
+    expect(html).toContain("host-b");
+  });
+
+  it("repeats the trigger inside the disclosure, where a phone can still reach it", () => {
+    // The summary's own trigger span is display:none below 760 px.
+    const html = render([job({ trigger: "systemd-timer" })]);
+    expect(html).toContain('class="job-row-trigger-detail">Temporizador de systemd<');
+  });
 });

@@ -57,4 +57,17 @@ describe("PackageUpdatePanel", () => {
     expect(html).toContain("Disponible en backports");
     expect(html).toContain('<span class="inventory-count">1</span>');
   });
+
+  it("shows no count at all until the agent reports the inventory", () => {
+    // Absent is not zero. A "0" badge beside "not reported yet" reads as
+    // "nothing pending", which is a fact the hub never sent.
+    const html = render(null);
+    expect(html).not.toContain("inventory-count");
+    expect(html).toContain("Este inventario todavía no ha sido reportado");
+  });
+
+  it("does show a zero count once the agent reports an empty inventory", () => {
+    const html = render(inventory([]));
+    expect(html).toContain('<span class="inventory-count">0</span>');
+  });
 });

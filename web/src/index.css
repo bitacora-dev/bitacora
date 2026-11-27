@@ -671,7 +671,6 @@ body {
    reach pushed the percentage out over the tag. Only a host with isolated
    CPUs pays the extra line, and only on the rows that carry the tag. */
 .cpu-core-rows--reserved .cpu-thread-row {
-  position: relative;
   flex-wrap: wrap;
 }
 
@@ -2528,6 +2527,30 @@ body {
 
 .event-row > details > summary::-webkit-details-marker { display: none; }
 
+/* The native marker is dropped because it would sit before a flex row of
+   five items and break the column alignment, so the row has to draw its own.
+   Without one, nothing on a touch screen says these rows open at all — there
+   is no hover there — and the log-viewer link behind them is undiscoverable.
+   A chevron from two rotated borders, not a unicode glyph. */
+.event-row > details > summary::after {
+  flex: 0 0 auto;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  margin-left: auto;
+  content: "";
+  rotate: 45deg;
+  translate: 0 -0.12rem;
+  transition: rotate 0.18s ease-out;
+}
+
+.event-row > details[open] > summary::after { rotate: 225deg; translate: 0 0.12rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .event-row > details > summary::after { transition: none; }
+}
+
 /* A whole row is the control, so it needs a visible focus ring of its own
    and a hit area a thumb can land on. */
 .event-row > details > summary:focus-visible {
@@ -2611,12 +2634,19 @@ body {
 .job-running-head strong { color: var(--text); font-size: 0.86rem; overflow-wrap: anywhere; }
 
 .job-running-note,
-.job-running-stats {
+.job-running-stats,
+.job-running-trigger,
+.job-row-trigger-detail {
   margin: 0;
   color: var(--label);
   font-size: 0.74rem;
   line-height: 1.45;
 }
+
+/* The running card and the open disclosure keep the job's own context list at
+   the body's measure rather than the wide one the standalone panel uses. */
+.job-running .job-context,
+.event-row-body .job-context { font-size: 0.74rem; }
 
 .job-progress {
   display: flex;
@@ -2776,9 +2806,12 @@ body {
   .cpu-core-rows .cpu-core-row { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
   .cpu-core-rows .cpu-meter { height: 0.45rem; }
 
-  /* Secondary table columns go, and the row says what is left in words.
-     The SMART verdict, the trigger and the duration are all one tap away
-     inside the row's own disclosure or the disks panel's detail. */
+  /* Secondary columns go, and nothing they carried is lost. The trigger and
+     the exit status with its duration are repeated inside the job row's own
+     disclosure, one tap away. The SMART verdict keeps its own always-visible
+     state cell, which `diskState` derives from the same attribute: failed
+     reads critical, passed reads ok and an absent verdict reads unknown in
+     words, so hiding the raw column drops the wording, not the fact. */
   .disk-col-smart,
   .disk-table th.disk-cell-smart,
   .disk-table td.disk-cell-smart,
@@ -2906,8 +2939,9 @@ body {
   .disk-table-row td.disk-cell-state,
   .disk-table-row td.disk-cell-numeric { display: flex; align-items: baseline; gap: 0.4rem; }
 
+  /* No `.disk-cell-smart::before`: that cell is already `display: none` from
+     760 px down and never comes back, so a label for it could not render. */
   .disk-cell-state::before,
-  .disk-cell-smart::before,
   .disk-cell-numeric::before {
     min-width: 5rem;
     color: var(--label);

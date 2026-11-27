@@ -3,6 +3,7 @@ import type { Inventory, SeriesPoint, Summary } from "../api";
 import { formatBytes } from "../bytes";
 import { useTranslation } from "../i18n";
 import { latestValue, memorySnapshot, storageSnapshot } from "../overview";
+import type { CPUTemperatureReading } from "./CPUCorePanel";
 import Sparkline from "./Sparkline";
 
 // The band of constants: one container with cells divided by lines, not five
@@ -42,13 +43,15 @@ function BandCell({ label, value, context, points, ceiling, tone }: CellProps) {
 interface Props {
   summary: Summary;
   disks: Inventory | null;
-  // The CPU package reading the processor panel already resolved, so the band
-  // and the panel can never disagree about which sensor is the package one.
-  temperatureCelsius: number | null;
+  // The whole reading the processor panel already resolved, not just its
+  // number: a host with no package sensor falls back to its hottest core, and
+  // the band has to say so for the same reason the panel does. Passing only
+  // the value would let the band print a core reading as the package one.
+  temperature: CPUTemperatureReading | null;
   powerWatts: number | null;
 }
 
-export default function ConstantsBand({ summary, disks, temperatureCelsius, powerWatts }: Props) {
+export default function ConstantsBand({ summary, disks, temperature, powerWatts }: Props) {
   const { t, intlTag } = useTranslation();
   const percent = new Intl.NumberFormat(intlTag, { style: "percent", maximumFractionDigits: 1 });
   const decimal = new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 });
@@ -66,8 +69,17 @@ export default function ConstantsBand({ summary, disks, temperatureCelsius, powe
     return values.length === 0 ? null : t.bandPeak(rate(Math.max(...values)));
   };
 
+  // A hottest-core fallback is tagged here exactly as the processor panel tags
+  // it. Printing it bare would state "the package runs at 60 °C", which is not
+  // what the host reported.
+  const temperatureReadout = temperature === null
+    ? null
+    : temperature.package
+      ? t.temperatureCelsius(decimal.format(temperature.value))
+      : t.bandTemperatureHottestCore(decimal.format(temperature.value));
+
   const processorContext = [
-    temperatureCelsius === null ? null : t.temperatureCelsius(decimal.format(temperatureCelsius)),
+    temperatureReadout,
     powerWatts === null ? null : t.cpuPowerWatts(decimal.format(powerWatts)),
   ].filter((entry): entry is string => entry !== null);
 

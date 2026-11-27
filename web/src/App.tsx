@@ -501,9 +501,11 @@ export default function App() {
       {error && <div className="error-panel">{t.hubUnreachable(error)}</div>}
 
       {/* A power cut has a countdown attached, and everything else on this
-          page is moot if the machine is about to go down. So the UPS keeps one
-          fixed slot above the dashboard and follows the operator into the
-          event and log views. It renders nothing on a host without a UPS. */}
+          page is moot if the machine is about to go down, so it keeps a fixed
+          slot above the dashboard and follows the operator into the event and
+          log views. This full strip is the alarm, not the readout: it renders
+          nothing on a host with no UPS AND nothing while that UPS is on
+          mains. The steady-state reading lives in the host bar's PowerChip. */}
       <PowerPanel inventory={ups} />
 
       {view === "events" ? (
@@ -554,7 +556,7 @@ export default function App() {
           <ConstantsBand
             summary={summary}
             disks={disks}
-            temperatureCelsius={cpuTemperature(summary.temperatures)?.value ?? null}
+            temperature={cpuTemperature(summary.temperatures)}
             powerWatts={powerWatts(hardwareIdentity?.items.find((item) => item.id === "system")?.attrs.cpu_power_watts)}
           />
 

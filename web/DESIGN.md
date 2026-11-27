@@ -237,6 +237,14 @@ far" with no total would be a guess dressed as a measurement.
 `files_checked` is deliberately not read as a total: it counts work already
 done.
 
+The pinned running card carries the same provenance a finished row does — the
+trigger, and `next_expected` / `signal` / `peer_host_id` through the shared
+`JobContext` — because it is the row the operator came for: a replication in
+progress that does not name its peer host answers the wrong question. Finished
+rows repeat their trigger **inside** the disclosure as well as in the summary,
+because the summary's `.job-row-trigger` is hidden below `760px`; a field the
+hub sends every ten seconds must not become unreachable on the primary client.
+
 ### Updates
 
 [`PackageUpdatePanel`](src/components/PackageUpdatePanel.tsx) renders one row
@@ -407,6 +415,21 @@ Use explicit, dignified empty states:
   must not grow an empty shares panel. This is the opposite call from
   `InventoryPanel`, whose subjects (disks, packages) exist on every host, so an
   empty list there is news.
+- A panel whose subject always exists still draws **no count badge** until its
+  inventory arrives. `DiskArrayPanel` and `PackageUpdatePanel` render the
+  `.inventory-count` chip only when `inventory` is non-null: a `0` beside "this
+  inventory has not been reported yet" reads as "no pending updates" and "no
+  disks" — facts the hub never sent — and the badge is what an operator scans,
+  not the sentence under it. Once the agent reports, an empty inventory does
+  show `0`, because that zero is a measurement.
+- A reading the host did not take under the name it is filed under must carry
+  the qualifier wherever it appears, not only where it was resolved.
+  `cpuTemperature` falls back to the hottest core when no `package*` sensor
+  exists, so `ConstantsBand` is handed the whole `CPUTemperatureReading` rather
+  than its number and prints `bandTemperatureHottestCore` when `package` is
+  false. The band sits directly above the processor panel, which tags the same
+  figure; a bare "60 °C" there would both contradict the panel and assert a
+  package measurement that does not exist.
 - `Number("")` is `0`, so every inventory attribute must be rejected as absent
   before it is parsed. Inventory attrs are strings that the collectors omit
   when they have no value, and a size, a charge, or a runtime that silently
@@ -558,12 +581,19 @@ The current baseline comes from [`index.css`](src/index.css),
   `2rem` icon button is a `32px` target under a thumb. Only the hit area grows;
   the drawn glyph keeps its size.
 - Close controls draw their X from `.icon-button`'s two rotated pseudo-elements.
-  No interactive control carries a unicode glyph as its icon. Disclosures get that height
-  from padding rather than from `display: flex`, so the browser keeps drawing
-  their marker.
+  No interactive control carries a unicode glyph as its icon. Disclosures inside
+  a panel get that `44px` height from padding rather than from `display: flex`,
+  so the browser keeps drawing their native marker.
 - A whole-row disclosure needs its own visible focus ring. `.event-row > details
   > summary` uses an inset `:focus-visible` outline so the ring is not clipped
   by the row's own border.
+- A whole-row disclosure must also **say that it opens**. `.event-row > details >
+  summary` is a `display: flex` row, so its native marker would sit before five
+  flex items and break the column alignment; it is suppressed and the row draws
+  its own chevron in `::after` from two rotated borders, rotating on `[open]`.
+  Dropping the marker without replacing it is a defect, not a simplification:
+  `cursor` and `:hover` do not exist on touch, and ADR-0014 makes the phone the
+  primary client, so the log-viewer link behind the row would be undiscoverable.
 - Do not rely on color alone for important state. Pair severity color with text,
   counts, labels, or panel copy.
 

@@ -327,6 +327,7 @@ export interface Dictionary {
   bandNetworkOutLabel: string;
   bandStorageLabel: string;
   bandPeak: (value: string) => string;
+  bandTemperatureHottestCore: (temperature: string) => string;
   bandSwapUsed: (used: string, total: string) => string;
   bandStorageDevices: (count: number) => string;
   bandSmartPassed: (count: number) => string;

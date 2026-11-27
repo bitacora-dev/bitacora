@@ -211,7 +211,9 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
     <article className="control-panel package-update-panel">
       <div className="panel-title-row"><div><h2>{t.updatesHeading}</h2>{inventory && <p className={inventoryStale ? "inventory-reported inventory-reported--stale" : "inventory-reported"}>{reportedAge === null
         ? t.inventoryReportedAt(reportedInstant)
-        : <time dateTime={reportedAt?.toISOString()} title={reportedInstant} aria-label={t.inventoryReportedAria(reportedInstant)}>{t.inventoryAge(reportedAge, inventoryStale)}</time>}</p>}</div><span className="inventory-count">{packageItems.length}</span></div>
+        : <time dateTime={reportedAt?.toISOString()} title={reportedInstant} aria-label={t.inventoryReportedAria(reportedInstant)}>{t.inventoryAge(reportedAge, inventoryStale)}</time>}</p>}</div>{/* No badge until the agent reports: a "0" beside "not reported
+        yet" would read as "nothing pending", which is a fact the hub never
+        sent. Absent is not zero. */}{inventory && <span className="inventory-count">{packageItems.length}</span>}</div>
       {!inventory ? <p className="inventory-empty">{t.inventoryPending}</p> : packageItems.length === 0 ? <p className="inventory-empty">{t.updatesEmpty}</p> : <PackageItemList items={packageItems} t={t} />}
       {notAutomatic.length > 0 && <section className="package-not-automatic" aria-labelledby="package-not-automatic-heading"><h3 id="package-not-automatic-heading">{t.updatesNotAutomaticHeading}</h3><PackageItemList items={notAutomatic} t={t} /></section>}
       {age !== null && <p className={stale ? "cache-age cache-age--stale" : "cache-age"}>{t.cacheAge(new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 }).format(age / 86400), stale)}</p>}

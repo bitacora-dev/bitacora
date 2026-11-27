@@ -87,6 +87,22 @@ export default function JobsList({ jobs, onShowLogs, maxRows }: Props) {
 
 // The run in progress, pinned above the history with its own treatment.
 //
+// The provenance the hub sends beside a run: when it is next due, the signal
+// that stopped it and the peer it replicated with. Shared so a running job and
+// a finished one can never disagree about which of them is worth showing.
+function JobContext({ job }: { job: Job }) {
+  const { t, intlTag } = useTranslation();
+  if (!hasInstant(job.next_expected) && !job.signal && !job.peer_host_id) return null;
+
+  return (
+    <p className="job-context">
+      {hasInstant(job.next_expected) && <span>{t.jobNextExpected(new Date(job.next_expected).toLocaleString(intlTag))}</span>}
+      {job.signal && <span>{t.jobSignal(job.signal)}</span>}
+      {job.peer_host_id && <span>{t.jobPeer(job.peer_host_id)}</span>}
+    </p>
+  );
+}
+
 // The progress bar is drawn only when the extractor reported both a done and
 // a total figure (overview.jobProgressRatio). Most tools report neither, and
 // a bar derived from "files transferred so far" with no total would be a
@@ -105,6 +121,11 @@ function RunningJob({ job, onShowLogs }: { job: Job; onShowLogs?: (job: Job, tar
         <span className="job-status job-status--running">{t.jobStatus.running}</span>
         <RowInstant instant={job.started_at} />
       </div>
+      {/* What launched this run, and who it is talking to. The finished rows
+          carry both; dropping them from the one row an operator actually came
+          for would hide which peer a replication in progress is writing to. */}
+      <p className="job-running-trigger">{job.trigger ? t.jobTrigger(job.trigger) : t.jobTriggerUnreported}</p>
+      <JobContext job={job} />
       {progress === null ? (
         <p className="job-running-note">{t.jobProgressUnknown}</p>
       ) : (
@@ -152,13 +173,12 @@ function JobRow({ job, onShowLogs }: { job: Job; onShowLogs?: (job: Job, target:
         </summary>
         <div className="event-row-body">
           <p className="event-row-source">{t.jobExitStatus(job.exit_code, job.duration_seconds)}</p>
-          {(hasInstant(job.next_expected) || job.signal || job.peer_host_id) && (
-            <p className="job-context">
-              {hasInstant(job.next_expected) && <span>{t.jobNextExpected(new Date(job.next_expected).toLocaleString(intlTag))}</span>}
-              {job.signal && <span>{t.jobSignal(job.signal)}</span>}
-              {job.peer_host_id && <span>{t.jobPeer(job.peer_host_id)}</span>}
-            </p>
-          )}
+          {/* Repeated inside the disclosure because the summary's own trigger
+              span is hidden below 760 px, and ADR-0014 makes the phone the
+              primary client: "what launched this run" has to stay reachable
+              there, not only on a desktop. */}
+          <p className="job-row-trigger-detail">{job.trigger ? t.jobTrigger(job.trigger) : t.jobTriggerUnreported}</p>
+          <JobContext job={job} />
           {stats.length > 0 && (
             <dl>
               {stats.map(({ key, value }) => (

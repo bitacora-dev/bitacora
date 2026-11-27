@@ -97,7 +97,10 @@ export default function AccessTunnelsPanel({ inventory }: Props) {
                   <strong>{tunnel.name}</strong>
                   <span className="inventory-badge">{t.tunnelProtocol(tunnel.protocol)}</span>
                 </th>
-                <td className="tunnel-cell-state" data-label={t.tunnelTableHeading.state}>
+                {/* No `data-label` here: stacked, this cell reads "Active",
+                    "Inactive" or "Not reported", which names itself. Only the
+                    handshake cell, a bare relative age, needs its label. */}
+                <td className="tunnel-cell-state">
                   <span className={tunnelStateClass(tunnel.active)}>
                     {tunnel.active === true ? t.tunnelActive : tunnel.active === false ? t.tunnelInactive : t.tunnelStateUnreported}
                   </span>

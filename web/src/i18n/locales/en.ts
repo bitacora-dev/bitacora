@@ -360,6 +360,7 @@ export const en: Dictionary = {
   bandSmartFailed: (count) => (count === 1 ? "1 SMART failure" : `${count} SMART failures`),
   bandSmartUnreported: (count) => (count === 1 ? "1 with no SMART verdict" : `${count} with no SMART verdict`),
   bandArraysDegraded: (count) => (count === 1 ? "1 degraded array" : `${count} degraded arrays`),
+  bandTemperatureHottestCore: (temperature) => `${temperature} °C on the hottest core`,
   bandNoContext: "No context reported",
   bandStorageUnreported: "The agent has not reported any disks yet",
   hostBarUpdatesPending: (count) => (count === 0 ? "No pending updates" : count === 1 ? "1 pending update" : `${count} pending updates`),

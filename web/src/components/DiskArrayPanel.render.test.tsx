@@ -25,4 +25,19 @@ describe("DiskArrayPanel", () => {
 
     expect(html).not.toContain("Casi lleno");
   });
+
+  it("shows no disk count at all until the agent reports the inventory", () => {
+    // Absent is not zero: a "0" badge beside "not reported yet" would read as
+    // "this machine has no disks", which is a fact the hub never sent.
+    const html = renderToStaticMarkup(<LocaleProvider><DiskArrayPanel inventory={null} /></LocaleProvider>);
+
+    expect(html).not.toContain("inventory-count");
+    expect(html).toContain("Este inventario todavía no ha sido reportado");
+  });
+
+  it("does show a zero count once the agent reports an empty inventory", () => {
+    const html = renderToStaticMarkup(<LocaleProvider><DiskArrayPanel inventory={inventory([])} /></LocaleProvider>);
+
+    expect(html).toContain('<span class="inventory-count">0</span>');
+  });
 });

@@ -614,7 +614,16 @@ export default function App() {
                     <button type="button" className="link-button" onClick={() => goToView("events")}>{t.eventsSeeAll}</button>
                   </div>
                 </div>
-                <EventsList events={summary.events} maxRows={OVERVIEW_EVENT_ROWS} highlightNew onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
+                {/* Keyed by the host the summary itself came from, so the
+                    list remounts exactly when its events change source. The
+                    arrival highlight remembers which ids it has already
+                    drawn; without the key the whole of the new host's list
+                    would be "new", which would mean "you switched host", not
+                    "something happened". The selected `hostID` is the wrong
+                    key: it changes one render before the summary does, so the
+                    list would remount while still holding the previous host's
+                    events and then mark every row of the arriving host. */}
+                <EventsList key={summary.host_id} events={summary.events} maxRows={OVERVIEW_EVENT_ROWS} highlightNew onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
               </article>
             </section>
           </div>

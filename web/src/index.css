@@ -612,9 +612,16 @@ body {
 
 
 /* A core the kernel took offline is dimmed and labelled, never hidden: a
-   missing row reads as a CPU that never existed. */
-.cpu-core-row--offline {
-  opacity: 0.45;
+   missing row reads as a CPU that never existed.
+   The dimming is on the empty meter track, not on the row: an `opacity` over
+   the whole row multiplied into the text too and dropped every word in it
+   below 4.5:1 on `--panel-strong` (measured: "Apagada" 3.47:1, the kind and
+   the thread value 2.09:1) — including the two words that carry the offline
+   state for a reader who cannot use the colour. The words keep their
+   declared colours, which already say "off" quietly: `--label` for the kind
+   and the thread value, `--gold` for the state tag. */
+.cpu-core-row--offline .cpu-meter {
+  opacity: 0.4;
 }
 
 .cpu-core-row-label {
@@ -716,15 +723,13 @@ body {
   height: 0.85rem;
 }
 
-/* An offline thread inside an otherwise running core needs the dim treatment
-   on its own; a fully offline core already carries it on the row, and
-   stacking both made the empty track disappear altogether. */
+/* An offline thread inside an otherwise running core carries the dim
+   treatment on its own track. A fully offline core dims every track in the
+   row instead (see `.cpu-core-row--offline .cpu-meter` above), so the two
+   rules target the same element at the same strength and never stack into a
+   track that has disappeared altogether. */
 .cpu-meter--offline {
   opacity: 0.4;
-}
-
-.cpu-core-row--offline .cpu-meter--offline {
-  opacity: 1;
 }
 
 /* The width transition interpolates between two measured samples so the bar
@@ -2413,10 +2418,11 @@ body {
 
 .package-row-details { font-size: 0.74rem; }
 
+/* The native marker stays: this is the one disclosure on the page with no
+   chevron of its own, and without it nothing says the row opens. */
 .package-row-details summary {
   color: var(--cyan);
   cursor: pointer;
-  list-style: none;
 }
 
 .package-row-details dl {
@@ -2816,8 +2822,6 @@ body {
   .disk-table th.disk-cell-smart,
   .disk-table td.disk-cell-smart,
   .disk-table thead th:nth-child(4),
-  .tunnel-cell-peer,
-  .tunnel-table thead th:nth-child(3),
   .job-row-trigger,
   .job-row-duration { display: none; }
 
@@ -2851,12 +2855,18 @@ body {
     padding-block: 0.7rem;
   }
 
+  /* The shells the operator meets before the dashboard count too: the host
+     selector on the no-host screen and the name field behind "add server"
+     are the phone's way in, so they are held to the same floor. There is no
+     exemption. */
   .primary-button,
   .secondary-button,
   .host-bar-select,
   .cpu-core-controls select,
   .events-history-filters select,
-  .events-history-filters input { min-height: 44px; }
+  .events-history-filters input,
+  .auth-panel select,
+  .auth-panel input { min-height: 44px; }
 
   /* Four 44 px links stacked three deep ate a third of a phone screen
      before the first number. Two by two halves that and keeps every target
@@ -2971,11 +2981,7 @@ body {
 
   .tunnel-table-row td { padding-inline: 0; }
 
-  /* Re-stated inside the stacked mode: the `display: block` above outranks
-     the plain class that hid the peer at 760 px and would otherwise bring
-     the column back on the narrowest screens. */
-  .tunnel-table-row td.tunnel-cell-peer { display: none; }
-
+  .tunnel-cell-peer::before,
   .tunnel-cell-handshake::before {
     min-width: 5rem;
     color: var(--label);

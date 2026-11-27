@@ -88,7 +88,7 @@ fold at 1440×900 has broken it.
 |---|---|---|
 | `>= 1181px` | Three columns: system, services, storage-and-operations. | The default. Each column is a flex column; `align-items: start` sits on the grid so a short column is not stretched to the tallest one's height. |
 | `761px`–`1180px` | Two columns; the third spans the full width underneath. | Storage and operations is the column that moves, because disk rows and job rows are the widest content on the page. The band keeps five cells with a smaller context line rather than wrapping to four lines. |
-| `<= 760px` | One column. Band at two cells, containers at two, cores at one. | Secondary table columns (the SMART verdict, the job trigger, the job duration, the tunnel peer) are hidden, and every interactive control is at least `44px` tall. ADR-0014 makes the phone the primary client, so this is a floor, not a preference. |
+| `<= 760px` | One column. Band at two cells, containers at two, cores at one. | Secondary table columns (the SMART verdict, the job trigger, the job duration) are hidden, and every interactive control is at least `44px` tall. ADR-0014 makes the phone the primary client, so this is a floor, not a preference. A column may only be hidden when the fact it carries reaches the reader another way: the SMART verdict survives in the disk state cell, and the job trigger and duration are repeated inside the row's disclosure. The tunnel peer and endpoint have no such second home, so they stay on screen and wrap instead. |
 | `< 560px` | The disks and tunnels tables stack into labelled cards. | A table with no header row has to name each cell: `data-label` carries the heading into the stacked cell. |
 | `>= 1920px` | Wider plots, a four-column container grid, larger band numbers. | Widen plots and data grids; do not turn prose into long horizontal ribbons. |
 | Tall portrait, `900px+` wide and `1500px+` high in portrait orientation (including `1080×1920`) | Columns stack, the band keeps five cells, charts use `clamp(16rem, 18vh, 20rem)`. | Preserve long-form signal reading without forcing narrow landscape charts. |
@@ -332,7 +332,13 @@ the page cannot observe.
   highlighted on the first paint**: every row would qualify, and a page that
   flashes its whole contents on load has said nothing. Only the live overview
   passes `highlightNew`; in the history view the whole set changes on a page
-  turn, and twenty rows flashing would mean "you paged".
+  turn, and twenty rows flashing would mean "you paged". For the same reason
+  the overview's list is keyed by `summary.host_id`: the seen-id set lives in
+  a ref, and without a remount every row of the host you just switched to
+  would arrive as new, which would mean "you switched host". Key it by the
+  host the data came from, never by the selected `hostID` — that one changes a
+  render before the summary does, so the list would remount holding the old
+  host's events and then flash the whole of the new host's list anyway.
 - `prefers-reduced-motion: reduce` removes all of it: transitions, the beat,
   and the arrival highlight.
 
@@ -550,7 +556,12 @@ shape of a hardware dashboard rather than a catalogue. Its contract:
   thread is dimmed, labelled in words, and keeps its empty track; it is never
   dropped from the list and never drawn as 0 %. A core whose threads are all
   offline stays in the list even after its last samples age out of retention
-  (the topology still names it), dimmed as a whole row. Rows are labelled by
+  (the topology still names it). The dimming is on the empty meter tracks, not
+  on the row: an `opacity` over the row multiplies into its text as well, and
+  measured on `--panel-strong` that dropped every word in the row — including
+  the "offline" tag itself — under `4.5:1`. The words say "off" through their
+  own colours instead (`--label` for the kind and the thread value, `--gold`
+  for the tag). Rows are labelled by
   their lowest CPU number and ordered by it, never by core id, which the agent
   may have reconstructed for an offline core.
 - Only the refresh line re-renders every second (its own component); the rows,
@@ -572,7 +583,11 @@ The current baseline comes from [`index.css`](src/index.css),
   success or failure through a polite live region.
 - Images need meaningful alt text. The pairing QR uses `alt={t.qrAlt}`.
 - Text and borders must keep contrast on `--bg`, `--panel`, and
-  `--panel-strong`.
+  `--panel-strong`. Measure the **rendered** colour, not the declared one: an
+  `opacity` on any ancestor composites the text toward its background and is
+  invisible to a sweep that reads `getComputedStyle().color` alone. Dim a
+  state by choosing a dimmer colour, or by putting the `opacity` on the
+  decoration (a bar, a track) rather than on a container that holds words.
 - Interactive controls need stable hit areas. Existing primary buttons are at
   least `3rem` tall; icon buttons are `2rem` square on a pointer.
   Below `760px` every interactive control — link buttons, selects, inputs,
@@ -583,7 +598,8 @@ The current baseline comes from [`index.css`](src/index.css),
 - Close controls draw their X from `.icon-button`'s two rotated pseudo-elements.
   No interactive control carries a unicode glyph as its icon. Disclosures inside
   a panel get that `44px` height from padding rather than from `display: flex`,
-  so the browser keeps drawing their native marker.
+  so the browser keeps drawing their native marker. Do not add `list-style:
+  none` to such a summary: it removes the only thing saying the row opens.
 - A whole-row disclosure needs its own visible focus ring. `.event-row > details
   > summary` uses an inset `:focus-visible` outline so the ring is not clipped
   by the row's own border.

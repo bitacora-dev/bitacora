@@ -210,6 +210,11 @@ describe("disk state", () => {
     expect(disk.usage && isNearlyFull(disk.usage)).toBe(true);
   });
 
+  it("warns from 85 %, and not below it", () => {
+    expect(isNearlyFull({ capacity: 100, used: 85, available: 15, ratio: 0.85 })).toBe(true);
+    expect(isNearlyFull({ capacity: 100, used: 84, available: 16, ratio: 0.84 })).toBe(false);
+  });
+
   it("ignores a non-numeric temperature instead of showing NaN", () => {
     expect(groupDisks([item("/", { device: "/dev/sda1", temperature_celsius: "n/a" })])[0].disks[0].temperatureCelsius).toBeNull();
   });

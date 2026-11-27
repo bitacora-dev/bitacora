@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Bitácora: panel denso en vivo</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<!--
+THESIS: one screen answers "is my server OK?" for every subsystem at once; refuses the tall single-signal panels that force scrolling.
+OWN-WORLD: Bitacora's existing control-room tokens (near-black, blue-gray panels, cyan live signal, gold emphasis, green/red state), Inter, tabular numerals, 1px lines, 8px corners.
+STORY: the operator sees vitals move, scans three columns (system, services, storage and operations), and spots the one thing that is off.
+FIRST VIEWPORT: host bar with freshness dot; vitals band; three dense columns of row-based panels.
+FORM: extension of the established dashboard; all figures are synthetic demo data.
+-->
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+body{margin:0;background:#07090d}
+a{color:#38bdf8}a:hover{color:#7dd3fc}
+.bt{--bg:#07090d;--panel:#0d131c;--strong:#111a26;--line:#253142;--soft:#172231;--text:#eef6ff;--muted:#9aaabd;--dim:#7d8ea5;--cyan:#38bdf8;--gold:#f8d66d;--green:#4ade80;--red:#fb7185;
+ background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:12.5px;line-height:1.35;font-variant-numeric:tabular-nums;padding:14px 16px 28px;min-height:100vh;box-sizing:border-box}
+.bt *{box-sizing:border-box}
+.bt ::selection{background:rgb(248 214 109 / .28)}
+.bt a:focus-visible{outline:2px solid var(--cyan);outline-offset:2px;border-radius:3px}
+.bt.today .pend{display:none}
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;padding:2px 2px 12px}
+.brand{font-size:19px;font-weight:700;letter-spacing:-.01em}
+.host{font-size:15px;font-weight:600}
+.meta{color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 16px;align-items:center}
+.meta b{color:var(--text);font-weight:500}
+.nav{margin-left:auto;display:flex;flex-wrap:wrap;gap:4px 16px}
+.nav a{text-decoration:none;padding:6px 0}
+.live{display:inline-flex;align-items:center;gap:7px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green);flex:none}
+.dot.pa{animation:ba .9s cubic-bezier(.16,1,.3,1)}
+.dot.pb{animation:bb .9s cubic-bezier(.16,1,.3,1)}
+@keyframes ba{from{box-shadow:0 0 0 0 rgb(74 222 128 / .7)}to{box-shadow:0 0 0 9px rgb(74 222 128 / 0)}}
+@keyframes bb{from{box-shadow:0 0 0 0 rgb(74 222 128 / .7)}to{box-shadow:0 0 0 9px rgb(74 222 128 / 0)}}
+.tag{font-size:11px;font-weight:600;color:var(--gold);border:1px solid rgb(248 214 109 / .45);border-radius:4px;padding:0 5px;line-height:15px;white-space:nowrap}
+.vitals{display:flex;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden;margin-bottom:12px}
+.vital{flex:1 1 200px;position:relative;padding:10px 14px 12px;border-right:1px solid var(--soft);border-bottom:1px solid var(--soft);min-height:84px;overflow:hidden}
+.vital h3{margin:0;font-size:11px;font-weight:500;color:var(--muted);display:flex;gap:6px;align-items:center}
+.vital .val{font-size:24px;font-weight:600;letter-spacing:-.02em;margin-top:2px;position:relative}
+.vital .val small{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:0}
+.vital .sub{color:var(--muted);font-size:11.5px;position:relative}
+.vital svg{position:absolute;left:0;right:0;bottom:0;width:100%;height:46px;opacity:.55}
+.cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}
+.col{display:flex;flex-direction:column;gap:12px;min-width:0}
+.p{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:11px 13px 12px;min-width:0}
+.ph{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.ph h2{margin:0;font-size:13px;font-weight:650}
+.ph .r{margin-left:auto;color:var(--muted);text-align:right}
+.ph .r b{color:var(--text);font-weight:600;font-size:14px}
+.note{color:var(--muted);font-size:11.5px}
+.trk{display:block;height:6px;border-radius:3px;background:var(--soft);overflow:hidden;min-width:0}
+.trk i{display:block;height:100%;border-radius:3px;background:var(--cyan);transition:width .9s cubic-bezier(.16,1,.3,1),background-color .4s}
+.trk i.hot{background:var(--red)}
+.trk i.gold{background:var(--gold)}
+.trk i.green{background:var(--green)}
+.cores{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 18px}
+.core{display:grid;grid-template-columns:62px minmax(0,1fr) 38px;gap:8px;align-items:center;height:19px}
+.core .k{color:var(--muted);font-size:11px;white-space:nowrap}
+.core .k b{color:var(--text);font-weight:500}
+.core .n{text-align:right;font-size:11.5px}
+.core .pair{display:flex;flex-direction:column;gap:2px}
+.core .pair .trk{height:4px}
+.chart{display:block;width:100%;height:64px;margin-top:8px}
+.chart.tall{height:96px;margin-top:4px}
+.axis{display:flex;justify-content:space-between;color:var(--dim);font-size:11px;margin-top:2px}
+.kv{display:flex;flex-wrap:wrap;gap:3px 16px;color:var(--muted)}
+.kv b{color:var(--text);font-weight:500}
+.sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px}
+.row{display:grid;gap:8px;align-items:center;min-height:22px;border-top:1px solid var(--soft);padding:2px 0}
+.row.h{border-top:0;color:var(--dim);font-size:11px;min-height:18px}
+.row .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+.row .mu{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .num{text-align:right;white-space:nowrap}
+.st{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.st::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
+.st.idle::before{background:transparent;border:1px solid var(--dim)}
+.st.off::before{background:var(--red);border-radius:1px}
+.st.warn::before{background:var(--gold)}
+.st.idle,.st.off{color:var(--muted)}
+.disk{grid-template-columns:minmax(0,1.2fr) 82px 42px 78px minmax(40px,1fr) 38px}
+.share{grid-template-columns:minmax(0,1.3fr) 44px 70px 74px}
+.vpn{grid-template-columns:minmax(0,1.3fr) 82px minmax(0,1fr)}
+.job{grid-template-columns:48px minmax(0,1.4fr) 62px 84px 64px}
+.ev{grid-template-columns:58px 52px minmax(0,1fr);align-items:baseline}
+.ev.na{animation:ea 1.2s cubic-bezier(.16,1,.3,1)}
+.ev.nb{animation:eb 1.2s cubic-bezier(.16,1,.3,1)}
+@keyframes ea{from{background:rgb(56 189 248 / .16)}to{background:transparent}}
+@keyframes eb{from{background:rgb(56 189 248 / .16)}to{background:transparent}}
+.sev-info{color:var(--muted)}.sev-warn{color:var(--gold)}.sev-err{color:var(--red)}
+.ok{color:var(--green)}.bad{color:var(--red)}.wr{color:var(--gold)}
+.conts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 14px}
+.cont{border-top:1px solid var(--soft);padding:4px 0 5px;min-width:0}
+.cont .l1{display:flex;align-items:center;gap:6px}
+.cont .l1 span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+.cont .l1::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
+.cont.off .l1::before{background:var(--red);border-radius:1px}
+.cont.off{color:var(--muted)}
+.cont .l2{display:grid;grid-template-columns:44px minmax(0,1fr) 58px;gap:6px;align-items:center;color:var(--muted);font-size:11px;margin-top:1px}
+.cont .l2 .trk{height:3px}
+.cont .l2 em{font-style:normal;text-align:right}
+.run{background:var(--strong);border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:6px}
+.run .t{display:flex;gap:8px;align-items:baseline;margin-bottom:6px}
+.run .t b{font-weight:600}
+.run .t span{margin-left:auto;color:var(--muted);white-space:nowrap}
+.run .trk{height:7px}
+.run .trk i{background:linear-gradient(90deg,var(--cyan),var(--cyan));position:relative}
+.duo{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px}
+.big{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.io{display:inline-flex;align-items:center;gap:5px}
+.io svg{width:10px;height:10px;flex:none}
+.dz{border-top:1px solid var(--soft)}
+.dz>summary{list-style:none;cursor:pointer;display:block}
+.dz>summary::-webkit-details-marker{display:none}
+.dz>summary .row{border-top:0}
+.dz>summary:hover{background:rgb(255 255 255 / .035)}
+.dz>summary:focus-visible{outline:2px solid var(--cyan);outline-offset:-2px;border-radius:3px}
+.dz[open]>summary{background:var(--strong)}
+.dt{padding:6px 8px 10px;background:var(--strong);color:var(--muted);font-size:11.5px;display:flex;flex-direction:column;gap:4px}
+.dt b{color:var(--text);font-weight:500}
+.dt code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.sch{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) 92px 78px}
+.upd{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) 104px;min-height:38px}
+.upd .ver{display:flex;flex-direction:column;gap:3px;min-width:0}
+.upd .ver .trk{height:4px}
+.btn{font:inherit;font-weight:600;font-size:12px;color:var(--bg);background:var(--cyan);border:1px solid var(--cyan);border-radius:6px;min-height:30px;padding:0 10px;cursor:pointer;white-space:nowrap;transition:background-color .18s,opacity .18s}
+.btn:hover{background:#7dd3fc}
+.btn:active{background:#0ea5e9}
+.btn:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.btn:disabled{background:transparent;color:var(--muted);border-color:var(--line);cursor:not-allowed}
+.btn.ghost{background:transparent;color:var(--cyan)}
+.btn.ghost:hover{background:rgb(56 189 248 / .12)}
+.btn.ghost:disabled{color:var(--muted);background:transparent}
+@media (max-width:760px){.bt{padding:10px 10px 24px}.vital{flex:1 1 45%;min-height:78px;padding:9px 11px 10px}.vital .val{font-size:20px}.btn{min-height:44px}.upd{grid-template-columns:minmax(0,1fr) 112px}.upd .ver{grid-column:1;grid-row:2}.upd .btn{grid-row:1 / span 2;grid-column:2}.nav a{padding:12px 0}.share{grid-template-columns:minmax(0,1.3fr) 40px 64px 40px}}
+@media (max-width:1180px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}.col:nth-child(3){grid-column:1 / -1}}
+@media (max-width:760px){.cols{grid-template-columns:minmax(0,1fr)}.col:nth-child(3){grid-column:auto}.conts{grid-template-columns:repeat(2,minmax(0,1fr))}.cores{grid-template-columns:minmax(0,1fr)}.nav{margin-left:0}.disk{grid-template-columns:minmax(0,1.2fr) 82px 42px minmax(40px,1fr) 38px}.disk .smart{display:none}.job{grid-template-columns:48px minmax(0,1.4fr) 84px}.job .tool,.job .dur{display:none}.sch{grid-template-columns:minmax(0,1.3fr) 92px 78px}.sch .cad{display:none}.dz>summary .row{min-height:44px}}
+@media (prefers-reduced-motion:reduce){.trk i{transition:none}.dot.pa,.dot.pb,.ev.na,.ev.nb{animation:none}}
+</style>
+</helmet>
+<div class="bt {{rootCls}}">
+
+<header class="top">
+<span class="brand">Bitácora</span>
+<span class="host">MediaServer</span>
+<span class="meta">
+<span class="live"><i class="dot {{pulseCls}}"></i>En vivo · muestra de hace <b>{{age}}</b></span>
+<span class="pend">En línea <b>6 d 21 h</b> <span class="tag">colector nuevo</span></span>
+<span>SAI en red eléctrica · <b>100 %</b> · 38 min de autonomía</span>
+<span>Actualizaciones <b>{{updCount}}</b></span>
+</span>
+<nav class="nav" aria-label="Secciones"><a href="#sistema">Sistema</a><a href="#servicios">Servicios</a><a href="#almacenamiento">Almacenamiento</a></nav>
+</header>
+
+<section class="vitals" aria-label="Constantes del servidor">
+<div class="vital"><h3>Procesador</h3><div class="val">{{cpuTotal}} <small>%</small></div><div class="sub">{{temp}} °C · {{watts}} W</div>
+<svg viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true"><path d="{{cpuSpark}}" style="fill: rgb(56 189 248 / .22); stroke: #38bdf8; stroke-width: 1.4; vector-effect: non-scaling-stroke"></path></svg></div>
+<div class="vital"><h3>Memoria</h3><div class="val">{{memUsed}} <small>de 62,7 GiB</small></div><div class="sub">{{memPct}} % en uso · swap 0 B</div>
+<svg viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true"><path d="{{memSpark}}" style="fill: rgb(248 214 109 / .18); stroke: #f8d66d; stroke-width: 1.4; vector-effect: non-scaling-stroke"></path></svg></div>
+<div class="vital"><h3>Red, entrada</h3><div class="val">{{rxNow}} <small>{{rxUnit}}</small></div><div class="sub">bond0 · pico {{rxPeak}}</div>
+<svg viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true"><path d="{{rxSpark}}" style="fill: rgb(56 189 248 / .22); stroke: #38bdf8; stroke-width: 1.4; vector-effect: non-scaling-stroke"></path></svg></div>
+<div class="vital"><h3>Red, salida</h3><div class="val">{{txNow}} <small>{{txUnit}}</small></div><div class="sub">bond0 · pico {{txPeak}}</div>
+<svg viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true"><path d="{{txSpark}}" style="fill: rgb(74 222 128 / .18); stroke: #4ade80; stroke-width: 1.4; vector-effect: non-scaling-stroke"></path></svg></div>
+<div class="vital pend"><h3>Disco, E/S <span class="tag">colector nuevo</span></h3><div class="val">{{ioRead}} <small>MB/s lectura</small></div><div class="sub">{{ioWrite}} MB/s escritura</div>
+<svg viewBox="0 0 300 46" preserveAspectRatio="none" aria-hidden="true"><path d="{{ioSpark}}" style="fill: rgb(248 214 109 / .18); stroke: #f8d66d; stroke-width: 1.4; vector-effect: non-scaling-stroke"></path></svg></div>
+<div class="vital"><h3>Almacenamiento</h3><div class="val">149 <small>de 262 TB</small></div><div class="sub">57 % · 16 discos, todos con SMART correcto</div></div>
+</section>
+
+<div class="cols">
+
+<div class="col" id="sistema">
+
+<section class="p">
+<div class="ph"><h2>Procesador</h2><span class="note">Intel Core i5-13600K · 14 núcleos, 20 hilos</span><span class="r"><b>{{cpuTotal}} %</b></span></div>
+<span class="trk" style="height: 8px; margin-bottom: 10px"><i style="width: {{cpuTotalW}}"></i></span>
+<div class="cores">
+<sc-for list="{{cores}}" as="c" hint-placeholder-count="14">
+<div class="core"><span class="k"><b>{{c.name}}</b> {{c.kind}}</span>
+<span class="pair"><sc-for list="{{c.threads}}" as="t" hint-placeholder-count="1"><span class="trk"><i class="{{t.cls}}" style="width: {{t.w}}"></i></span></sc-for></span>
+<span class="n">{{c.pct}} %</span></div>
+</sc-for>
+</div>
+<svg class="chart" viewBox="0 0 300 64" preserveAspectRatio="none" role="img" aria-label="Carga total de CPU, últimos minutos"><path d="{{cpuArea}}" style="fill: rgb(56 189 248 / .16); stroke: #38bdf8; stroke-width: 1.5; vector-effect: non-scaling-stroke"></path></svg>
+<div class="axis"><span>hace {{winLabel}}</span><span>carga total, escala 0 a {{cpuMax}} %</span><span>ahora</span></div>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Memoria</h2><span class="r"><b>{{memUsed}} GiB</b> de 62,7</span></div>
+<span class="trk" style="height: 8px"><i class="gold" style="width: {{memW}}"></i></span>
+<div class="kv" style="margin-top: 8px"><span>Disponible <b>{{memFree}} GiB</b></span><span>Swap <b>0 B de 8 GiB</b></span></div>
+<div class="kv pend" style="margin-top: 6px"><span class="tag">ampliar colector</span><span>Sistema <b>12,4</b></span><span>Máquinas virtuales <b>8,4</b></span><span>Caché ZFS <b>11,8</b></span><span>Docker <b>6,6 GiB</b></span></div>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Red</h2><span class="note">bond0 · 2,5 GbE</span>
+<span class="r"><span class="io" style="color: #38bdf8"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1v8M1.5 5.5 5 9l3.5-3.5" style="fill: none; stroke: currentColor; stroke-width: 1.6"></path></svg>{{rxNow}} {{rxUnit}}</span> &nbsp; <span class="io" style="color: #4ade80"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 9V1M1.5 4.5 5 1l3.5 3.5" style="fill: none; stroke: currentColor; stroke-width: 1.6"></path></svg>{{txNow}} {{txUnit}}</span></span></div>
+<svg class="chart tall" viewBox="0 0 300 96" preserveAspectRatio="none" role="img" aria-label="Tráfico de red: entrada arriba, salida abajo">
+<line x1="0" y1="48" x2="300" y2="48" style="stroke: #253142; stroke-width: 1; vector-effect: non-scaling-stroke"></line>
+<path d="{{rxArea}}" style="fill: rgb(56 189 248 / .2); stroke: #38bdf8; stroke-width: 1.5; vector-effect: non-scaling-stroke"></path>
+<path d="{{txArea}}" style="fill: rgb(74 222 128 / .18); stroke: #4ade80; stroke-width: 1.5; vector-effect: non-scaling-stroke"></path>
+</svg>
+<div class="axis"><span>entrada arriba, salida abajo</span><span>misma escala, máx. {{netMax}} Mb/s</span></div>
+<div class="row h vpn" style="margin-top: 6px"><span>Interfaz</span><span class="num">Entrada</span><span class="num">Salida</span></div>
+<sc-for list="{{ifaces}}" as="n" hint-placeholder-count="3">
+<div class="row vpn"><span class="nm">{{n.name}}</span><span class="num">{{n.rx}}</span><span class="num">{{n.tx}}</span></div>
+</sc-for>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Acceso remoto</h2><span class="r">Tailscale conectado · WireGuard 1 de 2 túneles</span></div>
+<div class="row h vpn"><span>Par</span><span>Estado</span><span class="num">Último saludo</span></div>
+<sc-for list="{{peers}}" as="v" hint-placeholder-count="5">
+<div class="row vpn"><span class="nm">{{v.name}}</span><span class="st {{v.cls}}">{{v.state}}</span><span class="num mu">{{v.seen}}</span></div>
+</sc-for>
+<div class="note pend" style="margin-top: 6px"><span class="tag">ampliar colector</span> Tráfico por par</div>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Placa y sensores</h2></div>
+<div class="kv"><span>ASUS <b>PRIME Z790-P WIFI</b></span><span>BIOS <b>0806</b> · 22 nov 2022</span><span>Placa <b>27,8 °C</b></span></div>
+<div class="kv pend" style="margin-top: 6px"><span class="tag">ampliar colector</span><span>Ventiladores <b>{{fan1}}</b> · <b>{{fan2}}</b> · <b>{{fan3}} rpm</b></span></div>
+</section>
+
+</div>
+
+<div class="col" id="servicios">
+
+<section class="p">
+<div class="ph"><h2>Contenedores</h2><span class="r"><b>30</b> en marcha · <span class="bad">1 detenido</span></span></div>
+<div class="note pend" style="margin-bottom: 6px"><span class="tag">ampliar colector</span> Estado en marcha o detenido</div>
+<div class="conts">
+<sc-for list="{{conts}}" as="k" hint-placeholder-count="30">
+<div class="cont {{k.cls}}"><div class="l1"><span>{{k.name}}</span></div>
+<div class="l2"><span>{{k.cpu}}</span><span class="trk"><i class="{{k.bar}}" style="width: {{k.w}}"></i></span><em>{{k.mem}}</em></div></div>
+</sc-for>
+</div>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Actualizaciones</h2><span class="note">comprobado hace 2 h</span><span class="r"><button class="btn ghost" type="button" onClick="{{updAll}}" disabled="{{updAllOff}}">Actualizar todo</button></span></div>
+<sc-for list="{{updates}}" as="u" hint-placeholder-count="6">
+<div class="row upd"><span class="nm">{{u.name}} <span class="mu">· {{u.kind}}</span></span>
+<span class="ver"><span class="{{u.cls}}">{{u.status}}</span><span class="trk"><i class="{{u.bar}}" style="width: {{u.w}}"></i></span></span>
+<button class="btn" type="button" onClick="{{u.go}}" disabled="{{u.off}}">{{u.label}}</button></div>
+</sc-for>
+</section>
+
+<section class="p pend">
+<div class="ph"><h2>Máquinas virtuales</h2><span class="tag">colector nuevo</span><span class="r"><b>1</b> en marcha</span></div>
+<div class="row h share"><span>Nombre</span><span class="num">vCPU</span><span class="num">Memoria</span><span class="num">CPU</span></div>
+<div class="row share"><span class="nm st">Windows 10</span><span class="num">4</span><span class="num">8,0 GiB</span><span class="num">{{vmCpu}} %</span></div>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Carpetas compartidas</h2><span class="r"><b>26</b> carpetas · ninguna pública</span></div>
+<div class="row h share"><span>Nombre</span><span>Tipo</span><span class="num">Tamaño</span><span class="num pend">Conexiones</span></div>
+<sc-for list="{{shares}}" as="s" hint-placeholder-count="9">
+<div class="row share"><span class="nm">{{s.name}}</span><span class="mu">{{s.proto}}</span><span class="num">{{s.size}}</span><span class="num pend {{s.cls}}">{{s.conn}}</span></div>
+</sc-for>
+<div class="note" style="margin-top: 6px">Tamaños calculados hace 9 h · 17 carpetas más <span class="pend">· <span class="tag">helper privilegiado</span> conexiones abiertas</span></div>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Superficie pública</h2><span class="r">últimos 15 min</span></div>
+<div class="duo">
+<div><div class="note">Accesos SSH fallidos</div><div class="big wr">{{sshFails}}</div></div>
+<div><div class="note">IP vetadas por fail2ban</div><div class="big">{{banned}}</div></div>
+</div>
+</section>
+
+</div>
+
+<div class="col" id="almacenamiento">
+
+<section class="p">
+<div class="ph"><h2>Copias y operaciones</h2><span class="r"><b>1</b> en curso</span></div>
+<div class="run"><div class="t"><b>{{runName}}</b><span>{{runDetail}}</span></div><span class="trk"><i style="width: {{runW}}"></i></span></div>
+<div class="row h job"><span>Hora</span><span>Trabajo</span><span class="tool">Herramienta</span><span>Resultado</span><span class="num dur">Duración</span></div>
+<sc-for list="{{jobs}}" as="j" hint-placeholder-count="5">
+<details class="dz"><summary><div class="row job"><span class="mu">{{j.at}}</span><span class="nm">{{j.name}}</span><span class="mu tool">{{j.tool}}</span><span class="{{j.cls}}">{{j.result}}</span><span class="num mu dur">{{j.dur}}</span></div></summary>
+<div class="dt"><span><b>{{j.stats}}</b></span><span>{{j.route}}</span>
+<sc-for list="{{j.lines}}" as="f" hint-placeholder-count="3"><code>{{f.p}}</code></sc-for>
+<a href="#almacenamiento">Ver el registro completo de esta ejecución</a></div></details>
+</sc-for>
+<div class="note" style="margin-top: 6px">Pulsa una fila para ver qué se copió.</div>
+</section>
+
+<section class="p pend">
+<div class="ph"><h2>Próximas copias</h2><span class="tag">colector nuevo</span><span class="r"><b>8</b> programadas · <span class="bad">1 atrasada</span></span></div>
+<div class="row h sch"><span>Trabajo</span><span class="cad">Cadencia</span><span>Próxima</span><span>Última</span></div>
+<sc-for list="{{sched}}" as="c" hint-placeholder-count="8">
+<div class="row sch"><span class="nm">{{c.name}}</span><span class="mu cad">{{c.cad}}</span><span class="{{c.ncls}}">{{c.next}}</span><span class="{{c.lcls}}">{{c.last}}</span></div>
+</sc-for>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Discos</h2><span class="r"><b>149 TB</b> de 262 · 57 %</span></div>
+<div class="row h disk"><span>Dispositivo</span><span>Estado</span><span class="num">Temp.</span><span class="smart">SMART</span><span>Uso</span><span></span></div>
+<sc-for list="{{disks}}" as="d" hint-placeholder-count="14">
+<div class="row disk"><span class="nm">{{d.name}}</span><span class="st {{d.cls}}">{{d.state}}</span><span class="num">{{d.temp}}</span><span class="smart ok">{{d.smart}}</span><span class="trk"><i class="{{d.bar}}" style="width: {{d.w}}"></i></span><span class="num">{{d.pct}}</span></div>
+</sc-for>
+<div class="note pend" style="margin-top: 6px"><span class="tag">colector nuevo</span> Discos en reposo y agrupaciones ZFS</div>
+</section>
+
+<section class="p pend">
+<div class="ph"><h2>Paridad</h2><span class="tag">colector nuevo</span><span class="r ok">válida</span></div>
+<div class="kv"><span>Última comprobación <b>dom 22 nov, 01:15</b></span><span>Errores <b>0</b></span><span>Duración <b>1 d 8 h</b> a 154 MB/s</span><span>Siguiente <b>mar 1 dic, 03:00</b></span></div>
+</section>
+
+<section class="p">
+<div class="ph"><h2>Eventos</h2><span class="note">los más recientes</span><span class="r"><a href="#almacenamiento">Ver todos</a></span></div>
+<sc-for list="{{events}}" as="e" hint-placeholder-count="7">
+<details class="dz"><summary><div class="row ev {{e.cls}}"><span class="mu">{{e.at}}</span><span class="{{e.sev}}">{{e.label}}</span><span>{{e.text}}</span></div></summary>
+<div class="dt"><span>Origen <b>{{e.src}}</b></span><code>{{e.raw}}</code><a href="#almacenamiento">Ver las líneas de registro de este evento</a></div></details>
+</sc-for>
+</section>
+
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"cadence":{"editor":"enum","options":["1","2","10"],"default":"2","section":"Datos"},"todayOnly":{"editor":"boolean","default":false,"section":"Datos"},"$preview":{"width":1440,"height":1600}}'>
+class Component extends DCLogic {
+  componentDidMount() {
+    this.ensure();
+    this.timer = setInterval(() => this.beat(), 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+
+  rnd(a, b) { return a + Math.random() * (b - a); }
+  clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  fmt(n, d) { return n.toFixed(d).replace('.', ','); }
+  clock(offsetSec) {
+    const t = new Date(Date.now() - (offsetSec || 0) * 1000);
+    const p = (x) => String(x).padStart(2, '0');
+    return p(t.getHours()) + ':' + p(t.getMinutes()) + ':' + p(t.getSeconds());
+  }
+
+  ensure() {
+    if (this.sim) return;
+    const s = { age: 0, beats: 0, steps: 0 };
+    const fill = (n, f) => Array.from({ length: n }, f);
+    s.threads = fill(20, () => this.rnd(0, 6));
+    s.hot = 16; s.hotLeft = 5;
+    s.cpuH = fill(60, () => this.rnd(4, 9));
+    s.memH = fill(60, () => this.rnd(39.9, 40.7));
+    s.rx = fill(60, () => this.rnd(2, 8));
+    s.tx = fill(60, () => this.rnd(1, 4));
+    s.burst = 0;
+    s.io = fill(60, () => this.rnd(5, 40));
+    s.ioW = 12; s.temp = 57; s.watts = 22; s.fans = [663, 864, 851]; s.vm = 6;
+    s.ssh = 42; s.banned = 3;
+    const names = ['Forgejo','cadvisor','transmission','Cloudflare-DDNS','prometheus','rclone-gui','cloudflared','duckdns','MySQL','MongoDB','ClamAV','OpenVPN-Client','ActualServer','Excalidraw','Redis','postgresql17','paperless-ngx','pg17-linkwarden','Linkwarden','FileBrowser','PostgreSQL-Immich','immich','tautulli','overseerr','tinyMediaManager','Plex-Media-Server','radarr','sonarr','lidarr','qbittorrent','Grafana'];
+    const heavy = { 'Plex-Media-Server': [9, 2900], 'immich': [4, 1800], 'ClamAV': [1, 1400], 'prometheus': [2, 620], 'qbittorrent': [3, 540], 'MongoDB': [1, 480], 'PostgreSQL-Immich': [2, 410], 'Grafana': [1, 190] };
+    s.conts = names.map((n) => {
+      const h = heavy[n] || [this.rnd(0.1, 0.9), Math.round(this.rnd(24, 160))];
+      return { name: n, base: h[0], cpu: h[0], mem: h[1], off: n === 'rclone-gui' };
+    });
+    s.jobDefs = [
+      { name: 'Fotos a la nube', tool: 'rclone', speed: 48 },
+      { name: 'appdata a Copias', tool: 'rsync', speed: 112 },
+      { name: 'Sincronización de paridad', tool: 'snapraid', speed: 154 }
+    ];
+    s.jobI = 0; s.jobPct = 37;
+    s.jobs = [
+      { at: '03:12', name: 'Sincronización de paridad', tool: 'snapraid', result: 'correcto', cls: 'ok', dur: '41 min' },
+      { at: '02:30', name: 'appdata a Copias', tool: 'rsync', result: 'correcto', cls: 'ok', dur: '6 min' },
+      { at: '02:00', name: 'Documentos a NAS2', tool: 'rsync', result: 'con avisos', cls: 'wr', dur: '14 min' },
+      { at: '01:00', name: 'Google Workspace', tool: 'rclone', result: 'correcto', cls: 'ok', dur: '23 min' },
+      { at: 'ayer', name: 'VPS a Copias', tool: 'rsync', result: 'falló', cls: 'bad', dur: '2 min' }
+    ];
+    s.pool = [
+      ['info', 'sshd: sesión abierta para nacho desde 100.64.0.7'],
+      ['warn', 'fail2ban: 185.220.101.4 vetada tras 5 intentos'],
+      ['info', 'docker: immich actualizó su imagen'],
+      ['info', 'smartd: Disco 8 superó la autocomprobación corta'],
+      ['warn', 'kernel: temperatura de CPU por encima de 80 °C durante 12 s'],
+      ['info', 'rclone: 312 archivos transferidos a la nube'],
+      ['err', 'rsync: VPS a Copias terminó con código 23'],
+      ['info', 'wireguard: saludo de iPhone renovado']
+    ];
+    s.upd = [
+      ['immich', 'imagen Docker', 'v1.121 a v1.122'], ['Plex-Media-Server', 'imagen Docker', '1.41.2 a 1.41.3'],
+      ['Grafana', 'imagen Docker', '11.3 a 11.4'], ['openssl', 'paquete', '3.0.14 a 3.0.15'],
+      ['linux-firmware', 'paquete', '20241017 a 20241110'], ['Community Apps', 'plugin', '2026.11.02 a 2026.11.20'],
+      ['Unassigned Devices', 'plugin', '2026.10.28 a 2026.11.19']
+    ].map((u) => ({ name: u[0], kind: u[1], ver: u[2], st: 'idle', pct: 0 }));
+    s.evN = 0;
+    s.events = [3, 41, 96, 260, 540, 900, 1500].map((o, i) => this.mkEvent(s, o, false));
+    this.sim = s;
+  }
+
+  mkEvent(s, offset, fresh) {
+    const e = s.pool[s.evN % s.pool.length];
+    s.evN += 1;
+    const label = e[0] === 'info' ? 'info' : e[0] === 'warn' ? 'aviso' : 'error';
+    const unit = e[1].split(':')[0];
+    return { at: this.clock(offset), sev: 'sev-' + e[0], label: label, text: e[1], src: 'journald · ' + unit + '.service · MediaServer', raw: 'nov 27 ' + this.clock(offset) + ' mediaserver ' + unit + '[' + (1200 + s.evN * 37) + ']: ' + e[1].split(': ')[1], cls: fresh ? (s.evN % 2 ? 'na' : 'nb') : '' };
+  }
+
+  beat() {
+    this.ensure();
+    const s = this.sim;
+    const cad = Number(this.props.cadence ?? 2) || 2;
+    s.age += 1; s.beats += 1;
+    s.upd.forEach((u) => {
+      if (u.st !== 'run') return;
+      u.pct += this.rnd(9, 24);
+      if (u.pct >= 100) { u.pct = 100; u.st = 'done'; }
+    });
+    if (s.age >= cad) { s.age = 0; this.step(cad); }
+    this.forceUpdate();
+  }
+
+  step(cad) {
+    const s = this.sim;
+    s.steps += 1;
+    s.hotLeft -= 1;
+    if (s.hotLeft < -3) { s.hot = 12 + Math.floor(Math.random() * 8); s.hotLeft = 3 + Math.floor(Math.random() * 5); }
+    s.threads = s.threads.map((v, i) => {
+      const target = (i === s.hot && s.hotLeft > 0) ? 100 : (i < 12 ? (i % 2 ? 1 : 5) : 3);
+      return this.clamp(v + (target - v) * 0.55 + this.rnd(-3, 4), 0, 100);
+    });
+    const total = s.threads.reduce((a, b) => a + b, 0) / s.threads.length;
+    s.cpuH = s.cpuH.slice(1).concat(total);
+    s.temp = this.clamp(s.temp + (48 + total * 1.1 - s.temp) * 0.3 + this.rnd(-1, 1), 35, 95);
+    s.watts = this.clamp(14 + total * 1.6 + this.rnd(-2, 2), 8, 180);
+    s.memH = s.memH.slice(1).concat(this.clamp(s.memH[59] + this.rnd(-0.18, 0.2), 39.2, 41.6));
+    if (s.burst <= 0 && Math.random() < 0.12) s.burst = 4 + Math.floor(Math.random() * 6);
+    s.burst -= 1;
+    const rxT = s.burst > 0 ? 62 : 5, txT = s.burst > 0 ? 9 : 2.5;
+    s.rx = s.rx.slice(1).concat(this.clamp(s.rx[59] + (rxT - s.rx[59]) * 0.5 + this.rnd(-3, 3), 0.2, 95));
+    s.tx = s.tx.slice(1).concat(this.clamp(s.tx[59] + (txT - s.tx[59]) * 0.5 + this.rnd(-1.2, 1.4), 0.1, 40));
+    s.io = s.io.slice(1).concat(this.clamp(s.io[59] + (s.jobDefs[s.jobI].speed * 0.6 - s.io[59]) * 0.3 + this.rnd(-18, 18), 0.5, 220));
+    s.ioW = this.clamp(s.ioW + this.rnd(-5, 5), 1, 60);
+    s.fans = s.fans.map((f, i) => Math.round(this.clamp(f + this.rnd(-9, 9) + (s.temp > 70 ? 12 : 0), [640, 840, 830][i], 1400)));
+    s.vm = this.clamp(s.vm + this.rnd(-2, 2.2), 1, 30);
+    s.conts.forEach((c) => { if (!c.off) { c.cpu = this.clamp(c.cpu + (c.base - c.cpu) * 0.4 + this.rnd(-c.base * 0.6, c.base * 0.7), 0, 60); c.mem = Math.max(8, Math.round(c.mem + this.rnd(-2, 2))); } });
+    if (Math.random() < 0.3) s.ssh += 1;
+    s.jobPct += this.rnd(0.6, 1.8) * Math.min(cad, 4);
+    if (s.jobPct >= 100) {
+      const d = s.jobDefs[s.jobI];
+      s.jobs = [{ at: this.clock(0).slice(0, 5), name: d.name, tool: d.tool, result: 'correcto', cls: 'ok', dur: (8 + s.steps % 30) + ' min' }].concat(s.jobs).slice(0, 5);
+      s.jobI = (s.jobI + 1) % s.jobDefs.length; s.jobPct = 0;
+    }
+    if (Math.random() < 0.28) {
+      s.events = [this.mkEvent(s, 0, true)].concat(s.events.map((e) => Object.assign({}, e, { cls: '' }))).slice(0, 7);
+    }
+  }
+
+  area(series, w, h, max, base, dir) {
+    const n = series.length;
+    const y = (v) => base - dir * (this.clamp(v / max, 0, 1) * h);
+    let d = 'M0 ' + base.toFixed(1);
+    series.forEach((v, i) => { d += ' L' + ((i / (n - 1)) * w).toFixed(1) + ' ' + y(v).toFixed(1); });
+    return d + ' L' + w + ' ' + base.toFixed(1) + ' Z';
+  }
+  rate(mb) {
+    if (mb < 1) return [this.fmt(mb * 1000, 0), 'kb/s'];
+    return [this.fmt(mb, 1), 'Mb/s'];
+  }
+  rateText(mb) { const r = this.rate(mb); return r[0] + ' ' + r[1]; }
+
+  renderVals() {
+    this.ensure();
+    const s = this.sim;
+    const cad = Number(this.props.cadence ?? 2) || 2;
+    const total = s.cpuH[59];
+    const cls = (v) => (v >= 85 ? 'hot' : v >= 60 ? 'gold' : '');
+    const cores = [];
+    for (let i = 0; i < 6; i++) {
+      const a = s.threads[i * 2], b = s.threads[i * 2 + 1];
+      cores.push({ name: 'CPU ' + (i * 2), kind: 'P', pct: this.fmt(Math.max(a, b), 0), threads: [{ w: this.fmt(a, 0).replace(',', '.') + '%', cls: cls(a) }, { w: this.fmt(b, 0) + '%', cls: cls(b) }] });
+    }
+    for (let i = 12; i < 20; i++) {
+      const a = s.threads[i];
+      cores.push({ name: 'CPU ' + i, kind: 'E', pct: this.fmt(a, 0), threads: [{ w: Math.round(a) + '%', cls: cls(a) }] });
+    }
+    // reorder so P-cores fill the left column and E-cores the right in a 2-column grid
+    const left = cores.slice(0, 6), right = cores.slice(6);
+    const mixed = [];
+    for (let i = 0; i < 8; i++) { if (left[i]) mixed.push(left[i]); else mixed.push({ name: '', kind: '', pct: '', threads: [] }); mixed.push(right[i]); }
+    const coresOut = mixed.filter((c, i) => !(c.name === '' && i >= 14)).map((c) => c.name === '' ? { name: '', kind: '', pct: ' ', threads: [] } : c);
+
+    const cpuMax = Math.max(20, Math.ceil(Math.max.apply(null, s.cpuH) / 10) * 10);
+    const mem = s.memH[59];
+    const netMax = Math.max(10, Math.ceil(Math.max(Math.max.apply(null, s.rx), Math.max.apply(null, s.tx)) / 10) * 10);
+    const rx = s.rx[59], tx = s.tx[59];
+    const rxR = this.rate(rx), txR = this.rate(tx);
+    const d = s.jobDefs[s.jobI];
+    const pct = Math.min(100, s.jobPct);
+    const left_min = Math.max(1, Math.round((100 - pct) * 0.4));
+
+    const diskRows = [
+      ['Paridad', 1, 39, null], ['Paridad 2', 1, 40, null], ['Disco 1', 1, 38, 60], ['Disco 2', 0, null, 60], ['Disco 3', 0, null, 70],
+      ['Disco 4', 0, null, 60], ['Disco 5', 0, null, 69], ['Disco 6', 0, null, 61], ['Disco 7', 0, null, 56], ['Disco 8', 1, 35, 55],
+      ['Disco 9', 0, null, 72], ['Disco 10', 0, null, 88], ['Caché (NVMe)', 1, 55, 3], ['Datos (ZFS)', 1, 26, 3]
+    ].map((r) => ({
+      name: r[0], state: r[1] ? 'activo' : 'en reposo', cls: r[1] ? '' : 'idle',
+      temp: r[2] === null ? 'sin dato' : r[2] + ' °C', smart: 'correcto',
+      w: r[3] === null ? '0%' : r[3] + '%', pct: r[3] === null ? '' : r[3] + ' %', bar: r[3] !== null && r[3] >= 85 ? 'gold' : 'green'
+    }));
+
+    const shares = [
+      ['appdata', 'SMB', '212 GB', 4], ['Multimedia', 'SMB', '118 TB', 2], ['Fotos', 'SMB', '3,4 TB', 0], ['Copias', 'NFS', '9,8 TB', 1],
+      ['Documentos', 'SMB', '86 GB', 0], ['Descargas', 'SMB', '1,2 TB', 1], ['Contabilidad', 'SMB', '14 GB', 0], ['domains', 'NFS', '640 GB', 1], ['isos', 'SMB', '92 GB', 0]
+    ].map((r) => ({ name: r[0], proto: r[1], size: r[2], conn: String(r[3]), cls: r[3] > 0 ? 'wr' : 'mu' }));
+
+    const pending = s.upd.filter((u) => u.st === 'idle').length;
+    const start = (u) => { if (u.st === 'idle') { u.st = 'run'; u.pct = 4; this.forceUpdate(); } };
+    const updates = s.upd.map((u) => ({
+      name: u.name, kind: u.kind,
+      status: u.st === 'idle' ? u.ver : u.st === 'run' ? (u.pct < 60 ? 'Descargando' : 'Instalando') + ' · ' + Math.round(u.pct) + ' %' : 'Actualizado',
+      cls: u.st === 'done' ? 'ok' : u.st === 'run' ? '' : 'mu',
+      w: Math.round(u.pct) + '%', bar: u.st === 'done' ? 'green' : '',
+      label: u.st === 'idle' ? 'Actualizar' : u.st === 'run' ? 'En curso' : 'Hecho',
+      off: u.st !== 'idle', go: () => start(u)
+    }));
+    return {
+      updates: updates,
+      updCount: pending === 0 ? 'al día' : pending + (pending === 1 ? ' pendiente' : ' pendientes'),
+      updAllOff: pending === 0,
+      updAll: () => { s.upd.forEach((u) => { if (u.st === 'idle') { u.st = 'run'; u.pct = 4; } }); this.forceUpdate(); },
+      rootCls: this.props.todayOnly ? 'today' : '',
+      pulseCls: s.age === 0 ? (s.steps % 2 ? 'pa' : 'pb') : '',
+      age: s.age === 0 ? 'ahora mismo' : s.age + ' s',
+      cpuTotal: this.fmt(total, 1), cpuTotalW: Math.round(total) + '%',
+      temp: this.fmt(s.temp, 0), watts: this.fmt(s.watts, 0),
+      cpuSpark: this.area(s.cpuH, 300, 40, cpuMax, 46, 1),
+      cpuArea: this.area(s.cpuH, 300, 60, cpuMax, 64, 1),
+      cpuMax: cpuMax,
+      winLabel: cad * 60 >= 120 ? Math.round(cad) + ' min' : '60 s',
+      cores: coresOut,
+      memUsed: this.fmt(mem, 1), memPct: this.fmt(mem / 62.7 * 100, 0), memW: Math.round(mem / 62.7 * 100) + '%', memFree: this.fmt(62.7 - mem, 1),
+      memSpark: this.area(s.memH.map((v) => v - 38.5), 300, 38, 3.5, 46, 1),
+      rxNow: rxR[0], rxUnit: rxR[1], txNow: txR[0], txUnit: txR[1],
+      rxPeak: this.rateText(Math.max.apply(null, s.rx)), txPeak: this.rateText(Math.max.apply(null, s.tx)),
+      rxSpark: this.area(s.rx, 300, 40, netMax, 46, 1), txSpark: this.area(s.tx, 300, 40, Math.max(5, Math.max.apply(null, s.tx)), 46, 1),
+      rxArea: this.area(s.rx, 300, 46, netMax, 48, 1), txArea: this.area(s.tx, 300, 46, netMax, 48, -1), netMax: netMax,
+      ifaces: [
+        { name: 'bond0', rx: this.rateText(rx), tx: this.rateText(tx) },
+        { name: 'eth0', rx: this.rateText(rx * 0.62), tx: this.rateText(tx * 0.55) },
+        { name: 'eth1', rx: this.rateText(rx * 0.38), tx: this.rateText(tx * 0.45) },
+        { name: 'docker0', rx: this.rateText(rx * 0.21), tx: this.rateText(tx * 0.3) }
+      ],
+      ioRead: this.fmt(s.io[59], 0), ioWrite: this.fmt(s.ioW, 0), ioSpark: this.area(s.io, 300, 40, 220, 46, 1),
+      peers: [
+        { name: 'Windows (portátil)', state: 'activo', cls: '', seen: 'hace ' + (20 + s.beats % 100) + ' s' },
+        { name: 'iPhone', state: 'activo', cls: '', seen: 'hace ' + (5 + (s.beats * 3) % 110) + ' s' },
+        { name: 'iPad', state: 'sin saludo', cls: 'idle', seen: 'hace 3 días' },
+        { name: 'MacBook Pro', state: 'sin saludo', cls: 'idle', seen: 'hace 9 h' },
+        { name: 'wg1 (oficina)', state: 'caído', cls: 'off', seen: 'hace 2 días' }
+      ],
+      fan1: s.fans[0], fan2: s.fans[1], fan3: s.fans[2],
+      conts: s.conts.map((c) => c.off
+        ? { name: c.name, cls: 'off', cpu: 'detenido', w: '0%', bar: '', mem: '' }
+        : { name: c.name, cls: '', cpu: this.fmt(c.cpu, 1) + ' %', w: Math.round(this.clamp(c.cpu * 5, 2, 100)) + '%', bar: c.cpu >= 15 ? 'gold' : '', mem: c.mem >= 1024 ? this.fmt(c.mem / 1024, 1) + ' GiB' : c.mem + ' MiB' }),
+      vmCpu: this.fmt(s.vm, 0),
+      shares: shares,
+      sshFails: s.ssh, banned: s.banned,
+      runName: d.name, runW: this.fmt(pct, 1).replace(',', '.') + '%',
+      runDetail: d.tool + ' · ' + this.fmt(pct, 0) + ' % · ' + this.fmt(d.speed + this.rnd(-6, 6), 0) + ' MB/s · quedan ' + left_min + ' min',
+      jobs: s.jobs.map((j) => {
+        const bad = j.cls === 'bad', warn = j.cls === 'wr';
+        const stats = j.tool === 'snapraid' ? '2 140 archivos añadidos · 38 eliminados · 61,4 GB de paridad actualizados · 0 errores'
+          : bad ? '0 archivos transferidos · código de salida 23'
+          : j.tool === 'rclone' ? '1 284 archivos · 3,2 GB transferidos · 0 errores'
+          : '412 archivos · 860 MB transferidos' + (warn ? ' · 3 avisos' : ' · 0 errores');
+        const route = j.tool === 'snapraid' ? 'Array de 16 discos' : 'De /mnt/user/' + j.name.split(' a ')[0] + ' a ' + (j.tool === 'rclone' ? 'la nube' : 'el destino de copia');
+        const lines = bad ? [{ p: 'rsync: connection unexpectedly closed (0 bytes received so far)' }, { p: 'rsync error: some files/attrs were not transferred (code 23)' }]
+          : warn ? [{ p: 'rsync: file has vanished: "facturas/2026/borrador.tmp"' }, { p: 'facturas/2026/noviembre/F-1187.pdf' }, { p: 'extractos/2026-11.csv' }]
+          : j.tool === 'snapraid' ? [{ p: '100% completed, 61440 MB accessed in 0:41' }, { p: 'Everything OK' }]
+          : [{ p: '2026/11/IMG_4821.HEIC' }, { p: '2026/11/IMG_4822.HEIC' }, { p: '2026/11/VID_0193.MOV' }, { p: 'y 1 281 más' }];
+        return Object.assign({}, j, { stats: stats, route: route, lines: lines });
+      }),
+      sched: [
+        ['Fotos a la nube', 'cada 6 h', 'en curso', '', 'correcto', 'ok'],
+        ['VPS a Copias', 'cada día, 00:30', 'en 10 h 12 min', '', 'falló', 'bad'],
+        ['Google Workspace', 'cada día, 01:00', 'en 10 h 42 min', '', 'correcto', 'ok'],
+        ['Documentos a NAS2', 'cada día, 02:00', 'en 11 h 42 min', '', 'con avisos', 'wr'],
+        ['appdata a Copias', 'cada día, 02:30', 'en 12 h 12 min', '', 'correcto', 'ok'],
+        ['Sincronización de paridad', 'cada día, 03:00', 'en 12 h 42 min', '', 'correcto', 'ok'],
+        ['iCloud a Copias', 'cada domingo, 04:00', 'atrasada 5 días', 'bad', 'hace 12 días', 'wr'],
+        ['Comprobación de paridad', 'día 1 de cada mes', 'en 3 d 13 h', '', 'correcto', 'ok']
+      ].map((r) => ({ name: r[0], cad: r[1], next: r[2], ncls: r[3], last: r[4], lcls: r[5] })),
+      disks: diskRows,
+      events: s.events
+    };
+  }
+}
+</script>
+</body>
+</html>

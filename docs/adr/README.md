@@ -48,6 +48,7 @@ consecuencias, incluidas las malas.
 | [0025](0025-instalacion-y-recuperacion-local-de-credencial.md) | Instalación y recuperación local de la credencial | Aceptado |
 | [0026](0026-canal-de-ordenes-de-recoleccion.md) | Canal de órdenes de recolección bajo demanda | Propuesto |
 | [0027](0027-alta-de-agentes-y-ciclo-de-vida-del-token.md) | Alta de agentes y ciclo de vida del token de ingesta | Propuesto |
+| [0028](0028-sesiones-activas-en-compartidos.md) | Sesiones activas en compartidos | Propuesto |
 | [0029](0029-modo-vivo-bajo-demanda.md) | Modo en vivo bajo demanda para CPU y red | Propuesto |
 
 ## Estado del proyecto

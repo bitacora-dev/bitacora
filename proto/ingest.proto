@@ -75,6 +75,24 @@ message Inventory {
   repeated InventoryItem items = 5;
 }
 
+// Job is a completed scheduled operation. Statistics are intentionally absent
+// when the producer cannot state them reliably.
+message Job {
+  string id = 1;
+  string job_name = 2;
+  string host_id = 3;
+  int64 started_at_ms = 4;
+  int64 finished_at_ms = 5;
+  int64 duration_ms = 6;
+  string status = 7;
+  int32 exit_code = 8;
+  string signal = 9;
+  string peer_host_id = 10;
+  string trigger = 11;
+  int64 next_expected_ms = 12;
+  int32 schema = 13;
+}
+
 // Batch is what an agent pushes to POST /v1/ingest: a mixed batch of
 // metrics, events, log lines and inventories in one message (ADR-0008,
 // extended by ADR-0015).
@@ -85,6 +103,24 @@ message Batch {
   repeated Event events = 4;
   repeated LogLine log_lines = 5;
   repeated Inventory inventories = 6;
+	 repeated Job jobs = 7;
+}
+
+// PackageOperation is deliberately a closed set. It is the entire action
+// vocabulary ADR-0022 permits the hub to request from an agent.
+enum PackageOperation {
+  PACKAGE_OPERATION_UNSPECIFIED = 0;
+  REFRESH_PACKAGE_CACHE = 1;
+  APPLY_PENDING_PACKAGE_UPDATES = 2;
+}
+
+// PendingPackageOperation carries no executable input. The operation is an
+// enum, while request_id identifies the human-confirmed request and expiry
+// lets the agent reject stale requests before they can reach a helper.
+message PendingPackageOperation {
+  PackageOperation operation = 1;
+  string request_id = 2;
+  int64 expires_at_ms = 3;
 }
 
 // IngestResponse is the hub's reply: the last confirmed offset, and
@@ -92,4 +128,5 @@ message Batch {
 message IngestResponse {
   string last_offset = 1;
   bool duplicate = 2;
+  PendingPackageOperation pending_package_operation = 3;
 }

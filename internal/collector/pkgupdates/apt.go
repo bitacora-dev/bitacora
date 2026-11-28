@@ -2,6 +2,7 @@ package pkgupdates
 
 import (
 	"bufio"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,12 +20,21 @@ import (
 // ADR-0017). Comparison uses dpkg's own version semantics
 // (internal/debversion), never a plain string comparison.
 func aptItems(dpkgStatus, listsDir string, now time.Time) []schema.InventoryItem {
+	return aptItemsForSources(dpkgStatus, listsDir, "", "", now)
+}
+
+// aptItemsForSources is aptItems with optional source configuration paths.
+// When no readable source configuration is supplied it keeps aptItems' legacy
+// behavior, which is useful for hosts and tests that expose only the cache.
+func aptItemsForSources(dpkgStatus, listsDir, sourcesList, sourcesDir string, now time.Time) []schema.InventoryItem {
 	installed, err := parseDpkgStatus(dpkgStatus)
 	if err != nil {
 		return nil
 	}
 
-	candidates, cacheAge, err := candidateVersions(listsDir)
+	sources, filterLists := activeAptSources(sourcesList, sourcesDir)
+	suites := newAptSuitePolicy(listsDir)
+	candidates, err := candidateVersionsForSources(listsDir, sources, filterLists, suites)
 	if err != nil || len(candidates) == 0 {
 		// No usable cache — `apt update` has never run on this host, or
 		// the lists directory doesn't exist. Nothing to compare against,
@@ -32,20 +42,26 @@ func aptItems(dpkgStatus, listsDir string, now time.Time) []schema.InventoryItem
 		return nil
 	}
 
+	refreshedAt := aptCacheRefreshedAt(listsDir)
+
 	items := make([]schema.InventoryItem, 0, len(installed))
 	for name, installedVersion := range installed {
-		candidate, ok := candidates[name]
-		if !ok || debversion.Compare(candidate, installedVersion) <= 0 {
+		candidate, automatic, ok := candidates[name].pending(installedVersion)
+		if !ok {
 			continue
 		}
 
 		attrs := schema.Labels{
 			"source":            "apt",
 			"installed_version": installedVersion,
-			"candidate_version": candidate,
+			"candidate_version": candidate.version,
 		}
-		if !cacheAge.IsZero() {
-			attrs["cache_age_seconds"] = strconv.FormatFloat(now.Sub(cacheAge).Seconds(), 'f', 0, 64)
+		if !refreshedAt.IsZero() {
+			attrs["cache_age_seconds"] = strconv.FormatFloat(now.Sub(refreshedAt).Seconds(), 'f', 0, 64)
+		}
+		if candidate.source.suite != "" {
+			attrs["candidate_suite"] = candidate.source.suite
+			attrs["candidate_automatic"] = strconv.FormatBool(automatic)
 		}
 		items = append(items, schema.InventoryItem{
 			ID:    "apt:" + name,
@@ -54,6 +70,73 @@ func aptItems(dpkgStatus, listsDir string, now time.Time) []schema.InventoryItem
 		})
 	}
 	return items
+}
+
+// aptCacheRefreshedAt reports when apt last refreshed its package lists.
+//
+// It deliberately does NOT look at the mtime of the *_Packages files. apt
+// preserves each index's remote Last-Modified timestamp on the local copy, so
+// that mtime says when the repository last published that index, not when
+// this host last fetched it. Ubuntu's release pocket never republishes:
+// `archive.ubuntu.com_ubuntu_dists_noble_main_binary-amd64_Packages` carries
+// noble's release date forever. Deriving the cache age from the oldest of
+// those files is what made icloudserver report "package cache outdated:
+// 896.8 days" on 2026-10-08, hours after a successful `apt update` — the
+// number was the age of noble's frozen index, not of the cache.
+//
+// Three signals are read instead, all pure reads (ADR-0012), newest wins
+// because each one only moves forward when an update actually succeeded or
+// actually replaced an index:
+//
+//   - <state>/periodic/update-success-stamp, touched by
+//     APT::Update::Post-Invoke-Success (/etc/apt/apt.conf.d/15update-stamp,
+//     shipped by update-notifier-common), so it marks the end of a
+//     successful `apt update` exactly. Absent when that package is not
+//     installed, which is why it is not the only signal.
+//   - <state>/periodic/update-stamp, touched by apt's own apt.systemd.daily
+//     only after its `apt-get update` exits successfully. Present on hosts
+//     with APT::Periodic::Update-Package-Lists enabled, with or without
+//     update-notifier-common.
+//   - the lists directory itself: apt downloads into partial/ and renames
+//     each replaced index into lists/, which moves the directory's mtime.
+//
+// Signals deliberately NOT used, checked against apt's source:
+//
+//   - lists/partial/: pkgAcquire creates and removes a
+//     .apt-acquire-privs-test file there at the start of every run as root
+//     (CheckDropPrivsMustBeDisabled), before anything is fetched, so it moves
+//     even when the update then fails offline. Using it would report a stale
+//     cache as fresh.
+//   - lists/*_InRelease mtimes: on an If-Modified-Since hit apt keeps the
+//     existing file untouched, and a replaced one gets the server's
+//     Last-Modified as its mtime. It never says more than the lists
+//     directory, which the same replacement already moved.
+//   - /var/cache/apt/pkgcache.bin: `apt update` rebuilds it whether or not the
+//     download succeeded, and so does any apt run after dpkg's status changed
+//     (an `apt install` with no update at all). Same false-fresh problem.
+//
+// The remaining blind spot is honest and bounded: on a host with neither
+// stamp whose every configured suite is unchanged since the last fetch, a
+// successful `apt update` replaces nothing and records nothing, so the age
+// keeps growing. That reports the cache as old, which is the safe direction —
+// it never claims a stale cache is fresh.
+func aptCacheRefreshedAt(listsDir string) time.Time {
+	var newest time.Time
+	consider := func(path string) {
+		info, err := os.Stat(path)
+		if err != nil {
+			return
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
+	}
+	// apt's own layout: Dir::State is the parent of Dir::State::lists.
+	periodic := filepath.Join(filepath.Dir(listsDir), "periodic")
+	consider(filepath.Join(periodic, "update-success-stamp"))
+	consider(filepath.Join(periodic, "update-stamp"))
+	consider(listsDir)
+	return newest
 }
 
 // parseDpkgStatus reads dpkg's own package database: one deb822 stanza
@@ -105,49 +188,285 @@ func parseDpkgStatus(path string) (map[string]string, error) {
 	return installed, scanner.Err()
 }
 
-// candidateVersions reads every configured repository's local package
-// list, keeping the highest version found per package name — a package
-// can appear in more than one enabled repo (e.g. both a distro's main
-// archive and its security updates) at different versions. The returned
-// time is the OLDEST mtime among the *_Packages files that contributed:
-// apt's own notion of "how stale is my worst source", not the newest.
-func candidateVersions(listsDir string) (map[string]string, time.Time, error) {
+// aptCandidate is one version of a package found in a list file, together
+// with the configured source that carried it.
+type aptCandidate struct {
+	version string
+	source  aptSource
+}
+
+// aptCandidates keeps, per package, the highest version apt would install on
+// its own (automatic) and the highest one only reachable by asking for it
+// explicitly (from a NotAutomatic suite such as Ubuntu's backports) — a
+// package can appear in more than one enabled repo at different versions,
+// and a single "highest anywhere" hides which of the two apt will take.
+type aptCandidates struct {
+	automatic, notAutomatic *aptCandidate
+}
+
+// pending decides what, if anything, is an update for installedVersion.
+//
+// An automatic candidate newer than the installed version is the pending
+// update, even when a NotAutomatic suite offers something newer still: that
+// is what `apt upgrade` installs (noble-updates over noble-backports). Only
+// when no automatic candidate is newer does a newer NotAutomatic one get
+// reported, flagged automatic=false so it is never counted as pending.
+func (c aptCandidates) pending(installedVersion string) (aptCandidate, bool, bool) {
+	if c.automatic != nil && debversion.Compare(c.automatic.version, installedVersion) > 0 {
+		return *c.automatic, true, true
+	}
+	if c.notAutomatic != nil && debversion.Compare(c.notAutomatic.version, installedVersion) > 0 {
+		return *c.notAutomatic, false, true
+	}
+	return aptCandidate{}, false, false
+}
+
+func keepHighest(current **aptCandidate, candidate aptCandidate) {
+	if *current == nil || debversion.Compare(candidate.version, (*current).version) > 0 {
+		*current = &candidate
+	}
+}
+
+// candidateVersionsForSources reads only list files backed by currently
+// configured binary-package sources. apt leaves old list files behind when a
+// source is removed; treating those as current makes the candidates lie. If
+// source configuration is unavailable, callers may deliberately retain the
+// old cache-only behavior by passing filterLists=false — the candidate then
+// carries no source, counts as automatic, and the origin attributes are
+// omitted rather than guessed from the file name.
+func candidateVersionsForSources(listsDir string, sources map[string]aptSource, filterLists bool, suites *aptSuitePolicy) (map[string]aptCandidates, error) {
 	entries, err := os.ReadDir(listsDir)
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, err
 	}
 
-	candidates := map[string]string{}
-	var oldest time.Time
-	var any bool
-
+	candidates := map[string]aptCandidates{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), "_Packages") {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
+		source, matched := matchingAptSource(e.Name(), sources)
+		if filterLists && !matched {
 			continue
 		}
-		if !any || info.ModTime().Before(oldest) {
-			oldest = info.ModTime()
-		}
-		any = true
+		automatic := suites.automatic(source)
 
 		pkgs, err := parsePackagesFile(filepath.Join(listsDir, e.Name()))
 		if err != nil {
 			continue
 		}
 		for name, version := range pkgs {
-			if current, ok := candidates[name]; !ok || debversion.Compare(version, current) > 0 {
-				candidates[name] = version
+			current := candidates[name]
+			if automatic {
+				keepHighest(&current.automatic, aptCandidate{version: version, source: source})
+			} else {
+				keepHighest(&current.notAutomatic, aptCandidate{version: version, source: source})
+			}
+			candidates[name] = current
+		}
+	}
+	return candidates, nil
+}
+
+// aptSource is one configured binary-package source, named the way apt names
+// the files it writes for it under the lists directory.
+type aptSource struct {
+	listPrefix    string // host_path_dists_suite_component_
+	releasePrefix string // host_path_dists_suite_
+	suite         string
+}
+
+func matchingAptSource(listName string, sources map[string]aptSource) (aptSource, bool) {
+	for prefix, source := range sources {
+		if strings.HasPrefix(listName, prefix) {
+			return source, true
+		}
+	}
+	return aptSource{}, false
+}
+
+// aptSuitePolicy answers, per suite, whether apt installs versions from it on
+// its own initiative.
+//
+// Ubuntu's backports suite declares `NotAutomatic: yes` in its Release index,
+// which pins every version it carries below the release pocket: `apt upgrade`
+// leaves them alone, and `apt-cache policy` reports the installed version as
+// the candidate even though a higher one is cached. (`ButAutomaticUpgrades:
+// yes`, which Ubuntu also sets, only re-enables upgrades for packages whose
+// installed version already came from that suite — which is not knowable from
+// dpkg's database, so it is not claimed here.) The newer version is really
+// there, so it is still reported when nothing apt would take is newer — but
+// as automatic=false, never as a pending update.
+type aptSuitePolicy struct {
+	listsDir string
+	known    map[string]bool
+}
+
+func newAptSuitePolicy(listsDir string) *aptSuitePolicy {
+	return &aptSuitePolicy{listsDir: listsDir, known: map[string]bool{}}
+}
+
+func (p *aptSuitePolicy) automatic(source aptSource) bool {
+	if source.releasePrefix == "" {
+		return true
+	}
+	if automatic, ok := p.known[source.releasePrefix]; ok {
+		return automatic
+	}
+	automatic := true
+	// InRelease is the inline-signed form and Release the detached one; the
+	// fields are plain text in both, so one line scan reads either.
+	for _, name := range []string{source.releasePrefix + "InRelease", source.releasePrefix + "Release"} {
+		contents, err := os.ReadFile(filepath.Join(p.listsDir, name))
+		if err != nil {
+			continue
+		}
+		automatic = !releaseDeclaresNotAutomatic(string(contents))
+		break
+	}
+	p.known[source.releasePrefix] = automatic
+	return automatic
+}
+
+func releaseDeclaresNotAutomatic(contents string) bool {
+	for _, line := range strings.Split(contents, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "NotAutomatic") {
+			continue
+		}
+		return strings.EqualFold(strings.TrimSpace(value), "yes")
+	}
+	return false
+}
+
+// activeAptSources returns the currently configured binary-package sources,
+// keyed by the list-file prefix apt derives from each one. The boolean means
+// source configuration was readable: an empty but readable configuration
+// intentionally matches no cached lists.
+func activeAptSources(sourcesList, sourcesDir string) (map[string]aptSource, bool) {
+	sources := map[string]aptSource{}
+	configured := false
+	parse := func(path string, contents []byte) {
+		configured = true
+		parsed := parseLegacyAptSources(string(contents))
+		if strings.HasSuffix(path, ".sources") {
+			parsed = parseDeb822AptSources(string(contents))
+		}
+		for prefix, source := range parsed {
+			sources[prefix] = source
+		}
+	}
+	if sourcesList != "" {
+		if contents, err := os.ReadFile(sourcesList); err == nil {
+			parse(sourcesList, contents)
+		}
+	}
+	if sourcesDir == "" {
+		return sources, configured
+	}
+	entries, err := os.ReadDir(sourcesDir)
+	if err != nil {
+		return sources, configured
+	}
+	configured = true
+	for _, entry := range entries {
+		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".list") && !strings.HasSuffix(entry.Name(), ".sources")) {
+			continue
+		}
+		path := filepath.Join(sourcesDir, entry.Name())
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		parse(path, contents)
+	}
+	return sources, configured
+}
+
+func parseLegacyAptSources(contents string) map[string]aptSource {
+	sources := map[string]aptSource{}
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "deb" {
+			continue
+		}
+		index := 1
+		if index < len(fields) && strings.HasPrefix(fields[index], "[") {
+			for index < len(fields) && !strings.HasSuffix(fields[index], "]") {
+				index++
+			}
+			index++
+		}
+		if len(fields) < index+3 {
+			continue
+		}
+		uri, suite := fields[index], fields[index+1]
+		for _, component := range fields[index+2:] {
+			if source, ok := aptSourceFor(uri, suite, component); ok {
+				sources[source.listPrefix] = source
 			}
 		}
 	}
-	if !any {
-		return candidates, time.Time{}, nil
+	return sources
+}
+
+func parseDeb822AptSources(contents string) map[string]aptSource {
+	sources := map[string]aptSource{}
+	fields := map[string]string{}
+	flush := func() {
+		types := strings.Fields(fields["types"])
+		if strings.EqualFold(fields["enabled"], "no") || !contains(types, "deb") {
+			fields = map[string]string{}
+			return
+		}
+		for _, uri := range strings.Fields(fields["uris"]) {
+			for _, suite := range strings.Fields(fields["suites"]) {
+				for _, component := range strings.Fields(fields["components"]) {
+					if source, ok := aptSourceFor(uri, suite, component); ok {
+						sources[source.listPrefix] = source
+					}
+				}
+			}
+		}
+		fields = map[string]string{}
 	}
-	return candidates, oldest, nil
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "#") || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if ok {
+			fields[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+		}
+	}
+	flush()
+	return sources
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func aptSourceFor(rawURI, suite, component string) (aptSource, bool) {
+	uri, err := url.Parse(rawURI)
+	if err != nil || uri.Host == "" || suite == "" || component == "" {
+		return aptSource{}, false
+	}
+	base := uri.Host + "_" + strings.ReplaceAll(strings.Trim(uri.Path, "/"), "/", "_")
+	base = strings.TrimSuffix(base, "_")
+	release := base + "_dists_" + suite + "_"
+	return aptSource{listPrefix: release + component + "_", releasePrefix: release, suite: suite}, true
 }
 
 // parsePackagesFile reads one apt list cache file — the same deb822

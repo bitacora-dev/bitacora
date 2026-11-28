@@ -1,14 +1,224 @@
 package main
 
 import (
-	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/bitacora-dev/bitacora/internal/blackbox"
 	"github.com/bitacora-dev/bitacora/internal/collector"
+	"github.com/bitacora-dev/bitacora/internal/packageexecutor"
+	"github.com/bitacora-dev/bitacora/internal/pstore"
+	"github.com/bitacora-dev/bitacora/internal/schema"
+	"github.com/bitacora-dev/bitacora/proto/bitacorapb"
 )
+
+type recordingSink struct {
+	events []schema.Event
+}
+
+func (*recordingSink) Gauge(string, float64, collector.Labels) {}
+
+func (*recordingSink) Counter(string, float64, collector.Labels) {}
+
+func (s *recordingSink) Event(event collector.Event) {
+	s.events = append(s.events, event)
+}
+
+func (*recordingSink) LogLines(string, []collector.LogLine) {}
+
+func (*recordingSink) Inventory(collector.Inventory) {}
+
+func TestConsumePstoreAtStartupDeliversEvents(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"dmesg-efi-100": "first crash",
+		"dmesg-efi-200": "second crash",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing pstore entry: %v", err)
+		}
+	}
+
+	sink := &recordingSink{}
+	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	consumePstoreAtStartup(sink, root, "host-a", now, pstore.Consume, func(string, ...any) {
+		t.Fatal("unexpected pstore error")
+	})
+
+	if len(sink.events) != 2 {
+		t.Fatalf("events delivered = %d, want 2", len(sink.events))
+	}
+	for index, event := range sink.events {
+		if event.HostID != "host-a" || !event.TS.Equal(now) || event.Type != "kernel.crash_dump" {
+			t.Fatalf("event %d = %+v", index, event)
+		}
+	}
+	if sink.events[0].Attrs["pstore_file"] != "dmesg-efi-100" || sink.events[1].Attrs["pstore_file"] != "dmesg-efi-200" {
+		t.Fatalf("events were not delivered in pstore order: %+v", sink.events)
+	}
+	for _, name := range []string{"dmesg-efi-100", "dmesg-efi-200"} {
+		if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
+			t.Fatalf("pstore entry %q was not removed after consumption: %v", name, err)
+		}
+	}
+}
+
+func TestConsumePstoreAtStartupLogsErrorsWithoutAborting(t *testing.T) {
+	var logs []string
+	root := t.TempDir()
+	consumed := false
+	consumePstoreAtStartup(&recordingSink{}, root, "host-a", time.Now(), func(gotRoot, hostID string, now time.Time) ([]schema.Event, []error) {
+		if gotRoot != root || hostID != "host-a" || now.IsZero() {
+			t.Fatalf("unexpected pstore consume arguments: root=%q hostID=%q now=%v", gotRoot, hostID, now)
+		}
+		consumed = true
+		return nil, []error{errors.New("first failure"), errors.New("second failure")}
+	}, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	if !consumed {
+		t.Fatal("pstore was not consumed")
+	}
+	if !reflect.DeepEqual(logs, []string{"consuming pstore: first failure", "consuming pstore: second failure"}) {
+		t.Fatalf("logs = %v, want every pstore error", logs)
+	}
+}
+
+func TestConsumePstoreAtStartupAllowsCleanRoot(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		root string
+	}{
+		{name: "empty", root: t.TempDir()},
+		{name: "missing", root: filepath.Join(t.TempDir(), "missing")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sink := &recordingSink{}
+			var logs []string
+			consumePstoreAtStartup(sink, test.root, "host-a", time.Now(), pstore.Consume, func(format string, args ...any) {
+				logs = append(logs, fmt.Sprintf(format, args...))
+			})
+
+			if len(sink.events) != 0 || len(logs) != 0 {
+				t.Fatalf("clean root produced events=%v logs=%v", sink.events, logs)
+			}
+		})
+	}
+}
+
+func TestPackageActionRequestHasOnlyFixedOperations(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation bitacorapb.PackageOperation
+		want      packageexecutor.Operation
+		ok        bool
+	}{
+		{name: "refresh", operation: bitacorapb.PackageOperation_REFRESH_PACKAGE_CACHE, want: packageexecutor.RefreshPackageCache, ok: true},
+		{name: "apply", operation: bitacorapb.PackageOperation_APPLY_PENDING_PACKAGE_UPDATES, want: packageexecutor.ApplyPendingPackageUpdates, ok: true},
+		{name: "unknown", operation: bitacorapb.PackageOperation_PACKAGE_OPERATION_UNSPECIFIED},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, ok := packageActionRequest(&bitacorapb.PendingPackageOperation{RequestId: "request-1", Operation: test.operation}, "host-a")
+			if ok != test.ok || request.Operation != test.want {
+				t.Fatalf("request = %+v, ok = %t", request, ok)
+			}
+		})
+	}
+}
+
+func TestActionConfigurationDisabledEvent(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "unreadable file", err: errors.New("opening action configuration: permission denied")},
+		{name: "malformed JSON", err: errors.New("decoding action configuration: unexpected end of JSON input")},
+		{name: "unknown field", err: errors.New("decoding action configuration: json: unknown field \"unexpected\"")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event, ok := actionConfigurationDisabledEvent("host-a", "/etc/bitacora/actions.json", test.err, time.Unix(100, 0))
+			if !ok {
+				t.Fatal("failed action configuration must emit an event")
+			}
+			if event.Type != "agent.action_configuration_disabled" || event.Severity != schema.SeverityWarn {
+				t.Fatalf("unexpected event identity: %+v", event)
+			}
+			if event.Attrs["path"] != "/etc/bitacora/actions.json" || event.Attrs["reason"] != test.err.Error() {
+				t.Fatalf("event did not preserve diagnostic context: %+v", event.Attrs)
+			}
+		})
+	}
+
+	if _, ok := actionConfigurationDisabledEvent("host-a", "/etc/bitacora/actions.json", nil, time.Unix(100, 0)); ok {
+		t.Fatal("missing action configuration is normal and must not emit an event")
+	}
+}
+
+func TestBlackboxFailureEventMakesDegradationVisible(t *testing.T) {
+	err := errors.New("permission denied")
+	event := blackboxFailureEvent("host-a", "/var/lib/bitacora/blackbox.dat", "start", err, time.Unix(100, 0))
+
+	if event.Type != "agent.blackbox_recorder_degraded" || event.Severity != schema.SeverityWarn {
+		t.Fatalf("unexpected event identity: %+v", event)
+	}
+	if event.Attrs["path"] != "/var/lib/bitacora/blackbox.dat" || event.Attrs["stage"] != "start" || event.Attrs["reason"] != err.Error() {
+		t.Fatalf("event did not preserve diagnostic context: %+v", event.Attrs)
+	}
+}
+
+func TestRunBlackboxWritesFileReadableByBitaAndStops(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the bita command against a real 1 Hz blackbox recorder")
+	}
+
+	path := filepath.Join(t.TempDir(), "blackbox.dat")
+	stop := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- runBlackbox(stop, path, nil) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		samples, err := blackbox.Dump(path)
+		if err == nil && len(samples) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(stop)
+			<-done
+			t.Fatalf("blackbox did not record a sample by the deadline: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	close(stop)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("blackbox runner returned an error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("blackbox runner did not stop after its stop channel closed")
+	}
+
+	output, err := exec.Command("go", "run", "../bita", "blackbox", "dump", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("bita blackbox dump failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "1 sample(s)") {
+		t.Fatalf("bita did not read the agent-written blackbox file: %s", output)
+	}
+}
 
 func TestReadToken_PrefersTokenFile(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "token")
@@ -79,23 +289,9 @@ func TestParseConfig_RejectsHubURLWithoutTokenSource(t *testing.T) {
 }
 
 func TestBuildRegistryIncludesProductionCollectors(t *testing.T) {
-	reg := buildRegistry()
-	regs, disabled := reg.Resolve(context.Background(), collector.Config{}, &collector.HostInfo{}, map[collector.Capability]bool{})
-
-	names := map[string]bool{}
-	for _, reg := range regs {
-		names[reg.Collector.Name()] = true
-	}
-	for _, disabled := range disabled {
-		names[disabled.Name] = true
-	}
-
-	for _, name := range []string{"cpu", "memory", "docker", "journald"} {
-		if !names[name] {
-			t.Fatalf("expected production collector %q to be assembled in bitacora-agent registry; got %v", name, names)
-		}
-	}
-	if names["example"] {
-		t.Fatal("example collector must not be assembled in the production agent registry by default")
+	reg := buildRegistry(nil)
+	want := []string{"cpu", "diskarray", "docker", "hwidentity", "hwmon", "journald", "memory", "network", "operations", "package-actions", "pkgupdates", "public_surface", "shares", "shareusage", "ups", "users"}
+	if got := reg.Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected production collector catalog: got %v, want %v", got, want)
 	}
 }

@@ -23,8 +23,9 @@ describe("agentSetupCommand", () => {
     expect(command).toContain("-token-file=/etc/bitacora/token");
   });
 
-  it("restricts the token file to its owner", () => {
-    expect(command).toContain("chmod 0600 /etc/bitacora/token");
+  it("makes the token readable by the sandboxed bitacora service", () => {
+    expect(command).toContain("chown root:bitacora /etc/bitacora/token");
+    expect(command).toContain("chmod 0640 /etc/bitacora/token");
   });
 
   it("creates both parent directories before writing into them", () => {
@@ -32,7 +33,7 @@ describe("agentSetupCommand", () => {
     expect(lines.indexOf("install -d -m 0755 /var/lib/bitacora")).toBeLessThan(
       lines.findIndex((l) => l.includes("> /var/lib/bitacora/host_id")),
     );
-    expect(lines.indexOf("install -d -m 0750 /etc/bitacora")).toBeLessThan(
+    expect(lines.indexOf("install -d -o root -g bitacora -m 0750 /etc/bitacora")).toBeLessThan(
       lines.findIndex((l) => l.includes("> /etc/bitacora/token")),
     );
   });
@@ -55,7 +56,7 @@ describe("agentSetupCommand", () => {
       hubURL: "https://hub.example",
       host: { ...host, token_path: "/opt/bitacora/etc/token" },
     });
-    expect(custom).toContain("install -d -m 0750 /opt/bitacora/etc");
+    expect(custom).toContain("install -d -o root -g bitacora -m 0750 /opt/bitacora/etc");
     expect(custom).toContain("-token-file=/opt/bitacora/etc/token");
   });
 });

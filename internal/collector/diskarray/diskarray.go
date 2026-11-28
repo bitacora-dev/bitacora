@@ -1,31 +1,43 @@
 // Package diskarray implements the per-disk storage breakdown ADR-0016
 // asks for: instead of one global percentage, one Inventory item per real
-// mounted filesystem — capacity/used/available via statfs, plus model and
-// serial number when a matching entry exists in bitacora-smart's spool
-// (ADR-0005). It doesn't try to know which disks belong to which named
-// array (mdraid, SnapRAID, UnRaid) — each disk is reported independently,
-// identified by its own mountpoint and device.
+// mounted filesystem — capacity/used/available via statfs, plus model,
+// serial number, temperature and SMART health status when a matching entry
+// exists in bitacora-smart's spool (ADR-0005). It also annotates mounted
+// mdraid and SnapRAID members with their read-only array topology,
+// including whether a SnapRAID member holds parity or data, while
+// continuing to report standalone disks without synthetic array
+// attributes.
+//
+// Every attribute is omitted rather than defaulted when its source is
+// absent: a disk with no spool entry reports no temperature at all, which
+// a reader can present as "unknown" instead of mistaking a zero for a
+// cold disk or a healthy one.
 package diskarray
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 	"github.com/bitacora-dev/bitacora/internal/spool"
 )
 
 const (
-	defaultMountsFile = "/proc/mounts"
-	defaultSpoolDir   = "/var/lib/bitacora/spool"
+	defaultMountsFile   = "/proc/mounts"
+	defaultSpoolDir     = "/var/lib/bitacora/spool"
+	defaultMDStatFile   = "/proc/mdstat"
+	defaultSnapraidConf = "/etc/snapraid.conf"
 )
 
 // pseudoFSTypes are never real disks worth reporting.
@@ -40,9 +52,11 @@ var pseudoFSTypes = map[string]bool{
 
 // Collector emits an Inventory of kind disk (ADR-0016).
 type Collector struct {
-	mountsFile string
-	spoolDir   string
-	hostID     string
+	mountsFile   string
+	spoolDir     string
+	mdstatFile   string
+	snapraidConf string
+	hostID       string
 }
 
 // New returns a collector with production defaults.
@@ -59,6 +73,8 @@ func (c *Collector) Requires() []collector.Capability { return nil }
 func (c *Collector) Init(ctx context.Context, cfg collector.Config, host *collector.HostInfo) error {
 	c.mountsFile = configuredPath(cfg, "mounts_file", defaultMountsFile)
 	c.spoolDir = configuredPath(cfg, "spool_dir", defaultSpoolDir)
+	c.mdstatFile = configuredPath(cfg, "mdstat_file", defaultMDStatFile)
+	c.snapraidConf = configuredPath(cfg, "snapraid_conf", defaultSnapraidConf)
 	if host != nil {
 		c.hostID = host.ID
 	}
@@ -78,6 +94,7 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 		mounts = nil
 	}
 	smart := c.readSMARTIdentities()
+	arrays := c.readArrayMembership(mounts)
 
 	items := make([]schema.InventoryItem, 0, len(mounts))
 	for _, m := range mounts {
@@ -87,6 +104,9 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 			attrs["capacity_bytes"] = strconv.FormatUint(usage.total, 10)
 			attrs["used_bytes"] = strconv.FormatUint(usage.used, 10)
 			attrs["available_bytes"] = strconv.FormatUint(usage.available, 10)
+			if usage.fsID != "" {
+				attrs["fs_id"] = usage.fsID
+			}
 		}
 
 		if id, ok := smart[baseDeviceName(m.device)]; ok {
@@ -96,6 +116,15 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 			if id.serial != "" {
 				attrs["serial"] = id.serial
 			}
+			if id.temperatureC != nil {
+				attrs["temperature_celsius"] = strconv.Itoa(*id.temperatureC)
+			}
+			if id.smartPassed != nil {
+				attrs["smart_status"] = map[bool]string{true: "passed", false: "failed"}[*id.smartPassed]
+			}
+		}
+		for key, value := range arrays[m.device] {
+			attrs[key] = value
 		}
 
 		items = append(items, schema.InventoryItem{ID: m.mountpoint, Name: m.mountpoint, Attrs: attrs})
@@ -109,6 +138,58 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 		Items:      items,
 	})
 	return nil
+}
+
+func (c *Collector) readArrayMembership(mounts []mountEntry) map[string]schema.Labels {
+	membership := make(map[string]schema.Labels)
+	if data, err := os.ReadFile(c.mdstatFile); err == nil {
+		for _, array := range capabilities.ParseMDStat(data) {
+			membership["/dev/"+array.Name] = schema.Labels{
+				"array_type":         string(capabilities.StorageMdraid),
+				"array_level":        array.Level,
+				"array_member_count": strconv.Itoa(array.MemberCount),
+				"array_health":       map[bool]string{true: "degraded", false: "healthy"}[array.Degraded],
+			}
+		}
+	}
+
+	data, err := os.ReadFile(c.snapraidConf)
+	if err != nil {
+		return membership
+	}
+	snapraid := capabilities.ParseSnapraidConfig(data)
+	if len(snapraid.Locations) == 0 {
+		return membership
+	}
+	level := strconv.Itoa(snapraid.ParityDisks) + " parity disks"
+	for _, mount := range mounts {
+		if !snapraidMountsAt(mount.mountpoint, snapraid.Locations) {
+			continue
+		}
+		role := "data"
+		if snapraidMountsAt(mount.mountpoint, snapraid.ParityLocations) {
+			role = "parity"
+		}
+		membership[mount.device] = schema.Labels{
+			"array_type":         string(capabilities.StorageSnapraid),
+			"array_level":        level,
+			"array_member_count": strconv.Itoa(len(snapraid.Locations)),
+			"array_health":       "unknown",
+			"array_role":         role,
+		}
+	}
+	return membership
+}
+
+func snapraidMountsAt(mountpoint string, locations []string) bool {
+	mountpoint = filepath.Clean(mountpoint)
+	for _, location := range locations {
+		location = filepath.Clean(location)
+		if location == mountpoint || strings.HasPrefix(location, mountpoint+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // Close implements collector.Collector.
@@ -161,6 +242,12 @@ func unescapeMountField(s string) string {
 
 type diskUsage struct {
 	total, used, available uint64
+	// fsID is statfs' f_fsid, hex encoded: the same for every mount of one
+	// filesystem (bind mounts included) and different for different ones,
+	// which is what lets a reader tell them apart when /proc/mounts names
+	// the same generic device (e.g. /dev/root) for both. Empty when the
+	// filesystem reports no id (all zero).
+	fsID string
 }
 
 func statfsUsage(mountpoint string) (diskUsage, bool) {
@@ -175,7 +262,11 @@ func statfsUsage(mountpoint string) (diskUsage, bool) {
 	if total < free {
 		return diskUsage{}, false
 	}
-	return diskUsage{total: total, used: total - free, available: avail}, true
+	usage := diskUsage{total: total, used: total - free, available: avail}
+	if st.Fsid.Val[0] != 0 || st.Fsid.Val[1] != 0 {
+		usage.fsID = fmt.Sprintf("%08x%08x", uint32(st.Fsid.Val[0]), uint32(st.Fsid.Val[1]))
+	}
+	return usage, true
 }
 
 // baseDeviceName strips a trailing partition number so "/dev/sdc1" and
@@ -219,12 +310,18 @@ func baseDeviceName(devicePath string) string {
 type smartIdentity struct {
 	model  string
 	serial string
+	// Pointers, not values: smartctl omits these fields entirely on
+	// devices that do not report them, and 0 °C or "not passed" are both
+	// plausible-looking lies to invent for a disk nobody measured.
+	temperatureC *int
+	smartPassed  *bool
 }
 
 // readSMARTIdentities reads bitacora-smart's spool entry (ADR-0005) and
-// extracts model/serial from each device's raw smartctl --json output —
-// leniently: only the couple of well-known top-level fields this needs,
-// tolerant of whatever else smartctl's much larger real schema contains.
+// extracts model, serial, current temperature and overall SMART health
+// from each device's raw smartctl --json output — leniently: only the few
+// well-known fields this needs, tolerant of whatever else smartctl's much
+// larger real schema contains.
 func (c *Collector) readSMARTIdentities() map[string]smartIdentity {
 	entries, err := spool.ReadDir(c.spoolDir)
 	if err != nil {
@@ -247,11 +344,24 @@ func (c *Collector) readSMARTIdentities() map[string]smartIdentity {
 		var parsed struct {
 			ModelName    string `json:"model_name"`
 			SerialNumber string `json:"serial_number"`
+			Temperature  *struct {
+				Current *int `json:"current"`
+			} `json:"temperature"`
+			SMARTStatus *struct {
+				Passed *bool `json:"passed"`
+			} `json:"smart_status"`
 		}
 		if err := json.Unmarshal(raw, &parsed); err != nil {
 			continue
 		}
-		identities[device] = smartIdentity{model: parsed.ModelName, serial: parsed.SerialNumber}
+		identity := smartIdentity{model: parsed.ModelName, serial: parsed.SerialNumber}
+		if parsed.Temperature != nil {
+			identity.temperatureC = parsed.Temperature.Current
+		}
+		if parsed.SMARTStatus != nil {
+			identity.smartPassed = parsed.SMARTStatus.Passed
+		}
+		identities[device] = identity
 	}
 	return identities
 }

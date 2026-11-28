@@ -21,6 +21,7 @@ import (
 
 	"github.com/bitacora-dev/bitacora/internal/capabilities"
 	"github.com/bitacora-dev/bitacora/internal/collector"
+	"github.com/bitacora-dev/bitacora/internal/faultcluster"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
 
@@ -59,9 +60,12 @@ type Collector struct {
 	open       OpenFunc
 	cursorPath string
 	hostID     string
+	sysRoot    string
+	procRoot   string
 
-	reader Reader
-	cursor string
+	reader       Reader
+	cursor       string
+	faultTracker *faultcluster.Tracker
 }
 
 // New returns a collector that reads the real systemd journal (Linux
@@ -87,8 +91,16 @@ func (c *Collector) Init(ctx context.Context, cfg collector.Config, host *collec
 	}
 
 	c.cursorPath = DefaultCursorPath
+	c.sysRoot = "/sys"
+	c.procRoot = "/proc"
 	if v, ok := cfg["cursor_path"].(string); ok && v != "" {
 		c.cursorPath = v
+	}
+	if v, ok := cfg["sys_root"].(string); ok && v != "" {
+		c.sysRoot = v
+	}
+	if v, ok := cfg["proc_root"].(string); ok && v != "" {
+		c.procRoot = v
 	}
 	if v, ok := cfg["open_func"].(OpenFunc); ok && v != nil {
 		c.open = v
@@ -105,6 +117,12 @@ func (c *Collector) Init(ctx context.Context, cfg collector.Config, host *collec
 		return fmt.Errorf("opening journal: %w", err)
 	}
 	c.reader = reader
+
+	// Segfault correlation is deliberately best-effort: journald must keep
+	// collecting log lines when the CPU topology cannot be read.
+	if topo, err := faultcluster.ReadTopology(c.sysRoot); err == nil {
+		c.faultTracker = faultcluster.NewTracker(topo)
+	}
 	return nil
 }
 
@@ -129,6 +147,9 @@ func (c *Collector) Collect(ctx context.Context, sink collector.Sink) error {
 		}
 
 		lines = append(lines, c.entryToLogLine(entry))
+		if event := c.observeSegfault(entry); event != nil {
+			sink.Event(*event)
+		}
 		lastCursor = entry.Cursor
 	}
 

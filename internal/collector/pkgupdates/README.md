@@ -14,8 +14,20 @@ Four independent sources, each degrading on its own:
   maintains) — no `exec`. Versions are compared with Debian's own
   ordering rules (`internal/debversion`), not plain string comparison,
   so "1.9" is correctly older than "1.10". Reports `cache_age_seconds`
-  (the oldest `*_Packages` file's age) alongside each result — a stale
-  `apt update` means a stale answer, and that's surfaced, not hidden.
+  alongside each result — a stale `apt update` means a stale answer, and
+  that's surfaced, not hidden. The age comes from signals that only move
+  when an update succeeded or replaced an index
+  (`periodic/update-success-stamp`, `periodic/update-stamp`, the lists
+  directory), never from the `*_Packages` mtimes: apt preserves each
+  index's remote `Last-Modified`, so a suite that never republishes keeps
+  its publication date forever. `lists/partial/`, `*_InRelease` mtimes and
+  `pkgcache.bin` are deliberately not used — apt moves them on failed runs
+  too, or they add nothing (see `aptCacheRefreshedAt`). Each item also
+  reports `candidate_suite` and `candidate_automatic`: the pending update
+  is the highest candidate apt would install on its own, and a newer one
+  from a `NotAutomatic` suite (Ubuntu's backports, which `apt upgrade`
+  never installs) is only reported, as `candidate_automatic=false`, when
+  nothing automatic is newer than the installed version.
 - **dnf** (`dnf.go`): reads the spool entry the new `bitacora-dnf`
   helper writes after running `dnf check-update` (ADR-0005) — parsing
   DNF's repository metadata format directly isn't reasonable without a
@@ -59,6 +71,13 @@ whole collector.
   demands more than anonymous or scope-limited token auth ends up
   "couldn't check", not authenticated against — ADR-0017 explicitly
   accepts this rather than forcing credential configuration.
+- **apt's full pin resolution.** `candidate_suite` and
+  `candidate_automatic` report the suite a candidate came from and that
+  suite's `NotAutomatic` flag; they are not a reimplementation of
+  `apt-cache policy`. Priorities from `/etc/apt/preferences.d`, and
+  `ButAutomaticUpgrades` (which does upgrade packages whose installed
+  version already came from that suite — unknowable from dpkg's
+  database), are deliberately not modelled.
 - **`Obsoleting Packages`** in dnf's output — packages that outright
   replace another installed package are a different concept from a
   version update, and `dnfhelper.parseCheckUpdate` stops before that

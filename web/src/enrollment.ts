@@ -33,9 +33,10 @@ export function agentSetupCommand({ hubURL, host }: AgentSetupInput): string {
   return [
     `install -d -m 0755 ${hostIDDir}`,
     `printf '%s\\n' ${shellQuote(host.host_id)} > ${host.host_id_path}`,
-    `install -d -m 0750 ${tokenDir}`,
+    `install -d -o root -g bitacora -m 0750 ${tokenDir}`,
     `printf '%s\\n' ${shellQuote(host.token)} > ${host.token_path}`,
-    `chmod 0600 ${host.token_path}`,
+    `chown root:bitacora ${host.token_path}`,
+    `chmod 0640 ${host.token_path}`,
     `bitacora-agent -hub-url=${shellQuote(hubURL)} -token-file=${host.token_path}`,
   ].join("\n");
 }

@@ -1,3 +1,5 @@
+<img src="web/public/bitacora-logo.png" alt="Bitácora logo" width="96">
+
 # Bitácora
 
 **Self-hosted observability and diagnostics for Linux servers.**

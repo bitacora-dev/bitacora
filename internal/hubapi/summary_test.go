@@ -3,17 +3,30 @@ package hubapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/prometheus/prometheus/model/labels"
 
+	"github.com/bitacora-dev/bitacora/internal/hubauth"
+	"github.com/bitacora-dev/bitacora/internal/logstore"
 	"github.com/bitacora-dev/bitacora/internal/metricstore"
 	"github.com/bitacora-dev/bitacora/internal/schema"
 )
+
+type expiredHuman struct{}
+
+func (expiredHuman) HasSession(*http.Request) bool { return false }
+func (expiredHuman) Identity(*http.Request) (hubauth.Identity, bool) {
+	return hubauth.Identity{}, false
+}
+func (expiredHuman) SessionExpired(*http.Request) bool { return true }
 
 type fakeMetrics struct {
 	samples map[string][]metricstore.Sample // metric name -> samples, filtered by matchers
@@ -46,14 +59,105 @@ type fakeEvents struct {
 	events []schema.Event
 }
 
+type fakeLogs struct{ entries []logstore.Entry }
+
+type fakeJobPoller struct {
+	job   schema.Job
+	lines []schema.JobOutputLine
+}
+
+func (f *fakeJobPoller) GetJob(_ context.Context, hostID, jobID string) (schema.Job, bool, error) {
+	return f.job, f.job.ID == jobID && f.job.HostID == hostID, nil
+}
+
+func (f *fakeJobPoller) ListJobOutput(_ context.Context, hostID, jobID string, after int64, limit int) ([]schema.JobOutputLine, int64, error) {
+	var out []schema.JobOutputLine
+	next := after
+	for _, line := range f.lines {
+		if f.job.HostID == hostID && line.JobID == jobID && line.Sequence > after && len(out) < limit {
+			out = append(out, line)
+			next = line.Sequence
+		}
+	}
+	return out, next, nil
+}
+
+func (f *fakeLogs) Query(_ context.Context, q logstore.Query) (logstore.Page, error) {
+	var matches []logstore.Entry
+	for _, entry := range f.entries {
+		if entry.HostID == q.HostID && !entry.TS.Before(q.From) && !entry.TS.After(q.To) && (q.Source == "" || entry.Source == q.Source) && (q.Unit == "" || entry.Unit == q.Unit) && (q.Text == "" || strings.Contains(entry.Message, q.Text)) && (q.BlockID == "" || strings.HasPrefix(entry.ID, q.BlockID+":")) {
+			matches = append(matches, entry)
+		}
+	}
+	if q.Offset >= len(matches) {
+		return logstore.Page{Entries: []logstore.Entry{}, Total: len(matches)}, nil
+	}
+	end := min(q.Offset+q.Limit, len(matches))
+	return logstore.Page{Entries: matches[q.Offset:end], Total: len(matches)}, nil
+}
+
+func TestLoginHandlerServesEmbeddedShellWithoutSession(t *testing.T) {
+	srv := &Server{WebUI: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Bitácora</title>")}}, Humans: expiredHuman{}}
+	rec := httptest.NewRecorder()
+	srv.LoginHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login shell status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Bitácora") {
+		t.Fatalf("login shell did not return embedded UI: %q", rec.Body.String())
+	}
+}
+
+func TestRequireHumanMarksAnExpiredSessionForTheLoginScreen(t *testing.T) {
+	srv := &Server{Humans: expiredHuman{}}
+	rec := httptest.NewRecorder()
+	srv.requireHuman(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("expired session reached protected UI") })).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("expired session status = %d, want %d", rec.Code, http.StatusFound)
+	}
+	if location := rec.Header().Get("Location"); !strings.Contains(location, "expired=1") {
+		t.Fatalf("login redirect = %q, want expiration marker", location)
+	}
+}
+
 func (f *fakeEvents) ListEvents(ctx context.Context, from, to time.Time, hostID string) ([]schema.Event, error) {
 	var out []schema.Event
 	for _, e := range f.events {
-		if e.HostID == hostID {
+		if e.HostID == hostID && !e.TS.Before(from) && !e.TS.After(to) {
 			out = append(out, e)
 		}
 	}
 	return out, nil
+}
+
+// ListLatestEvents mirrors the storage contract: newest first, bounded by
+// limit, and with no lower time bound at all.
+func (f *fakeEvents) ListLatestEvents(ctx context.Context, hostID string, limit int) ([]schema.Event, error) {
+	var matches []schema.Event
+	for _, e := range f.events {
+		if hostID == "" || e.HostID == hostID {
+			matches = append(matches, e)
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].TS.After(matches[j].TS) })
+	return matches[:min(limit, len(matches))], nil
+}
+
+func (f *fakeEvents) ListEventPage(ctx context.Context, from, to time.Time, hostID, severity, eventType string, limit, offset int) ([]schema.Event, int, error) {
+	var matches []schema.Event
+	for _, e := range f.events {
+		if e.HostID != hostID || e.TS.Before(from) || e.TS.After(to) || (severity != "" && string(e.Severity) != severity) || (eventType != "" && e.Type != eventType) {
+			continue
+		}
+		matches = append(matches, e)
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].TS.After(matches[j].TS) })
+	total := len(matches)
+	if offset >= total {
+		return []schema.Event{}, total, nil
+	}
+	end := min(offset+limit, total)
+	return matches[offset:end], total, nil
 }
 
 func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
@@ -96,6 +200,9 @@ func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
 	if len(got.CPU) != 1 || got.CPU[0].Value != 0.42 {
 		t.Fatalf("expected only the total cpu point at 0.42, got %+v", got.CPU)
 	}
+	if len(got.CPUCores) != 2 || got.CPUCores[0].CPU != "0" || got.CPUCores[1].CPU != "1" {
+		t.Fatalf("expected two identified cpu core series, got %+v", got.CPUCores)
+	}
 	if len(got.Memory) != 1 || got.Memory[0].Value != 0.7 {
 		t.Fatalf("expected 1 memory point at 0.7, got %+v", got.Memory)
 	}
@@ -113,7 +220,7 @@ func TestHandleSummary_ReturnsCPUMemoryAndEvents(t *testing.T) {
 	}
 }
 
-func TestHandleSummary_FiltersCPUToTotalSeries(t *testing.T) {
+func TestHandleSummary_KeepsCPUCoresAsSeparateSeries(t *testing.T) {
 	now := time.Now()
 	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
 		"bitacora_cpu_usage_ratio": {
@@ -144,6 +251,199 @@ func TestHandleSummary_FiltersCPUToTotalSeries(t *testing.T) {
 	if got.CPU[0].Value != 0.42 || !got.CPU[0].TS.Equal(now.Add(time.Second)) {
 		t.Fatalf("expected only host-a cpu=total point, got %+v", got.CPU[0])
 	}
+	if len(got.CPUCores) != 2 {
+		t.Fatalf("expected two cpu core series, got %+v", got.CPUCores)
+	}
+	if got.CPUCores[0].CPU != "0" || len(got.CPUCores[0].Points) != 1 || got.CPUCores[0].Points[0].Value != 0.9 {
+		t.Fatalf("expected cpu 0 to remain its own series, got %+v", got.CPUCores[0])
+	}
+	if got.CPUCores[1].CPU != "1" || len(got.CPUCores[1].Points) != 1 || got.CPUCores[1].Points[0].Value != 0.2 {
+		t.Fatalf("expected cpu 1 to remain its own series, got %+v", got.CPUCores[1])
+	}
+}
+
+func TestHandleSummary_KeepsTemperatureSensorsAsSeparateSeries(t *testing.T) {
+	first := time.Now().Add(-time.Minute).UTC()
+	second := first.Add(time.Minute)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_cpu_temperature_celsius": {
+			{Labels: map[string]string{"host_id": "host-a", "chip": "coretemp", "sensor": "package_id_0"}, Timestamp: second, Value: 34},
+			{Labels: map[string]string{"host_id": "host-a", "chip": "coretemp", "sensor": "core_0"}, Timestamp: first, Value: 31},
+			{Labels: map[string]string{"host_id": "host-a", "chip": "coretemp", "sensor": "package_id_0"}, Timestamp: first, Value: 33},
+			{Labels: map[string]string{"host_id": "host-a", "chip": "k10temp", "sensor": "tdie"}, Timestamp: first, Value: 42},
+			{Labels: map[string]string{"host_id": "host-b", "chip": "coretemp", "sensor": "package_id_0"}, Timestamp: first, Value: 99},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Temperatures) != 3 {
+		t.Fatalf("expected three identified temperature series, got %+v", got.Temperatures)
+	}
+	if got.Temperatures[0].Chip != "coretemp" || got.Temperatures[0].Sensor != "core_0" || len(got.Temperatures[0].Points) != 1 || got.Temperatures[0].Points[0].Value != 31 {
+		t.Fatalf("expected coretemp core_0 to remain its own series, got %+v", got.Temperatures[0])
+	}
+	if got.Temperatures[1].Chip != "coretemp" || got.Temperatures[1].Sensor != "package_id_0" || len(got.Temperatures[1].Points) != 2 || got.Temperatures[1].Points[0].Value != 33 || got.Temperatures[1].Points[1].Value != 34 {
+		t.Fatalf("expected coretemp package_id_0 to retain both ordered samples, got %+v", got.Temperatures[1])
+	}
+	if got.Temperatures[2].Chip != "k10temp" || got.Temperatures[2].Sensor != "tdie" || len(got.Temperatures[2].Points) != 1 || got.Temperatures[2].Points[0].Value != 42 {
+		t.Fatalf("expected k10temp tdie to remain its own series, got %+v", got.Temperatures[2])
+	}
+}
+
+func TestHandleSummary_OmitsTemperatureReadingsWhenNoSensorsExist(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{samples: map[string][]metricstore.Sample{}}, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Temperatures) != 0 {
+		t.Fatalf("expected no fabricated temperature reading without sensors, got %+v", got.Temperatures)
+	}
+}
+
+// TestHandleSummary_DerivesNetworkRateFromCumulativeCounters feeds the
+// endpoint raw cumulative counters (what the network collector now emits)
+// and asserts it returns a per-second rate: one host-level point per
+// timestamp, summed across interfaces, with loopback excluded.
+func TestHandleSummary_DerivesNetworkRateFromCumulativeCounters(t *testing.T) {
+	first := time.Now().Add(-time.Second).UTC()
+	second := first.Add(time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_net_rx_bytes_total": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: first, Value: 1000},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: first, Value: 500},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "lo"}, Timestamp: first, Value: 999999},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: second, Value: 1100},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: second, Value: 530},
+		},
+		"bitacora_net_tx_bytes_total": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: first, Value: 200},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: first, Value: 100},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "lo"}, Timestamp: first, Value: 999999},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: second, Value: 270},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: second, Value: 115},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	// Only the second point yields a rate: rateSeries needs a predecessor
+	// to differentiate against, so the first sample of each interface's
+	// series produces no point at all (not a zero point).
+	if len(got.NetworkRXBytesPerSecond) != 1 || got.NetworkRXBytesPerSecond[0].Value != 130 {
+		t.Fatalf("expected one rx rate point summing both interfaces (100+30=130), got %+v", got.NetworkRXBytesPerSecond)
+	}
+	if len(got.NetworkTXBytesPerSecond) != 1 || got.NetworkTXBytesPerSecond[0].Value != 85 {
+		t.Fatalf("expected one tx rate point summing both interfaces (70+15=85), got %+v", got.NetworkTXBytesPerSecond)
+	}
+}
+
+// TestHandleSummary_NetworkRateSumsMultipleActiveInterfaces asserts the
+// returned rate for a timestamp with several active interfaces is the sum
+// of each interface's own rate, not a rate computed over their summed
+// counters (that ordering is exactly what rateSeries's doc comment warns
+// against).
+func TestHandleSummary_NetworkRateSumsMultipleActiveInterfaces(t *testing.T) {
+	t0 := time.Now().Add(-2 * time.Second).UTC()
+	t1 := t0.Add(time.Second)
+	t2 := t1.Add(time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_net_rx_bytes_total": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t0, Value: 0},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t1, Value: 100},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t2, Value: 200},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: t0, Value: 0},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: t1, Value: 40},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "wlan0"}, Timestamp: t2, Value: 90},
+		},
+		"bitacora_net_tx_bytes_total": {},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.NetworkRXBytesPerSecond) != 2 {
+		t.Fatalf("expected two rate points (t1, t2), got %+v", got.NetworkRXBytesPerSecond)
+	}
+	// t1: eth0 (0->100)/1s=100, wlan0 (0->40)/1s=40 => 140
+	if got.NetworkRXBytesPerSecond[0].Value != 140 {
+		t.Fatalf("expected first point to sum both interfaces' rates (100+40=140), got %v", got.NetworkRXBytesPerSecond[0].Value)
+	}
+	// t2: eth0 (100->200)/1s=100, wlan0 (40->90)/1s=50 => 150
+	if got.NetworkRXBytesPerSecond[1].Value != 150 {
+		t.Fatalf("expected second point to sum both interfaces' rates (100+50=150), got %v", got.NetworkRXBytesPerSecond[1].Value)
+	}
+}
+
+// TestHandleSummary_NetworkRateSkipsCounterReset asserts a sample lower
+// than its predecessor (a counter reset from a reboot or interface reset)
+// is skipped rather than producing a negative or absurdly large rate.
+func TestHandleSummary_NetworkRateSkipsCounterReset(t *testing.T) {
+	t0 := time.Now().Add(-2 * time.Second).UTC()
+	t1 := t0.Add(time.Second)
+	t2 := t1.Add(time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_net_rx_bytes_total": {
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t0, Value: 5000},
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t1, Value: 100}, // reset
+			{Labels: map[string]string{"host_id": "host-a", "interface": "eth0"}, Timestamp: t2, Value: 300},
+		},
+		"bitacora_net_tx_bytes_total": {},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	// The t0->t1 pair is a reset and must be skipped entirely; only the
+	// t1->t2 pair (100->300, 1s) survives, as a normal +200 B/s rate.
+	if len(got.NetworkRXBytesPerSecond) != 1 {
+		t.Fatalf("expected only the post-reset pair to produce a point, got %+v", got.NetworkRXBytesPerSecond)
+	}
+	if got.NetworkRXBytesPerSecond[0].Value != 200 {
+		t.Fatalf("expected the surviving point to be a normal +200 B/s rate, got %v", got.NetworkRXBytesPerSecond[0].Value)
+	}
+	for _, p := range got.NetworkRXBytesPerSecond {
+		if p.Value < 0 {
+			t.Fatalf("expected no negative rate from a counter reset, got %+v", got.NetworkRXBytesPerSecond)
+		}
+	}
 }
 
 func TestHandleSummary_RequiresHostID(t *testing.T) {
@@ -166,7 +466,7 @@ func TestHandleSummary_EmptyDataReturnsEmptyArraysNotNull(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	body := rec.Body.String()
-	for _, field := range []string{`"cpu":[]`, `"memory":[]`, `"memory_total_bytes":[]`, `"memory_available_bytes":[]`, `"memory_used_bytes":[]`, `"events":[]`} {
+	for _, field := range []string{`"cpu":[]`, `"cpu_cores":[]`, `"memory":[]`, `"memory_total_bytes":[]`, `"memory_available_bytes":[]`, `"memory_used_bytes":[]`, `"events":[]`} {
 		if !strings.Contains(body, field) {
 			t.Fatalf("expected %s in response (empty array, not null), got %s", field, body)
 		}
@@ -201,6 +501,117 @@ func TestHandleSummary_DerivesMemoryUsedBytesFromTotalAndAvailable(t *testing.T)
 
 	if len(got.MemoryUsedBytes) != 1 || got.MemoryUsedBytes[0].Value != 5*1024*1024*1024 {
 		t.Fatalf("expected 5 GiB memory used derived from latest total, got %+v", got.MemoryUsedBytes)
+	}
+}
+
+// A fake job store with the same shape as storage: ListJobs is bounded by
+// the range it is given, ListLatestJobs is not.
+type fakeJobs struct {
+	jobs []schema.Job
+}
+
+func (f *fakeJobs) ListJobs(ctx context.Context, from, to time.Time, hostID string) ([]schema.Job, error) {
+	var out []schema.Job
+	for _, j := range f.jobs {
+		if j.HostID == hostID && !j.FinishedAt.Before(from) && !j.FinishedAt.After(to) {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeJobs) ListLatestJobs(ctx context.Context, hostID string, limit int) ([]schema.Job, error) {
+	var out []schema.Job
+	for _, j := range f.jobs {
+		if hostID == "" || j.HostID == hostID {
+			out = append(out, j)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FinishedAt.After(out[j].FinishedAt) })
+	return out[:min(limit, len(out))], nil
+}
+
+// The panels used to go blank whenever the host had been quiet for fifteen
+// minutes, which reads as "nothing is known" rather than "nothing happened".
+// Events and jobs are now counted, not ranged.
+func TestHandleSummary_EventsAndJobsIgnoreTheMetricWindow(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-72 * time.Hour)
+	events := &fakeEvents{events: []schema.Event{
+		{ID: "evt-old", TS: old, HostID: "host-a", Source: "kernel", Type: "kernel.segfault", Severity: schema.SeverityError, Title: "segfault", Schema: 1},
+	}}
+	jobs := &fakeJobs{jobs: []schema.Job{
+		{ID: "job-old", JobName: "nightly-backup", HostID: "host-a", StartedAt: old, FinishedAt: old.Add(time.Minute), Status: schema.JobSuccess, Schema: 1},
+	}}
+
+	srv := &Server{Metrics: &fakeMetrics{}, Events: events, Jobs: jobs}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Events) != 1 || got.Events[0].ID != "evt-old" {
+		t.Fatalf("an event three days old is still the latest event: %+v", got.Events)
+	}
+	if len(got.Jobs) != 1 || got.Jobs[0].ID != "job-old" {
+		t.Fatalf("an operation three days old is still the latest operation: %+v", got.Jobs)
+	}
+	// The metric window is untouched by any of this.
+	if got.WindowSecs != DefaultWindow.Seconds() {
+		t.Fatalf("window_secs = %v, want the unchanged metric window %v", got.WindowSecs, DefaultWindow.Seconds())
+	}
+}
+
+func TestHandleSummary_RecentBoundsHowManyRowsComeBack(t *testing.T) {
+	now := time.Now()
+	var stored []schema.Event
+	for i := range DefaultRecentRows + 3 {
+		stored = append(stored, schema.Event{
+			ID: fmt.Sprintf("evt-%d", i), TS: now.Add(-time.Duration(i) * time.Hour), HostID: "host-a",
+			Source: "kernel", Type: "kernel.segfault", Severity: schema.SeverityError, Title: "segfault", Schema: 1,
+		})
+	}
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{events: stored}}
+
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{query: "", want: DefaultRecentRows},
+		{query: "&recent=2", want: 2},
+		{query: "&recent=50", want: len(stored)},
+	} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a"+tc.query, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: expected 200, got %d: %s", tc.query, rec.Code, rec.Body.String())
+		}
+		var got Summary
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("%q: decoding response: %v", tc.query, err)
+		}
+		if len(got.Events) != tc.want {
+			t.Fatalf("%q: got %d events, want %d", tc.query, len(got.Events), tc.want)
+		}
+		if len(got.Events) > 1 && !got.Events[0].TS.After(got.Events[1].TS) {
+			t.Fatalf("%q: events must arrive newest first: %+v", tc.query, got.Events)
+		}
+	}
+}
+
+func TestHandleSummary_RejectsAnOutOfRangeRecent(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}}
+	for _, raw := range []string{"0", "-1", "not-a-number", fmt.Sprint(maxRecentRows + 1)} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a&recent="+raw, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("recent=%s: expected 400, got %d", raw, rec.Code)
+		}
 	}
 }
 
@@ -256,6 +667,134 @@ func TestHandleSummary_AcceptsValidDeviceToken(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 with a valid device token, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleEventsHistory_FiltersAndPaginatesAuthenticatedRequests(t *testing.T) {
+	devices := NewDeviceTokenStore()
+	_, token, _, err := devices.Start(context.Background())
+	if err != nil {
+		t.Fatalf("starting device token: %v", err)
+	}
+	from := time.Date(2026, time.January, 2, 10, 0, 0, 0, time.UTC)
+	events := &fakeEvents{events: []schema.Event{
+		{ID: "old", TS: from.Add(-time.Minute), HostID: "host-a", Type: "kernel.segfault", Severity: schema.SeverityError},
+		{ID: "first", TS: from.Add(time.Minute), HostID: "host-a", Type: "kernel.segfault", Severity: schema.SeverityError},
+		{ID: "skip-severity", TS: from.Add(2 * time.Minute), HostID: "host-a", Type: "kernel.segfault", Severity: schema.SeverityInfo},
+		{ID: "skip-type", TS: from.Add(3 * time.Minute), HostID: "host-a", Type: "service.restart", Severity: schema.SeverityError},
+		{ID: "second", TS: from.Add(4 * time.Minute), HostID: "host-a", Type: "kernel.segfault", Severity: schema.SeverityError},
+	}}
+	srv := &Server{Metrics: &fakeMetrics{}, Events: events, Devices: devices}
+	url := "/v1/events?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&severity=error&type=kernel.segfault&limit=1&offset=1"
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got EventHistory
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if got.Total != 2 || got.Offset != 1 || got.Limit != 1 || len(got.Events) != 1 || got.Events[0].ID != "first" {
+		t.Fatalf("unexpected page: %+v", got)
+	}
+}
+
+func TestHandleEventsHistory_RequiresExplicitRange(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{}, Events: &fakeEvents{}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/events?host_id=host-a", nil)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a missing range, got %d", rec.Code)
+	}
+}
+
+func TestHandleLogs_QueriesBoundedPage(t *testing.T) {
+	from := time.Date(2026, time.January, 2, 10, 0, 0, 0, time.UTC)
+	srv := &Server{Logs: &fakeLogs{entries: []logstore.Entry{{ID: "one", TS: from.Add(time.Minute), HostID: "host-a", Source: "journald", Unit: "api.service", Message: "first"}, {ID: "two", TS: from.Add(2 * time.Minute), HostID: "host-a", Source: "journald", Unit: "api.service", Message: "second"}}}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/logs?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&source=journald&unit=api.service&limit=1&offset=1", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got LogHistory
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 || len(got.Entries) != 1 || got.Entries[0].ID != "two" {
+		t.Fatalf("unexpected page: %+v", got)
+	}
+}
+
+func TestHandleLogs_BlockFilterReachesTheLinesALogRefNames(t *testing.T) {
+	from := time.Date(2026, time.January, 2, 10, 0, 0, 0, time.UTC)
+	srv := &Server{Logs: &fakeLogs{entries: []logstore.Entry{
+		{ID: "block-a:0", TS: from.Add(time.Minute), HostID: "host-a", Source: "journald", Message: "unrelated"},
+		{ID: "block-b:0", TS: from.Add(2 * time.Minute), HostID: "host-a", Source: "journald", Message: "segfault preamble"},
+		{ID: "block-b:1", TS: from.Add(3 * time.Minute), HostID: "host-a", Source: "journald", Message: "kernel: general protection fault"},
+	}}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/logs?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&block=block-b&limit=50", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got LogHistory
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 {
+		t.Fatalf("expected only the referenced block, got %+v", got)
+	}
+	if got.Entries[1].ID != "block-b:1" {
+		t.Fatalf("expected the referenced line to be identifiable by id, got %q", got.Entries[1].ID)
+	}
+}
+
+func TestHandleLogs_EmptyAndInvalidRequests(t *testing.T) {
+	srv := &Server{Logs: &fakeLogs{}}
+	for _, tc := range []struct {
+		name, url string
+		want      int
+	}{
+		{"empty range", "/v1/logs?host_id=missing&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&limit=50&offset=0", http.StatusOK},
+		{"missing host", "/v1/logs?from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z", http.StatusBadRequest},
+		{"invalid limit", "/v1/logs?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&limit=501", http.StatusBadRequest},
+		{"invalid offset", "/v1/logs?host_id=host-a&from=2026-01-02T10:00:00Z&to=2026-01-02T10:10:00Z&offset=-1", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.url, nil))
+			if rec.Code != tc.want {
+				t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandleJobPoll_ReturnsSnapshotAndIncrementalOutput(t *testing.T) {
+	started := time.Date(2026, 9, 19, 10, 0, 0, 0, time.UTC)
+	poller := &fakeJobPoller{job: schema.Job{ID: "job-1", JobName: "backup", HostID: "host-a", StartedAt: started, Status: schema.JobRunning, Schema: 1}, lines: []schema.JobOutputLine{{JobID: "job-1", Sequence: 1, TS: started, Stream: "stdout", Message: "one"}, {JobID: "job-1", Sequence: 2, TS: started.Add(time.Second), Stream: "stderr", Message: "two"}}}
+	srv := &Server{JobPoller: poller}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1?host_id=host-a&after=1&limit=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got JobPoll
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Job.ID != "job-1" || got.NextAfter != 2 || len(got.Lines) != 1 || got.Lines[0].Message != "two" || got.Complete {
+		t.Fatalf("unexpected poll result: %+v", got)
 	}
 }
 
@@ -395,5 +934,390 @@ func TestHandleDevicePair_RespondsServiceUnavailableWithoutDevices(t *testing.T)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503 when Devices is nil, got %d", rec.Code)
+	}
+}
+
+// TestHandleSummary_ExposesPublicSurfaceSignals is the regression test for
+// the audit finding this endpoint shipped with: the public_surface
+// collector wrote five metrics into tsdb and GET /v1/summary queried none
+// of them, so a brute-force run against an internet-facing host was
+// invisible on the dashboard while its evidence sat in the database.
+func TestHandleSummary_ExposesPublicSurfaceSignals(t *testing.T) {
+	first := time.Now().Add(-10 * time.Minute).UTC()
+	second := first.Add(5 * time.Minute)
+	host := map[string]string{"host_id": "host-a"}
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_public_ssh_failed_logins_total": {
+			{Labels: host, Timestamp: first, Value: 400},
+			{Labels: host, Timestamp: second, Value: 460},
+		},
+		"bitacora_public_fail2ban_jails_total": {
+			{Labels: host, Timestamp: second, Value: 3},
+		},
+		"bitacora_public_fail2ban_banned_total": {
+			{Labels: host, Timestamp: first, Value: 11},
+			{Labels: host, Timestamp: second, Value: 14},
+		},
+		"bitacora_public_firewall_rules_total": {
+			{Labels: host, Timestamp: second, Value: 27},
+		},
+		"bitacora_public_ovh_traffic_used_ratio": {
+			{Labels: host, Timestamp: second, Value: 0.42},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a&window=1h", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	surface := got.PublicSurface
+
+	if len(surface.SSHFailedLoginsTotal) != 2 || surface.SSHFailedLoginsTotal[1].Value != 460 {
+		t.Fatalf("ssh failed login totals = %+v, want both raw samples", surface.SSHFailedLoginsTotal)
+	}
+	// 60 new failures over 300 seconds is 12 per minute. The first sample
+	// has nothing to differentiate against, so it contributes no point.
+	if len(surface.SSHFailedLoginsPerMinute) != 1 || surface.SSHFailedLoginsPerMinute[0].Value != 12 {
+		t.Fatalf("ssh failed logins per minute = %+v, want a single 12/min point", surface.SSHFailedLoginsPerMinute)
+	}
+	if len(surface.Fail2BanJailsTotal) != 1 || surface.Fail2BanJailsTotal[0].Value != 3 {
+		t.Fatalf("fail2ban jails = %+v, want 3", surface.Fail2BanJailsTotal)
+	}
+	if len(surface.Fail2BanBannedTotal) != 2 || surface.Fail2BanBannedTotal[1].Value != 14 {
+		t.Fatalf("fail2ban banned = %+v, want 14 latest", surface.Fail2BanBannedTotal)
+	}
+	if len(surface.FirewallRulesTotal) != 1 || surface.FirewallRulesTotal[0].Value != 27 {
+		t.Fatalf("firewall rules = %+v, want 27", surface.FirewallRulesTotal)
+	}
+	if len(surface.OVHTrafficUsedRatio) != 1 || surface.OVHTrafficUsedRatio[0].Value != 0.42 {
+		t.Fatalf("ovh traffic ratio = %+v, want 0.42", surface.OVHTrafficUsedRatio)
+	}
+}
+
+// TestHandleSummary_PublicSurfaceRateSkipsLogRotation guards the specific
+// shape of this collector: it re-counts matching lines in the *current*
+// auth log every cycle, so logrotate drops the counter back down. That drop
+// must produce no point rather than a negative rate — a negative or zeroed
+// "attempts per minute" reads as "the attack stopped", which is the exact
+// class of false reassurance this panel exists to avoid.
+func TestHandleSummary_PublicSurfaceRateSkipsLogRotation(t *testing.T) {
+	first := time.Now().Add(-15 * time.Minute).UTC()
+	second := first.Add(5 * time.Minute)
+	third := second.Add(5 * time.Minute)
+	host := map[string]string{"host_id": "host-a"}
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_public_ssh_failed_logins_total": {
+			{Labels: host, Timestamp: first, Value: 900},
+			{Labels: host, Timestamp: second, Value: 4}, // auth.log rotated
+			{Labels: host, Timestamp: third, Value: 34},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a&window=1h", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	points := got.PublicSurface.SSHFailedLoginsPerMinute
+	if len(points) != 1 || points[0].Value != 6 {
+		t.Fatalf("per-minute points = %+v, want only the post-rotation interval at 6/min", points)
+	}
+	if !points[0].TS.Equal(third) {
+		t.Fatalf("per-minute point timestamp = %s, want the post-rotation sample at %s", points[0].TS, third)
+	}
+}
+
+// TestHandleSummary_PublicSurfaceAbsentIsEmptyNotZero is the "never an
+// invented zero" contract. A host that is not operator-declared as publicly
+// exposed runs no public_surface collector at all, so the honest answer is
+// "nothing reported", expressed as empty arrays the UI can tell apart from
+// a measured zero.
+func TestHandleSummary_PublicSurfaceAbsentIsEmptyNotZero(t *testing.T) {
+	srv := &Server{Metrics: &fakeMetrics{samples: map[string][]metricstore.Sample{}}, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	body := rec.Body.String()
+	for _, field := range []string{
+		`"ssh_failed_logins_total":[]`,
+		`"ssh_failed_logins_per_minute":[]`,
+		`"fail2ban_jails_total":[]`,
+		`"fail2ban_banned_total":[]`,
+		`"firewall_rules_total":[]`,
+		`"ovh_traffic_used_ratio":[]`,
+	} {
+		if !strings.Contains(body, field) {
+			t.Fatalf("expected %s in response (empty array, not null and not a zero point), got %s", field, body)
+		}
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.PublicSurface.SSHFailedLoginsTotal) != 0 || len(got.PublicSurface.Fail2BanBannedTotal) != 0 {
+		t.Fatalf("unreported public surface must carry no points, got %+v", got.PublicSurface)
+	}
+}
+
+// TestHandleSummary_PublicSurfaceIsScopedToTheRequestedHost keeps the
+// host_id matcher on every new query: a shared hub must never attribute one
+// host's attack traffic to another.
+func TestHandleSummary_PublicSurfaceIsScopedToTheRequestedHost(t *testing.T) {
+	ts := time.Now().Add(-time.Minute).UTC()
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_public_fail2ban_banned_total": {
+			{Labels: map[string]string{"host_id": "host-a"}, Timestamp: ts, Value: 7},
+			{Labels: map[string]string{"host_id": "host-b"}, Timestamp: ts, Value: 91},
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.PublicSurface.Fail2BanBannedTotal) != 1 || got.PublicSurface.Fail2BanBannedTotal[0].Value != 7 {
+		t.Fatalf("banned totals = %+v, want only host-a's 7", got.PublicSurface.Fail2BanBannedTotal)
+	}
+}
+
+// containerSample builds one docker-collector sample: the collector always
+// emits container_id truncated to 12 characters alongside container_name.
+func containerSample(id, name string, ts time.Time, value float64) metricstore.Sample {
+	return metricstore.Sample{Labels: map[string]string{"host_id": "host-a", "container_id": id, "container_name": name}, Timestamp: ts, Value: value}
+}
+
+// TestHandleSummary_KeepsContainersAsSeparateSeries is the guard against the
+// mistake #699 made with logical CPUs: every container is its own series and
+// flattening them produces one meaningless zig-zag line.
+func TestHandleSummary_KeepsContainersAsSeparateSeries(t *testing.T) {
+	t0 := time.Now().Add(-2 * time.Minute).UTC()
+	t1 := t0.Add(30 * time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_container_cpu_seconds_total": {
+			containerSample("aaaaaaaaaaaa", "dokploy-postgres", t0, 100),
+			containerSample("aaaaaaaaaaaa", "dokploy-postgres", t1, 115),
+			containerSample("bbbbbbbbbbbb", "dokploy-traefik", t0, 10),
+			containerSample("bbbbbbbbbbbb", "dokploy-traefik", t1, 13),
+		},
+		"bitacora_container_memory_bytes": {
+			containerSample("aaaaaaaaaaaa", "dokploy-postgres", t0, 512<<20),
+			containerSample("aaaaaaaaaaaa", "dokploy-postgres", t1, 520<<20),
+			containerSample("bbbbbbbbbbbb", "dokploy-traefik", t0, 64<<20),
+			containerSample("bbbbbbbbbbbb", "dokploy-traefik", t1, 66<<20),
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 2 {
+		t.Fatalf("expected one series per container, got %+v", got.Containers)
+	}
+	postgres, traefik := got.Containers[0], got.Containers[1]
+	if postgres.ContainerName != "dokploy-postgres" || traefik.ContainerName != "dokploy-traefik" {
+		t.Fatalf("expected containers sorted by name, got %q and %q", postgres.ContainerName, traefik.ContainerName)
+	}
+	if postgres.ContainerID != "aaaaaaaaaaaa" || traefik.ContainerID != "bbbbbbbbbbbb" {
+		t.Fatalf("expected each series to keep its own container id, got %q and %q", postgres.ContainerID, traefik.ContainerID)
+	}
+
+	// 15 CPU-seconds over 30s is half a core; 3 over 30s is a tenth.
+	if len(postgres.CPUCoresUsed) != 1 || postgres.CPUCoresUsed[0].Value != 0.5 {
+		t.Fatalf("expected postgres to use half a core on its own series, got %+v", postgres.CPUCoresUsed)
+	}
+	if len(traefik.CPUCoresUsed) != 1 || traefik.CPUCoresUsed[0].Value != 0.1 {
+		t.Fatalf("expected traefik to use a tenth of a core on its own series, got %+v", traefik.CPUCoresUsed)
+	}
+	// A flattened implementation would report the pair's sum (0.6) on a single
+	// series instead of keeping each container's own rate.
+	if postgres.CPUCoresUsed[0].Value+traefik.CPUCoresUsed[0].Value != 0.6 {
+		t.Fatalf("expected the two per-container rates to remain separate, got %+v and %+v", postgres.CPUCoresUsed, traefik.CPUCoresUsed)
+	}
+
+	if len(postgres.MemoryBytes) != 2 || postgres.MemoryBytes[0].Value != 512<<20 || postgres.MemoryBytes[1].Value != 520<<20 {
+		t.Fatalf("expected postgres memory to stay on its own series in timestamp order, got %+v", postgres.MemoryBytes)
+	}
+	if len(traefik.MemoryBytes) != 2 || traefik.MemoryBytes[0].Value != 64<<20 {
+		t.Fatalf("expected traefik memory to stay on its own series, got %+v", traefik.MemoryBytes)
+	}
+}
+
+// TestHandleSummary_ContainerStartingMidWindowAddsNoSpuriousSpike is the guard
+// against the mistake #885 made with network counters: summing cumulative
+// counters across containers first and differentiating the sum afterwards
+// turns every container start into a fake CPU spike. On a Dokploy host that
+// happens all day long.
+func TestHandleSummary_ContainerStartingMidWindowAddsNoSpuriousSpike(t *testing.T) {
+	t0 := time.Now().Add(-90 * time.Second).UTC()
+	t1 := t0.Add(30 * time.Second)
+	t2 := t1.Add(30 * time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		// "old" has been running for hours, so its counter is already large.
+		// "new" starts at t1 — a sum-then-differentiate pass would read old's
+		// 3600 plus new's 0 as a 3600-CPU-second jump inside one interval.
+		"bitacora_container_cpu_seconds_total": {
+			containerSample("oldoldoldold", "long-running", t0, 3600),
+			containerSample("oldoldoldold", "long-running", t1, 3603),
+			containerSample("oldoldoldold", "long-running", t2, 3606),
+			containerSample("newnewnewnew", "just-deployed", t1, 0),
+			containerSample("newnewnewnew", "just-deployed", t2, 6),
+		},
+		"bitacora_container_memory_bytes": {},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 2 {
+		t.Fatalf("expected two containers, got %+v", got.Containers)
+	}
+	byName := map[string]ContainerSeries{}
+	for _, container := range got.Containers {
+		byName[container.ContainerName] = container
+	}
+
+	deployed := byName["just-deployed"]
+	if len(deployed.CPUCoresUsed) != 1 {
+		t.Fatalf("expected one rate point for the container that started mid-window, got %+v", deployed.CPUCoresUsed)
+	}
+	// Its first sample opens the series; it is a baseline, not a 0->6 jump
+	// measured from nothing. 6 CPU-seconds over 30s is a fifth of a core.
+	if deployed.CPUCoresUsed[0].Value != 0.2 {
+		t.Fatalf("expected the new container's own rate (0.2 cores), got %v", deployed.CPUCoresUsed[0].Value)
+	}
+
+	running := byName["long-running"]
+	if len(running.CPUCoresUsed) != 2 {
+		t.Fatalf("expected two rate points for the long-running container, got %+v", running.CPUCoresUsed)
+	}
+	for _, point := range running.CPUCoresUsed {
+		if point.Value != 0.1 {
+			t.Fatalf("expected the long-running container to stay at 0.1 cores, unaffected by the new container; got %+v", running.CPUCoresUsed)
+		}
+	}
+}
+
+// TestHandleSummary_ContainerCPUSkipsCounterReset covers a container that is
+// restarted in place: cgroup v2 starts its cpu.stat back at zero, which is a
+// reset, not a negative rate.
+func TestHandleSummary_ContainerCPUSkipsCounterReset(t *testing.T) {
+	t0 := time.Now().Add(-90 * time.Second).UTC()
+	t1 := t0.Add(30 * time.Second)
+	t2 := t1.Add(30 * time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_container_cpu_seconds_total": {
+			containerSample("cccccccccccc", "restarted", t0, 300),
+			containerSample("cccccccccccc", "restarted", t1, 0),
+			containerSample("cccccccccccc", "restarted", t2, 3),
+		},
+		"bitacora_container_memory_bytes": {},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 1 {
+		t.Fatalf("expected one container, got %+v", got.Containers)
+	}
+	if len(got.Containers[0].CPUCoresUsed) != 1 || got.Containers[0].CPUCoresUsed[0].Value != 0.1 {
+		t.Fatalf("expected the reset interval skipped and only the 0.1-core interval kept, got %+v", got.Containers[0].CPUCoresUsed)
+	}
+}
+
+// TestHandleSummary_ContainerNameFollowsTheLatestSample covers the collector's
+// ADR-0005 degraded mode: without docker-socket-proxy it falls back to the
+// truncated ID as the name, and the real name only appears once the proxy
+// answers again. The most recent label wins.
+func TestHandleSummary_ContainerNameFollowsTheLatestSample(t *testing.T) {
+	t0 := time.Now().Add(-60 * time.Second).UTC()
+	t1 := t0.Add(30 * time.Second)
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_container_cpu_seconds_total": {},
+		// Same container id throughout; only the name label changes, because
+		// the collector fell back to the truncated id until the proxy answered.
+		"bitacora_container_memory_bytes": {
+			containerSample("dddddddddddd", "dddddddddddd", t0, 1<<20),
+			containerSample("dddddddddddd", "dokploy-redis", t1, 2<<20),
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 1 {
+		t.Fatalf("expected the two samples to belong to one container, got %+v", got.Containers)
+	}
+	if got.Containers[0].ContainerName != "dokploy-redis" {
+		t.Fatalf("expected the most recent container_name to win, got %q", got.Containers[0].ContainerName)
+	}
+}
+
+// TestHandleSummary_HostWithoutContainersReportsAbsenceNotZero asserts a host
+// running no containers answers with an empty list, never with zero-valued
+// points a chart would draw as a flat "0 cores" line.
+func TestHandleSummary_HostWithoutContainersReportsAbsenceNotZero(t *testing.T) {
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	if !strings.Contains(rec.Body.String(), `"containers":[]`) {
+		t.Fatalf("expected an empty containers array rather than null, got %s", rec.Body.String())
+	}
+}
+
+// TestHandleSummary_ContainersAreScopedToTheRequestedHost keeps another host's
+// containers out of this host's panel.
+func TestHandleSummary_ContainersAreScopedToTheRequestedHost(t *testing.T) {
+	now := time.Now().UTC()
+	other := containerSample("eeeeeeeeeeee", "elsewhere", now, 1<<20)
+	other.Labels["host_id"] = "host-b"
+	metrics := &fakeMetrics{samples: map[string][]metricstore.Sample{
+		"bitacora_container_memory_bytes": {
+			containerSample("ffffffffffff", "here", now, 2<<20),
+			other,
+		},
+	}}
+	srv := &Server{Metrics: metrics, Events: &fakeEvents{}}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/summary?host_id=host-a", nil))
+
+	var got Summary
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(got.Containers) != 1 || got.Containers[0].ContainerName != "here" {
+		t.Fatalf("expected only host-a's container, got %+v", got.Containers)
 	}
 }

@@ -125,9 +125,12 @@ func TestAcceptance_KillHubMidStream_SurvivesAgentRestart_ThenBackfillSucceeds(t
 			sentBeforeCrash, remainingAfterCrash, totalItems)
 	}
 
-	// --- Phase 2: agent restarts. Not calling buf.Close() first is the
-	// point — an unclean shutdown is exactly what "reinicio del agente"
-	// after a hub crash usually looks like. ---
+	// --- Phase 2: agent restarts. Release only the process lock without
+	// sealing the active WAL, matching the state left by an unclean process
+	// exit. ---
+	if err := buf.lockFile.Close(); err != nil {
+		t.Fatalf("releasing simulated crashed process lock: %v", err)
+	}
 	buf2, err := Open(dir)
 	if err != nil {
 		t.Fatalf("unexpected error reopening the buffer after restart: %v", err)

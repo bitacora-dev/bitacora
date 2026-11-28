@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Provisions the non-root bitacora system user, the group used by the
-# systemd-journal supplementary group grant, and the /var/lib/bitacora/spool
-# exchange directory (ADR-0005). Idempotent: safe to re-run.
+# systemd-journal supplementary group grant, its persistent state directory,
+# and the inbound/outbound spool directories (ADR-0005, ADR-0008). Idempotent:
+# safe to re-run.
 #
 # Run as root. Does not install any binary or systemd unit — see
 # packaging/systemd/ for those.
@@ -30,7 +31,20 @@ else
   echo "warning: group systemd-journal not found — journald collector will be degraded" >&2
 fi
 
-install -d -o root -g bitacora -m 0750 /var/lib/bitacora
+# The agent creates host_id and persistent collector cursors in this directory.
+install -d -o bitacora -g bitacora -m 0750 /var/lib/bitacora
+
+# Privileged helpers write inbound entries here; the agent only reads them.
 install -d -o root -g bitacora -m 0750 /var/lib/bitacora/spool
 
-echo "provisioned /var/lib/bitacora and /var/lib/bitacora/spool (root:bitacora, 0750)"
+# The agent owns its outbound WAL so it can create and append segments without
+# being able to write the root-owned inbound spool directory.
+install -d -o bitacora -g bitacora -m 0750 /var/lib/bitacora/spool/outbound
+
+# The agent can stage only closed action identifiers. It cannot write the
+# root-owned result directory, so it cannot forge completion or output.
+install -d -o root -g bitacora -m 0750 /var/lib/bitacora/package-actions
+install -d -o root -g bitacora -m 0770 /var/lib/bitacora/package-actions/requests
+install -d -o root -g bitacora -m 0750 /var/lib/bitacora/package-actions/results
+
+echo "provisioned agent state, spool, outbound WAL, and package action directories"

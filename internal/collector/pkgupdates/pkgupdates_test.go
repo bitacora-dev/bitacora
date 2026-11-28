@@ -86,6 +86,33 @@ func TestCollector_NoSourcesYieldsEmptySnapshotNotError(t *testing.T) {
 	}
 }
 
+func TestCollector_ReportsLocalActionAvailabilityAsNonPackageMetadata(t *testing.T) {
+	c := New(ActionAvailability{RefreshPackageCache: true, PackageCacheMaxAgeSeconds: 3600})
+	if err := c.Init(context.Background(), collector.Config{}, &collector.HostInfo{ID: "host-a"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sink := &recordingSink{}
+	if err := c.Collect(context.Background(), sink); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sink.inventories) != 1 {
+		t.Fatalf("expected one inventory, got %+v", sink.inventories)
+	}
+	var attrs schema.Labels
+	for _, item := range sink.inventories[0].Items {
+		if item.ID == "package-actions" {
+			attrs = item.Attrs
+			break
+		}
+	}
+	if attrs == nil {
+		t.Fatalf("expected action metadata, got %+v", sink.inventories[0].Items)
+	}
+	if attrs["refresh_package_cache"] != "true" || attrs["apply_pending_package_updates"] != "false" || attrs["package_cache_max_age_seconds"] != "3600" {
+		t.Fatalf("unexpected action metadata: %+v", attrs)
+	}
+}
+
 func TestCollector_RespectsContextCancellation(t *testing.T) {
 	c := New()
 	if err := c.Init(context.Background(), collector.Config{}, nil); err != nil {

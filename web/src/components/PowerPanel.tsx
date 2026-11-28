@@ -4,14 +4,20 @@ import { formatRuntime } from "../relativeTime";
 
 // A UPS that has switched to battery is the most urgent thing this dashboard
 // can say: the wall power is gone and the runtime estimate is a countdown to
-// an unplanned shutdown. So this panel keeps one fixed slot at the top of the
-// page and changes intensity in place — a single quiet line while mains power
-// is present, an alarm when it is not. It never moves, so the eye already
-// knows where to look on the day it matters.
+// an unplanned shutdown. So power keeps one fixed place on the page and
+// changes intensity there — `PowerChip` in the host bar carries the quiet
+// state on every screen, and this strip escalates in the slot directly below
+// it when a unit reports battery. The fixed place the eye learns is the chip;
+// the strip is the same fact given the room an alarm needs.
 //
-// A host without a UPS renders nothing at all. The `ups` collector only
-// registers when the PowerUPS capability is detected, so a missing inventory
-// means "no UPS here", not "0 % battery".
+// The chip is what makes that split honest. A panel that exists only during
+// the emergency teaches the operator nothing about where to look, so the
+// quiet state is never hidden: it is one line in the bar instead of a full
+// panel above a dense overview.
+//
+// A host without a UPS renders nothing at all, in either place. The `ups`
+// collector only registers when the PowerUPS capability is detected, so a
+// missing inventory means "no UPS here", not "0 % battery".
 
 export interface UPSReading {
   id: string;
@@ -85,16 +91,52 @@ interface Props {
   inventory: Inventory | null;
 }
 
+// PowerChip is the quiet, always-present state: one short line in the host
+// bar for every UPS the host reports. It states the power source in words
+// before any colour, and never reads an unreported source as mains.
+export function PowerChip({ inventory }: Props) {
+  const { t, intlTag } = useTranslation();
+  const readings = readUPSInventory(inventory);
+  if (readings.length === 0) return null;
+
+  const percent = new Intl.NumberFormat(intlTag, { style: "percent", maximumFractionDigits: 0 });
+
+  return (
+    <span className="power-chips">
+      {readings.map((reading) => (
+        <span
+          key={reading.id}
+          className={`power-chip power-chip--${reading.onBattery === true ? "alarm" : reading.onBattery === false ? "mains" : "unknown"}`}
+          title={describeUnit(reading, t)}
+        >
+          <span className="power-chip-label">{t.powerHeading}</span>
+          <span>{reading.onBattery === true ? t.powerOnBatteryShort : reading.onBattery === false ? t.powerOnMains : t.powerStateUnknown}</span>
+          {reading.chargeRatio !== null && <span>{t.powerBatteryCharge(percent.format(reading.chargeRatio))}</span>}
+          {reading.onBattery === true && reading.runtimeSeconds !== null && (
+            <span>{t.powerRuntimeEstimate(formatRuntime(reading.runtimeSeconds, intlTag))}</span>
+          )}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// The escalation. It renders nothing while mains power is present, because
+// PowerChip is already holding that state in the host bar directly above;
+// drawing a second quiet panel for the same fact spent a full row of a dense
+// overview restating one word.
 export default function PowerPanel({ inventory }: Props) {
   const { t, intlTag } = useTranslation();
   const readings = readUPSInventory(inventory);
   if (readings.length === 0) return null;
 
   const onBattery = anyOnBattery(readings);
+  if (!onBattery) return null;
+
   const percent = new Intl.NumberFormat(intlTag, { style: "percent", maximumFractionDigits: 0 });
 
   return (
-    <section className={onBattery ? "power-strip power-strip--alarm" : "power-strip"} aria-label={t.powerHeading}>
+    <section className="power-strip power-strip--alarm" aria-label={t.powerHeading}>
       {readings.map((reading) => (
         <article key={reading.id} className={reading.onBattery === true ? "power-panel power-panel--alarm" : "power-panel"}>
           {reading.onBattery === true ? (

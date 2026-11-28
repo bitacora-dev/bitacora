@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { confirmAction, fetchJob, issueActionToken, type ActionToken, type Inventory, type InventoryItem, type JobOutputLine, type PackageOperation } from "../api";
 import { useTranslation, type Dictionary } from "../i18n";
+import { packageVersions } from "../overview";
 import { ageSeconds, formatAge } from "../relativeTime";
 
 const POLL_INTERVAL_MS = 3_000;
@@ -83,8 +84,38 @@ export function packageAttributeValue(value: string, t: Pick<Dictionary, "invent
   return value;
 }
 
+// Attributes the row itself already states. Everything else stays reachable
+// behind the row's disclosure rather than being dropped: a digest or an
+// architecture the hub sends and the panel discards is a defect, not tidying.
+const ROW_ATTRIBUTES = new Set(["cache_age_seconds", "installed_version", "candidate_version", "source"]);
+
+// One compact row per package, image or plugin: what it is, the version it
+// runs and the version waiting. The previous shape printed every attribute as
+// a definition list under each name, which turned eleven pending packages
+// into a page of its own.
 function PackageItemList({ items, t }: { items: InventoryItem[]; t: Dictionary }) {
-  return <ul className="inventory-list">{items.map((item) => <li key={item.id}><strong>{item.name}</strong><dl>{Object.entries(item.attrs).filter(([key]) => key !== "cache_age_seconds").map(([key, value]) => <div key={key}><dt>{t.inventoryAttribute(key)}</dt><dd>{packageAttributeValue(value, t)}</dd></div>)}</dl></li>)}</ul>;
+  return <ul className="package-rows">{items.map((item) => {
+    const versions = packageVersions(item);
+    const rest = Object.entries(item.attrs).filter(([key]) => !ROW_ATTRIBUTES.has(key));
+    return <li className="package-row" key={item.id}>
+      <div className="package-row-head">
+        <strong title={item.id}>{item.name}</strong>
+        <span className="package-row-versions">
+          {/* An unreported version is said in words. An empty cell beside an
+              arrow reads as "upgrading to nothing". */}
+          <span className="package-version package-version--installed">{versions.installed ?? t.packageVersionUnreported}</span>
+          <span className="package-version-arrow" aria-hidden="true" />
+          <span className="sr-only">{t.packageVersionTransition}</span>
+          <span className="package-version package-version--candidate">{versions.candidate ?? t.packageVersionUnreported}</span>
+        </span>
+        {versions.source && <span className="inventory-badge">{versions.source}</span>}
+      </div>
+      {rest.length > 0 && <details className="package-row-details">
+        <summary>{t.packageRowDetails}</summary>
+        <dl>{rest.map(([key, value]) => <div key={key}><dt>{t.inventoryAttribute(key)}</dt><dd>{packageAttributeValue(value, t)}</dd></div>)}</dl>
+      </details>}
+    </li>;
+  })}</ul>;
 }
 
 export function packageActionVisibility(canRefresh: boolean, canApply: boolean, stale: boolean, phase: Phase) {
@@ -180,14 +211,24 @@ export default function PackageUpdatePanel({ hostID, inventory, secondFactorAvai
     <article className="control-panel package-update-panel">
       <div className="panel-title-row"><div><h2>{t.updatesHeading}</h2>{inventory && <p className={inventoryStale ? "inventory-reported inventory-reported--stale" : "inventory-reported"}>{reportedAge === null
         ? t.inventoryReportedAt(reportedInstant)
-        : <time dateTime={reportedAt?.toISOString()} title={reportedInstant} aria-label={t.inventoryReportedAria(reportedInstant)}>{t.inventoryAge(reportedAge, inventoryStale)}</time>}</p>}</div><span className="inventory-count">{packageItems.length}</span></div>
+        : <time dateTime={reportedAt?.toISOString()} title={reportedInstant} aria-label={t.inventoryReportedAria(reportedInstant)}>{t.inventoryAge(reportedAge, inventoryStale)}</time>}</p>}</div>{/* No badge until the agent reports: a "0" beside "not reported
+        yet" would read as "nothing pending", which is a fact the hub never
+        sent. Absent is not zero. */}{inventory && <span className="inventory-count">{packageItems.length}</span>}</div>
       {!inventory ? <p className="inventory-empty">{t.inventoryPending}</p> : packageItems.length === 0 ? <p className="inventory-empty">{t.updatesEmpty}</p> : <PackageItemList items={packageItems} t={t} />}
       {notAutomatic.length > 0 && <section className="package-not-automatic" aria-labelledby="package-not-automatic-heading"><h3 id="package-not-automatic-heading">{t.updatesNotAutomaticHeading}</h3><PackageItemList items={notAutomatic} t={t} /></section>}
       {age !== null && <p className={stale ? "cache-age cache-age--stale" : "cache-age"}>{t.cacheAge(new Intl.NumberFormat(intlTag, { maximumFractionDigits: 1 }).format(age / 86400), stale)}</p>}
+      {/* One control for the whole pending plan, and deliberately no
+          per-package button. ADR-0022 authorises exactly two named operations
+          and states that the order "no acepta argumentos, rutas, nombres de
+          paquetes, cadenas de comando ni datos de inventario": a package name
+          has no path from this screen to the agent. A per-row button that
+          silently applied everything would be worse than none, so the rows
+          inform and this control acts, and the note says which is which. */}
       <div className="package-action-controls">
         {showRefresh && <button type="button" className="primary-button package-action-button" onClick={() => begin("REFRESH_PACKAGE_CACHE")}>{t.refreshPackageCache}</button>}
         {showApply && <button type="button" className="primary-button package-action-button" onClick={() => begin("APPLY_PENDING_PACKAGE_UPDATES")}>{t.applyPackageUpdates}</button>}
       </div>
+      {showApply && <p className="package-plan-note">{t.updatesWholePlanNote}</p>}
       {phase === "confirming" && operation && <section className="action-confirmation" aria-labelledby="action-confirmation-heading"><h3 id="action-confirmation-heading">{t.actionConfirmHeading}</h3><dl><div><dt>{t.actionHost}</dt><dd>{hostID}</dd></div><div><dt>{t.actionOperation}</dt><dd>{t.packageOperation(operation)}</dd></div><div><dt>{t.actionReason}</dt><dd>{stale ? t.actionReasonStaleCache : t.actionReasonApply}</dd></div><div><dt>{t.actionSnapshot}</dt><dd>{t.actionSnapshotCount(packageItems.length)}</dd></div><div><dt>{t.actionConsequences}</dt><dd>{operation === "REFRESH_PACKAGE_CACHE" ? t.refreshConsequences : t.applyConsequences}</dd></div></dl><div className="action-confirmation-controls"><button type="button" className="link-button" onClick={() => setPhase("idle")}>{t.actionCancel}</button><button type="button" className="primary-button package-action-button" onClick={confirm}>{t.actionConfirm}</button></div></section>}
       {(phase === "pending" || phase === "running") && <section className="action-progress" aria-live="polite"><strong>{phase === "pending" ? t.actionPending : t.actionRunning}</strong><p>{phase === "pending" ? t.actionPendingBody : t.actionRunningBody}</p>{lines.length > 0 && <pre>{lines.map((line) => line.message).join("\n")}</pre>}</section>}
       {phase === "refreshed" && <p className="action-notice">{t.refreshCompletedReviewPlan}</p>}

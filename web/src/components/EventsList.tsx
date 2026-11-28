@@ -1,11 +1,16 @@
+import { useEffect, useRef } from "react";
 import { hasInstant, type BitacoraEvent } from "../api";
 import { groupByDay } from "../dayGroups";
 import { eventLogTarget, logEntryID, type LogRefTarget } from "../logrefs";
 import { useTranslation } from "../i18n";
 import RowInstant, { DayHeading } from "./RowInstant";
 
+// Every severity here clears 4.5:1 on --panel. neutral-500 measured 3.93:1,
+// which is a readability failure on the one severity an operator is most
+// likely to be scanning past rather than reading, so debug is neutral-400
+// (7.39:1). The severity word is printed beside the colour either way.
 const SEVERITY_COLOR: Record<BitacoraEvent["severity"], string> = {
-  debug: "text-neutral-500",
+  debug: "text-neutral-400",
   info: "text-sky-400",
   notice: "text-teal-400",
   warn: "text-amber-400",
@@ -20,6 +25,14 @@ interface Props {
   // Present only where the log viewer can be reached. The summary panel and
   // the history panel both render events; only the dashboard can navigate.
   onShowLogs?: (event: BitacoraEvent, target: LogRefTarget) => void;
+  // Caps the overview panel so one noisy hour cannot push the three columns
+  // of the dense layout off the screen. The history view passes nothing and
+  // keeps showing its full page.
+  maxRows?: number;
+  // Only the live overview highlights arrivals. In the history view the whole
+  // set changes on every page turn, and flashing twenty rows at once would
+  // mean "you paged", not "something happened".
+  highlightNew?: boolean;
 }
 
 const MAX_EVENT_ATTRIBUTES = 4;
@@ -85,8 +98,33 @@ export function eventDetails(event: BitacoraEvent): EventDetail[] {
   return [...attrs, ...subject, ...provenance];
 }
 
-export default function EventsList({ events, emptyHeading, emptyBody, onShowLogs }: Props) {
+// Tracks which event ids this list has already drawn, so an arrival can be
+// marked without the hub having to tell us what is new.
+//
+// Nothing is highlighted on the first paint: every row would qualify, and a
+// page that flashes its whole contents on load has said nothing. The set is
+// reset to exactly what is on screen after each render, which is bounded and
+// safe here because the newest-first list never re-admits a row it dropped.
+export function useArrivedIDs(ids: string[], enabled: boolean): Set<string> {
+  const seenRef = useRef<Set<string> | null>(null);
+  const seen = seenRef.current;
+  const arrived = !enabled || seen === null ? new Set<string>() : new Set(ids.filter((id) => !seen.has(id)));
+
+  useEffect(() => {
+    seenRef.current = new Set(ids);
+  });
+
+  return arrived;
+}
+
+export default function EventsList({ events, emptyHeading, emptyBody, onShowLogs, maxRows, highlightNew = false }: Props) {
   const { t } = useTranslation();
+
+  // Most recent first, then split into one run per calendar day so the date
+  // is stated once above each run instead of repeated on every row.
+  const sorted = [...events].sort((a, b) => b.ts.localeCompare(a.ts));
+  const shown = maxRows === undefined ? sorted : sorted.slice(0, maxRows);
+  const arrived = useArrivedIDs(shown.map((event) => event.id), highlightNew);
 
   if (events.length === 0) {
     return (
@@ -97,51 +135,48 @@ export default function EventsList({ events, emptyHeading, emptyBody, onShowLogs
     );
   }
 
-  // Most recent first, then split into one run per calendar day so the date
-  // is stated once above each run instead of repeated on every row.
-  const sorted = [...events].sort((a, b) => b.ts.localeCompare(a.ts));
-
   return (
     <div className="event-days">
-      {groupByDay(sorted, (e) => e.ts).map((day) => (
+      {groupByDay(shown, (e) => e.ts).map((day) => (
         <section className="event-day" key={day.key}>
           <DayHeading dayKey={day.key} />
-          <ul className="event-list">
+          <ul className="event-list event-list--rows">
             {day.items.map((e) => {
               const details = eventDetails(e);
-              const summary = details.slice(0, 2);
               const logTarget = onShowLogs ? eventLogTarget(e) : null;
               return (
-                <li key={e.id}>
-                  <div>
-                    <RowInstant instant={e.ts} />
-                    <span className={SEVERITY_COLOR[e.severity]}>{t.severity[e.severity]}</span>
-                    <span>{e.type}</span>
-                  </div>
-                  <p>{e.title}</p>
-                  {logTarget && onShowLogs && (
-                    <div className="event-actions">
-                      <button type="button" className="link-button" aria-label={t.eventLogsAria(e.title)} onClick={() => onShowLogs(e, logTarget)}>
-                        {t.eventLogsButton}
-                      </button>
+                <li key={e.id} className={arrived.has(e.id) ? "event-row event-row--new" : "event-row"}>
+                  {/* The whole row is the disclosure, so the operator opens
+                      what they were already reading instead of hunting for a
+                      separate "details" control underneath it. */}
+                  <details>
+                    <summary>
+                      <RowInstant instant={e.ts} />
+                      <span className={`event-severity ${SEVERITY_COLOR[e.severity]}`}>{t.severity[e.severity]}</span>
+                      <span className="event-row-title">{e.title}</span>
+                      <span className="event-row-type">{e.type}</span>
+                    </summary>
+                    <div className="event-row-body">
+                      <p className="event-row-source">{t.eventSource(e.source)}</p>
+                      {details.length > 0 && (
+                        <dl>
+                          {details.map(({ key, value }, index) => (
+                            <div key={`${key}-${index}`}>
+                              <dt>{key}</dt>
+                              <dd>{value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+                      {logTarget && onShowLogs && (
+                        <div className="event-actions">
+                          <button type="button" className="link-button" aria-label={t.eventLogsAria(e.title)} onClick={() => onShowLogs(e, logTarget)}>
+                            {t.eventLogsButton}
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  )}
-                  {details.length > 0 && (
-                    <details className="event-details">
-                      <summary>
-                        {t.eventDetails}
-                        <span>{summary.map(({ key, value }) => `${key}: ${value}`).join(" · ")}</span>
-                      </summary>
-                      <dl>
-                        {details.map(({ key, value }, index) => (
-                          <div key={`${key}-${index}`}>
-                            <dt>{key}</dt>
-                            <dd>{value}</dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </details>
-                  )}
+                  </details>
                 </li>
               );
             })}

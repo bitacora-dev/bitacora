@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import type { PublicSurface, SeriesPoint } from "../api";
 import { useTranslation } from "../i18n";
+import Sparkline from "./Sparkline";
 import TimeSeriesChart from "./TimeSeriesChart";
 
 export function latestValue(points: SeriesPoint[]): number | null {
@@ -43,6 +44,11 @@ export function hasPublicSurfaceData(surface: PublicSurface): boolean {
 interface Props {
   surface: PublicSurface;
   windowMinutes: number;
+  // In the dense overview this panel shares a third of the page with four
+  // others, so the full inspectable rate chart is replaced by the current
+  // rate plus its window trace. The question it answers ("is the rate rising
+  // right now") survives; a 220 px canvas in a 1/3-width column does not.
+  compact?: boolean;
 }
 
 // PublicSurfacePanel renders the internet-facing security signals.
@@ -54,7 +60,7 @@ interface Props {
 // the chart carries the rate and the totals sit beside it as context.
 //
 // Absence is never drawn as zero. A signal with no samples says so in words.
-export default function PublicSurfacePanel({ surface, windowMinutes }: Props) {
+export default function PublicSurfacePanel({ surface, windowMinutes, compact = false }: Props) {
   const { t, intlTag } = useTranslation();
 
   const countFormat = useMemo(() => new Intl.NumberFormat(intlTag, { maximumFractionDigits: 0 }), [intlTag]);
@@ -96,20 +102,36 @@ export default function PublicSurfacePanel({ surface, windowMinutes }: Props) {
 
   const unreported = <span className="public-surface-unreported">{t.publicSurfaceNotReported}</span>;
 
+  const currentRate = latestValue(surface.ssh_failed_logins_per_minute);
+
   return (
     <>
-      <TimeSeriesChart
-        title={t.sshFailedLoginsTitle}
-        points={surface.ssh_failed_logins_per_minute}
-        color="#f8d66d"
-        formatAxisValue={formatRate}
-        describePoint={describeRate}
-      />
-      <article className="control-panel public-surface-panel">
+      {!compact && (
+        <TimeSeriesChart
+          title={t.sshFailedLoginsTitle}
+          points={surface.ssh_failed_logins_per_minute}
+          color="#f8d66d"
+          formatAxisValue={formatRate}
+          describePoint={describeRate}
+        />
+      )}
+      <article className={compact ? "control-panel public-surface-panel public-surface-panel--compact" : "control-panel public-surface-panel"}>
         <div className="panel-title-row">
           <h2>{t.publicSurfaceHeading}</h2>
         </div>
-        <p className="public-surface-note">{t.publicSurfaceIntro}</p>
+        {compact && (
+          <div className="public-surface-rate">
+            <Sparkline points={surface.ssh_failed_logins_per_minute} tone="gold" />
+            <div className="band-cell-body">
+              <span className="band-cell-label">{t.sshFailedLoginsTitle}</span>
+              <strong className="band-cell-value">
+                {currentRate === null ? t.publicSurfaceNotReported : t.sshFailedLoginsPerMinute(rateFormat.format(currentRate))}
+              </strong>
+              <span className="band-cell-context">{t.currentValueLabel}</span>
+            </div>
+          </div>
+        )}
+        {!compact && <p className="public-surface-note">{t.publicSurfaceIntro}</p>}
         <dl className="public-surface-details">
           <div>
             <dt>{t.sshFailedLoginsWindowLabel}</dt>
@@ -150,7 +172,21 @@ export default function PublicSurfacePanel({ surface, windowMinutes }: Props) {
             <dd>{trafficRatio === null ? unreported : <strong>{percentFormat.format(trafficRatio)}</strong>}</dd>
           </div>
         </dl>
-        <p className="public-surface-note">{t.publicSurfaceTotalsNote}</p>
+        {compact && (
+          <details className="public-surface-details">
+            <summary>{t.inspectedValueLabel}</summary>
+            <p className="public-surface-note">{t.publicSurfaceIntro}</p>
+            <TimeSeriesChart
+              title={t.sshFailedLoginsTitle}
+              points={surface.ssh_failed_logins_per_minute}
+              color="#f8d66d"
+              formatAxisValue={formatRate}
+              describePoint={describeRate}
+            />
+            <p className="public-surface-note">{t.publicSurfaceTotalsNote}</p>
+          </details>
+        )}
+        {!compact && <p className="public-surface-note">{t.publicSurfaceTotalsNote}</p>}
       </article>
     </>
   );

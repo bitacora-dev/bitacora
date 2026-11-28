@@ -75,48 +75,60 @@ export default function AccessTunnelsPanel({ inventory }: Props) {
         </div>
         <span className="inventory-count">{t.tunnelsActiveCount(activeTunnelCount(tunnels), tunnels.length)}</span>
       </div>
-      <ul className="tunnel-list">
-        {tunnels.map((tunnel) => {
-          const handshake = formatAge(tunnel.lastHandshake, intlTag);
-          return (
-            <li key={tunnel.id} className="tunnel-row">
-              <div className="tunnel-row-heading">
-                <strong>{tunnel.name}</strong>
-                <span className="inventory-badge">{t.tunnelProtocol(tunnel.protocol)}</span>
-                <span className={tunnelStateClass(tunnel.active)}>
-                  {tunnel.active === true ? t.tunnelActive : tunnel.active === false ? t.tunnelInactive : t.tunnelStateUnreported}
-                </span>
-              </div>
-              <dl className="tunnel-details">
-                {tunnel.state && (
-                  <div>
-                    <dt>{t.tunnelBackendLabel}</dt>
-                    <dd>{t.tunnelBackendState(tunnel.state)}</dd>
-                  </div>
-                )}
-                {tunnel.peer && (
-                  <div>
-                    <dt>{t.tunnelPeerLabel}</dt>
-                    <dd>{tunnel.peer}</dd>
-                  </div>
-                )}
-                {tunnel.endpoint && (
-                  <div>
-                    <dt>{t.tunnelEndpointLabel}</dt>
-                    <dd>{tunnel.endpoint}</dd>
-                  </div>
-                )}
-                {tunnel.protocol === "wireguard" && (
-                  <div>
-                    <dt>{t.tunnelHandshakeLabel}</dt>
-                    <dd>{handshake ?? t.tunnelHandshakeNever}</dd>
-                  </div>
-                )}
-              </dl>
-            </li>
-          );
-        })}
-      </ul>
+      {/* A dense table rather than a definition list per tunnel: two or
+          three tunnels used to fill a panel taller than the processor's. The
+          backend state and the endpoint fold into the peer cell, which is
+          where an operator looks for "who is on the other end". */}
+      <table className="tunnel-table">
+        <thead>
+          <tr>
+            <th scope="col">{t.tunnelTableHeading.tunnel}</th>
+            <th scope="col">{t.tunnelTableHeading.state}</th>
+            <th scope="col">{t.tunnelTableHeading.peer}</th>
+            <th scope="col">{t.tunnelTableHeading.handshake}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tunnels.map((tunnel) => {
+            const handshake = formatAge(tunnel.lastHandshake, intlTag);
+            return (
+              <tr key={tunnel.id} className="tunnel-table-row">
+                <th scope="row" className="tunnel-cell-name">
+                  <strong>{tunnel.name}</strong>
+                  <span className="inventory-badge">{t.tunnelProtocol(tunnel.protocol)}</span>
+                </th>
+                {/* No `data-label` here: stacked, this cell reads "Active",
+                    "Inactive" or "Not reported", which names itself. Only the
+                    handshake cell, a bare relative age, needs its label. */}
+                <td className="tunnel-cell-state">
+                  <span className={tunnelStateClass(tunnel.active)}>
+                    {tunnel.active === true ? t.tunnelActive : tunnel.active === false ? t.tunnelInactive : t.tunnelStateUnreported}
+                  </span>
+                  {tunnel.state && <small>{t.tunnelBackendState(tunnel.state)}</small>}
+                </td>
+                <td className="tunnel-cell-peer" data-label={t.tunnelTableHeading.peer}>
+                  {tunnel.peer === null && tunnel.endpoint === null ? (
+                    <span className="tunnel-value-unreported">{t.tunnelStateUnreported}</span>
+                  ) : (
+                    <>
+                      {tunnel.peer && <span className="tunnel-peer-id">{tunnel.peer}</span>}
+                      {tunnel.endpoint && <small>{tunnel.endpoint}</small>}
+                    </>
+                  )}
+                </td>
+                <td className="tunnel-cell-handshake" data-label={t.tunnelTableHeading.handshake}>
+                  {/* Only WireGuard reports a handshake; Tailscale does not,
+                      and "never" would be a claim about a protocol that never
+                      makes it. */}
+                  {tunnel.protocol === "wireguard"
+                    ? handshake ?? t.tunnelHandshakeNever
+                    : <span className="tunnel-value-unreported">{t.tunnelHandshakeNotApplicable}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
       {/* Without this, an idle-but-healthy WireGuard peer reads as a broken
           tunnel: the agent derives "active" from a handshake inside the last
           three minutes, and WireGuard only handshakes when traffic flows. */}

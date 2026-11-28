@@ -10,6 +10,12 @@
   --text: #eef6ff;
   --muted: #91a1b5;
   --dim: #5f7188;
+  /* --dim reaches only 3.73:1 on --panel, below the 4.5:1 this dashboard's
+     small text needs, so it is decoration now: a status dot, a border, a
+     disabled track. --label is the readable small-text colour (5.6:1 on
+     --panel, 5.2:1 on --panel-strong) and carries every uppercase label,
+     timestamp and context line. */
+  --label: #7d8fa6;
   --cyan: #38bdf8;
   --gold: #f8d66d;
   --green: #4ade80;
@@ -95,8 +101,7 @@ body {
   width: min(100%, 34rem);
 }
 
-.auth-panel h1,
-.dashboard-header h1 {
+.auth-panel h1 {
   margin: 0;
   font-size: 2.25rem;
   line-height: 1;
@@ -249,45 +254,6 @@ body {
     max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
 }
 
-.dashboard-header {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.25rem 0 0.75rem;
-}
-
-.dashboard-header p {
-  max-width: 62ch;
-  margin: 0.4rem 0 0;
-  color: var(--muted);
-}
-
-.host-identity,
-.dashboard-metadata {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem 0.65rem;
-  margin-top: 0.6rem;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.host-identity strong {
-  color: var(--text);
-  font-size: 0.98rem;
-}
-
-.host-id {
-  max-width: min(52vw, 30rem);
-  overflow: hidden;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .host-id-copy-button {
   min-height: 2rem;
   border: 1px solid var(--line);
@@ -312,73 +278,9 @@ body {
   white-space: nowrap;
 }
 
-.header-actions {
-  display: flex;
-  align-items: center;
-  justify-content: end;
-  gap: 0.85rem;
-  min-width: 0;
-}
-
-.header-actions span {
-  max-width: min(34vw, 28rem);
-  overflow: hidden;
-  color: var(--muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.metrics-grid,
-.lower-grid,
-.inventory-grid,
-.processor-layout,
-.public-surface-grid,
-.access-grid,
 .power-strip {
   display: grid;
   gap: 1rem;
-}
-
-.dashboard-metadata {
-  justify-content: end;
-  margin-top: 0;
-}
-
-.dashboard-metadata div {
-  display: flex;
-  gap: 0.35rem;
-}
-
-.dashboard-metadata dt {
-  color: var(--dim);
-}
-
-.dashboard-metadata dd {
-  margin: 0;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.metrics-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.processor-layout {
-  grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.75fr);
-  align-items: stretch;
-}
-
-/* The attack-rate chart is the scan target; the totals beside it are the
-   context that explains it. Same split as the processor row. */
-.public-surface-grid {
-  grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.75fr);
-  align-items: stretch;
-}
-
-/* A host that reports nothing renders one explanatory panel, not an empty
-   chart plus a column of dashes. */
-.public-surface-grid > .public-surface-panel--pending {
-  grid-column: 1 / -1;
 }
 
 .public-surface-panel {
@@ -437,7 +339,7 @@ body {
 }
 
 .public-surface-details dd span {
-  color: var(--dim);
+  color: var(--label);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
@@ -445,30 +347,9 @@ body {
 /* Unreported is a word, never a colour on its own and never a zero: the
    operator has to be able to tell "nothing measured" from "measured none". */
 .public-surface-unreported {
-  color: var(--dim);
+  color: var(--label);
   font-size: 0.8rem;
   font-style: italic;
-}
-
-.processor-identity {
-  display: grid;
-  align-content: start;
-  gap: 1rem;
-  min-width: 0;
-}
-
-.processor-summary {
-  display: grid;
-  grid-template-rows: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-}
-
-.processor-summary .chart-panel {
-  min-height: 0;
-}
-
-.processor-summary .chart-canvas {
-  height: clamp(10rem, 14vw, 13.75rem);
 }
 
 .cpu-core-panel {
@@ -507,8 +388,8 @@ body {
 }
 
 .cpu-core-header-meta dt {
-  color: var(--dim);
-  font-size: 0.68rem;
+  color: var(--label);
+  font-size: 0.6875rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -527,8 +408,8 @@ body {
 
 .cpu-core-temperature small {
   display: block;
-  color: var(--dim);
-  font-size: 0.62rem;
+  color: var(--label);
+  font-size: 0.6875rem;
   font-weight: 400;
   text-transform: none;
 }
@@ -605,7 +486,7 @@ body {
   align-items: center;
   gap: 0.4rem;
   margin: 0;
-  color: var(--dim);
+  color: var(--label);
   font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
 }
@@ -729,14 +610,18 @@ body {
   padding: 0.25rem 0.35rem;
 }
 
-.cpu-core-row:nth-child(odd) {
-  background: var(--panel-strong);
-}
 
 /* A core the kernel took offline is dimmed and labelled, never hidden: a
-   missing row reads as a CPU that never existed. */
-.cpu-core-row--offline {
-  opacity: 0.45;
+   missing row reads as a CPU that never existed.
+   The dimming is on the empty meter track, not on the row: an `opacity` over
+   the whole row multiplied into the text too and dropped every word in it
+   below 4.5:1 on `--panel-strong` (measured: "Apagada" 3.47:1, the kind and
+   the thread value 2.09:1) — including the two words that carry the offline
+   state for a reader who cannot use the colour. The words keep their
+   declared colours, which already say "off" quietly: `--label` for the kind
+   and the thread value, `--gold` for the state tag. */
+.cpu-core-row--offline .cpu-meter {
+  opacity: 0.4;
 }
 
 .cpu-core-row-label {
@@ -758,7 +643,7 @@ body {
 
 .cpu-core-row-type,
 .cpu-core-row-ht {
-  color: var(--dim);
+  color: var(--label);
 }
 
 .cpu-core-row-ht {
@@ -767,7 +652,7 @@ body {
 
 .cpu-core-row-state {
   color: var(--gold);
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -786,18 +671,18 @@ body {
   gap: 0.45rem;
 }
 
-/* Only a host with isolated CPUs pays for the tag column. Reserving it for
-   every host would shorten every bar on the dashboard to label a state most
-   machines never reach, and leaving it unreserved shortens exactly the one
-   bar that carries the tag. */
+/* The tag wraps under its own bar instead of taking a reserved side column.
+   The column was affordable when the panel was full width; inside a third of
+   the page each thread row has about a hundred pixels for an id, a bar and a
+   percentage, and reserving eighty of them for a state most hosts never
+   reach pushed the percentage out over the tag. Only a host with isolated
+   CPUs pays the extra line, and only on the rows that carry the tag. */
 .cpu-core-rows--reserved .cpu-thread-row {
-  position: relative;
-  padding-right: 5rem;
+  flex-wrap: wrap;
 }
 
 .cpu-core-rows--reserved .cpu-thread-isolated {
-  position: absolute;
-  right: 0;
+  margin-left: auto;
 }
 
 /* Always rendered, empty on a core with a single thread, so the bars of a
@@ -805,8 +690,8 @@ body {
 .cpu-thread-id {
   flex: 0 0 auto;
   min-width: 1.6rem;
-  color: var(--dim);
-  font-size: 0.62rem;
+  color: var(--label);
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -821,7 +706,7 @@ body {
 }
 
 .cpu-thread-row--offline .cpu-thread-value {
-  color: var(--dim);
+  color: var(--label);
 }
 
 .cpu-meter {
@@ -838,15 +723,13 @@ body {
   height: 0.85rem;
 }
 
-/* An offline thread inside an otherwise running core needs the dim treatment
-   on its own; a fully offline core already carries it on the row, and
-   stacking both made the empty track disappear altogether. */
+/* An offline thread inside an otherwise running core carries the dim
+   treatment on its own track. A fully offline core dims every track in the
+   row instead (see `.cpu-core-row--offline .cpu-meter` above), so the two
+   rules target the same element at the same strength and never stack into a
+   track that has disappeared altogether. */
 .cpu-meter--offline {
   opacity: 0.4;
-}
-
-.cpu-core-row--offline .cpu-meter--offline {
-  opacity: 1;
 }
 
 /* The width transition interpolates between two measured samples so the bar
@@ -857,8 +740,6 @@ body {
   height: 100%;
   border-radius: inherit;
   background: var(--cyan);
-  transition-property: width;
-  transition-timing-function: ease-out;
 }
 
 .cpu-meter--high .cpu-meter-fill { background: var(--gold); }
@@ -944,43 +825,12 @@ body {
   font-size: 0.78rem;
 }
 
-.container-list {
-  display: grid;
-  /* Wide screens get two columns of rows rather than one ribbon with a void
-     between the name and its meters. */
-  grid-template-columns: repeat(auto-fit, minmax(min(34rem, 100%), 1fr));
-  /* Explicit: inside a scrolling, height-capped grid the implicit rows resolve
-     to min-content and a wrapped row's readings escape its own border. */
-  grid-auto-rows: max-content;
-  align-content: start;
-  gap: 0.35rem;
-  max-height: 28.5rem;
-  overflow: auto;
-  margin: 0;
-  padding: 0 0.2rem 0 0;
-  list-style: none;
-}
-
-.container-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 0.75rem;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel-strong);
-  /* A row whose id wraps must not stand taller than its neighbours. */
-  min-height: 3rem;
-  padding: 0.5rem 0.65rem;
-}
-
 /* A container that stopped reporting is history, not an error: recede it,
    keep it readable, and never let the meters imply a live reading. */
-.container-row--stopped { background: transparent; }
-.container-row--stopped .container-identity strong { color: var(--muted); }
+.container-cell--stopped { background: transparent; }
+.container-cell--stopped .container-cell-identity strong { color: var(--muted); }
 
-.container-identity {
+.container-cell-identity {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
@@ -988,7 +838,7 @@ body {
   min-width: 0;
 }
 
-.container-identity strong {
+.container-cell-identity strong {
   overflow: hidden;
   color: var(--text);
   font-size: 0.82rem;
@@ -996,9 +846,9 @@ body {
   white-space: nowrap;
 }
 
-.container-identity small {
-  color: var(--dim);
-  font-size: 0.68rem;
+.container-cell-identity small {
+  color: var(--label);
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1009,7 +859,7 @@ body {
   color: var(--muted);
 }
 
-.container-reading {
+.container-cell-reading {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1034,7 +884,7 @@ body {
 
 .container-meter--memory > span { background: var(--gold); }
 
-.container-reading strong {
+.container-cell-reading strong {
   flex: 0 0 auto;
   min-width: 4.4rem;
   color: var(--text);
@@ -1043,15 +893,7 @@ body {
   text-align: right;
 }
 
-.container-row--stopped .container-reading strong { color: var(--dim); }
-
-@media (max-width: 720px) {
-  .container-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .container-identity { grid-column: 1 / -1; }
-}
+.container-cell--stopped .container-cell-reading strong { color: var(--label); }
 
 @media (max-width: 560px) {
   .container-panel .panel-title-row {
@@ -1061,13 +903,6 @@ body {
   }
 
   .container-panel-totals { justify-content: start; }
-}
-
-/* The network chart is the third metric: give it a complete row instead of
-   leaving an unfillable second grid cell beside it. */
-.metrics-grid > :last-child,
-.lower-grid > .signal-panel {
-  grid-column: 1 / -1;
 }
 
 .chart-panel {
@@ -1174,7 +1009,7 @@ body {
 }
 
 .power-line .power-unit {
-  color: var(--dim);
+  color: var(--label);
 }
 
 .power-panel--alarm {
@@ -1242,14 +1077,8 @@ body {
 
 .power-context {
   margin: 0;
-  color: var(--dim);
+  color: var(--label);
   font-size: 0.78rem;
-}
-
-/* Remote access answers "can I still get in?", so it shares the window-signal
-   width with the public surface rather than the two-column inventory grid. */
-.access-grid {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .tunnels-panel,
@@ -1266,12 +1095,11 @@ body {
   border-radius: 999px;
   padding: 0.05rem 0.5rem;
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.6875rem;
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
 
-.tunnel-list,
 .share-list {
   display: grid;
   gap: 0;
@@ -1280,7 +1108,6 @@ body {
   list-style: none;
 }
 
-.tunnel-row,
 .share-row {
   display: grid;
   gap: 0.4rem;
@@ -1288,13 +1115,11 @@ body {
   padding: 0.75rem 0;
 }
 
-.tunnel-row:first-child,
 .share-row:first-child {
   border-top: none;
   padding-top: 0;
 }
 
-.tunnel-row-heading,
 .share-row-heading,
 .share-account-heading {
   display: flex;
@@ -1304,7 +1129,6 @@ body {
   min-width: 0;
 }
 
-.tunnel-row-heading strong,
 .share-row-heading strong,
 .share-account-heading strong {
   color: var(--text);
@@ -1332,34 +1156,16 @@ body {
 
 .tunnel-state--active { color: var(--green); }
 .tunnel-state--inactive { color: var(--muted); }
-.tunnel-state--unreported { color: var(--dim); }
+.tunnel-state--unreported { color: var(--label); }
 
-.tunnel-details {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(10rem, 15rem));
-  justify-content: start;
-  gap: 0.35rem 1.5rem;
-  margin: 0;
-}
-
-.tunnel-details dt {
-  color: var(--dim);
-  font-size: 0.7rem;
-  letter-spacing: 0.03em;
-}
-
-.tunnel-details dd {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.82rem;
-  overflow-wrap: anywhere;
-}
-
-/* Shares span the inventory grid: one row carries a name, a path, a size and
-   an access summary, and squeezing that into half the width turns every row
-   into four wrapped lines. */
+/* A share row carries a name, a path, a size and an access summary. Whether
+   those read across or stack depends on how wide the panel is, not on how
+   wide the window is: in the dense overview this panel sits in a third of
+   the page, so a viewport-keyed breakpoint would lay four columns across
+   430 px. The panel is its own query container instead. */
 .shares-panel {
-  grid-column: 1 / -1;
+  container-type: inline-size;
+  container-name: shares;
 }
 
 .share-mode {
@@ -1382,11 +1188,11 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.share-size-pending { color: var(--dim); }
+.share-size-pending { color: var(--label); }
 
 .share-path {
   margin: 0;
-  color: var(--dim);
+  color: var(--label);
   font: 0.76rem/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   overflow-wrap: anywhere;
 }
@@ -1423,17 +1229,6 @@ body {
   overflow-wrap: anywhere;
 }
 
-
-.lower-grid {
-  grid-template-columns: minmax(0, 1.4fr) minmax(22rem, 0.6fr);
-  align-items: start;
-}
-
-.inventory-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-}
-
 .inventory-panel {
   min-width: 0;
   padding: 1rem;
@@ -1446,9 +1241,8 @@ body {
   padding: 1rem;
 }
 
-.package-update-panel .inventory-list { margin: 0; }
 .package-not-automatic { margin-top: 1rem; }
-.package-not-automatic h3 { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--dim); }
+.package-not-automatic h3 { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--label); }
 
 .cache-age,
 .action-notice {
@@ -1485,7 +1279,7 @@ body {
 .action-confirmation h3 { font-size: 1rem; }
 .action-confirmation dl { display: grid; gap: 0.65rem; margin: 0; }
 .action-confirmation dl > div { display: grid; gap: 0.2rem; border-top: 1px solid var(--line-soft); padding-top: 0.55rem; }
-.action-confirmation dt { color: var(--dim); font-size: 0.72rem; text-transform: uppercase; }
+.action-confirmation dt { color: var(--label); font-size: 0.72rem; text-transform: uppercase; }
 .action-confirmation dd { margin: 0; color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
 .action-progress p { color: var(--muted); }
 .action-progress pre,
@@ -1504,51 +1298,6 @@ body {
 .inventory-reported--stale { color: var(--gold); font-weight: 650; }
 .inventory-reported time { color: inherit; }
 
-.inventory-list {
-  display: grid;
-  gap: 0.75rem;
-  margin: 0.9rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.inventory-list li {
-  display: grid;
-  gap: 0.55rem;
-  min-width: 0;
-  border-top: 1px solid var(--line-soft);
-  padding-top: 0.75rem;
-}
-
-.inventory-list li:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.inventory-list strong {
-  overflow-wrap: anywhere;
-}
-
-.inventory-list dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem 1rem;
-  margin: 0;
-}
-
-.inventory-list dt {
-  color: var(--dim);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-}
-
-.inventory-list dd {
-  margin: 0.18rem 0 0;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-}
 
 .events-panel,
 .signal-panel,
@@ -1685,8 +1434,8 @@ body {
 
 .disk-table thead th {
   border-bottom: 1px solid var(--line);
-  color: var(--dim);
-  font-size: 0.68rem;
+  color: var(--label);
+  font-size: 0.6875rem;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1826,7 +1575,7 @@ body {
    to fit: "100 %" is five characters and a separator, and at 2rem across
    it spilled over the arc on both sides. The hole has to hold the text,
    not the other way round. */
-.usage-ring--compact { width: 2.5rem; height: 2.5rem; font-size: 0.58rem; }
+.usage-ring--compact { width: 2.5rem; height: 2.5rem; font-size: 0.6875rem; }
 .usage-ring--compact::before { width: 2.05rem; height: 2.05rem; }
 
 .usage-bar { height: 0.42rem; overflow: hidden; border-radius: 999px; background: var(--line-soft); }
@@ -1878,7 +1627,7 @@ body {
   align-items: center;
   gap: 0.65rem;
   margin: 1.1rem 0 0;
-  color: var(--dim);
+  color: var(--label);
   font-size: 0.76rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -1927,7 +1676,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem 0.75rem;
-  color: var(--dim);
+  color: var(--label);
   font-size: 0.78rem;
 }
 
@@ -1937,56 +1686,9 @@ body {
   overflow-wrap: anywhere;
 }
 
-.event-details {
-  max-width: 72ch;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.event-details summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.65rem;
-  cursor: pointer;
-}
-
-.event-details summary span {
-  flex: 1 1 18rem;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.event-details dl {
-  display: grid;
-  gap: 0.45rem;
-  margin: 0.6rem 0 0;
-}
-
-.event-details dl > div {
-  display: grid;
-  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
-  gap: 0.65rem;
-}
-
-.event-details dt {
-  color: var(--gold);
-  overflow-wrap: anywhere;
-}
-
-.event-details dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
 .log-list { display: grid; gap: 0; margin: 0.75rem 0 0; padding: 0; list-style: none; }
 .log-list li { min-width: 0; border-top: 1px solid var(--line-soft); padding: 0.8rem 0; }
-.log-list li > div { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; color: var(--dim); font-size: 0.78rem; }
+.log-list li > div { display: flex; flex-wrap: wrap; gap: 0.4rem 0.75rem; color: var(--label); font-size: 0.78rem; }
 .log-list pre { margin: 0.35rem 0 0; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 0.82rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 
 /* A referenced line is marked with a border, a tint and its own visible
@@ -2033,7 +1735,7 @@ body {
 }
 
 .log-ref-notice span {
-  color: var(--dim);
+  color: var(--label);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.75rem;
   overflow-wrap: anywhere;
@@ -2066,21 +1768,16 @@ body {
 }
 
 .cpu-core-offline-count {
-  color: var(--dim);
+  color: var(--label);
 }
 
 .cpu-thread-isolated {
   flex: 0 0 auto;
   color: var(--gold);
-  font-size: 0.62rem;
+  font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-}
-
-.host-metadata--stale,
-.host-stale-note {
-  color: var(--gold);
 }
 
 .signal-panel {
@@ -2178,10 +1875,11 @@ body {
   padding: 1rem 0;
 }
 
-/* From laptop width up, a share row reads across instead of down: the name,
-   the size, and who can reach it line up in columns so several shares can be
-   compared at a glance. Below this the same row stacks. */
-@media (width >= 980px) {
+/* Once the panel itself is wide enough, a share row reads across instead of
+   down: the name, the size, and who can reach it line up in columns so
+   several shares can be compared at a glance. Narrower than this — which is
+   where the three-column overview puts it — the same row stacks. */
+@container shares (width >= 34rem) {
   .share-row {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 0.9fr);
     grid-template-areas:
@@ -2197,67 +1895,997 @@ body {
   .share-access { grid-area: access; }
 }
 
+/* ===================================================================
+   Dense overview
+   ===================================================================
+
+   The overview is a host bar, a band of constants and three columns of
+   stacked panels. The band and the first rows of all three columns fit a
+   1440x900 viewport with data present; everything else is read by scrolling
+   the page, not by scrolling inside a panel.
+
+   Shared motion: every meter interpolates between two measured samples over
+   --meter-duration with an exponential ease-out, so a bar settles quickly
+   and then eases rather than sliding linearly. The duration is a little
+   under the ten-second collector cadence on purpose: the bar must finish
+   before the next real value arrives, or it would be animating towards a
+   number that is already stale. prefers-reduced-motion removes all of it. */
+
+:root {
+  --meter-duration: 900ms;
+  --meter-ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.usage-bar span,
+.container-meter > span,
+.cpu-meter-fill {
+  transition: width var(--meter-duration) var(--meter-ease);
+}
+
+/* --- host bar ----------------------------------------------------- */
+
+.host-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent),
+    var(--panel);
+  padding: 0.5rem 0.85rem;
+}
+
+.host-bar-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.65rem;
+  min-width: 0;
+}
+
+.host-bar-identity h1 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 780;
+  letter-spacing: -0.01em;
+}
+
+.host-bar-mark {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.host-bar-name {
+  border-left: 1px solid var(--line);
+  padding-left: 0.65rem;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.host-bar-select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  padding: 0.25rem 0.4rem;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.host-bar-state,
+.host-bar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.8rem;
+  min-width: 0;
+  font-size: 0.76rem;
+}
+
+.host-bar-actions {
+  margin-left: auto;
+}
+
+.host-bar-window,
+.host-bar-agent,
+.host-bar-lastseen,
+.host-bar-updates {
+  color: var(--label);
+  font-variant-numeric: tabular-nums;
+}
+
+.host-bar-id {
+  color: var(--label);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* Gold plus a sentence, never gold alone: both states say what they are. */
+.host-bar-lastseen--stale,
+.host-bar-freshness--stale {
+  color: var(--gold);
+  font-weight: 650;
+}
+
+.host-bar-updates--pending {
+  color: var(--gold);
+  font-weight: 650;
+}
+
+.host-bar-freshness {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--label);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One beat per arriving sample, not a loop. The element is keyed on the
+   sample instant in HostBar, so React remounts it and the animation runs
+   once: motion here means a sample landed, and a page nobody is feeding
+   goes still rather than pretending otherwise. */
+.host-bar-pulse {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 99px;
+  background: var(--green);
+  animation: host-beat var(--meter-duration) var(--meter-ease) 1;
+}
+
+.host-bar-freshness--stale .host-bar-pulse {
+  background: var(--gold);
+  animation: none;
+}
+
+/* No sample has ever landed, so there is nothing to beat about. The dot
+   keeps the line's shape in a neutral fill; the words beside it already
+   say "no samples yet". */
+.host-bar-pulse--idle {
+  background: var(--line);
+  border: 1px solid var(--dim);
+  animation: none;
+}
+
+@keyframes host-beat {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgb(74 222 128 / 0.55); }
+  35% { transform: scale(1.5); box-shadow: 0 0 0 0.32rem rgb(74 222 128 / 0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgb(74 222 128 / 0); }
+}
+
+/* The UPS keeps a fixed place on every screen as one chip in the bar; the
+   alarm strip below escalates in place when a unit reports battery. */
+.power-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.power-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  padding: 0.1rem 0.55rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.power-chip-label {
+  color: var(--label);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.power-chip--mains { border-color: var(--line); }
+.power-chip--unknown { color: var(--label); }
+.power-chip--alarm {
+  border-color: var(--red);
+  color: var(--red);
+  font-weight: 700;
+}
+
+/* --- band of constants -------------------------------------------- */
+
+.constants-band {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent),
+    var(--panel);
+  box-shadow: var(--shadow);
+}
+
+/* The bottom strip is reserved for the trace, so the context line never has
+   a stroke running through it. Drawing the trace behind the whole cell read
+   as a line struck through "40,6 GB de 68,7 GB" on a narrow screen. */
+.band-cell {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--line-soft);
+  padding: 0.7rem 0.95rem 2rem;
+}
+
+.band-cell:first-child { border-left: none; }
+
+.band-cell-body {
+  position: relative;
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.band-cell-label {
+  color: var(--label);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.band-cell-value {
+  color: var(--text);
+  font-size: 1.6rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.band-cell-context {
+  color: var(--label);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+/* The window as a trace behind the number. Decoration: aria-hidden in the
+   component, and never the only place a value appears. */
+.sparkline {
+  position: absolute;
+  inset: auto 0 0;
+  width: 100%;
+  height: 1.65rem;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.sparkline--cyan { color: var(--cyan); }
+.sparkline--gold { color: var(--gold); }
+.sparkline--green { color: var(--green); }
+
+.sparkline-area {
+  fill: currentColor;
+  opacity: 0.14;
+  stroke: none;
+}
+
+/* non-scaling-stroke because the SVG stretches non-uniformly: without it a
+   wide cell draws a hairline and a narrow one draws a slab. */
+.sparkline-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* --- the three columns -------------------------------------------- */
+
+.overview-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* On the grid, not inside the column: it stops a short column from being
+     stretched to the height of the tallest one. */
+  align-items: start;
+  gap: 1rem;
+}
+
+.overview-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.overview-column > * { min-width: 0; }
+
+/* A chart inside a third of the page is a shape, not a reading room. Its
+   current value still lives in its own React readout, so the canvas only
+   has to show the movement. */
+.overview-column .chart-canvas { height: 150px; }
+.overview-column .chart-value strong { font-size: 1.1rem; }
+
+.window-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.overview-coverage {
+  max-width: 72ch;
+}
+
+.panel-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* --- processor: two columns of cores ------------------------------ */
+
+.cpu-core-rows {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: row dense;
+  column-gap: 0.5rem;
+  row-gap: 2px;
+}
+
+/* A hybrid part keeps its two kinds apart: P-cores left, E-cores right.
+   Interleaving them put a saturated E-core beside an idle P-core and the
+   pair read as one inconsistent measurement. A core whose kind the agent
+   never reported goes left, which is also where a uniform host starts. */
+.cpu-core-rows--hybrid > [data-core-type="e-core"] { grid-column: 2; }
+.cpu-core-rows--hybrid > li:not([data-core-type="e-core"]) { grid-column: 1; }
+
+/* Every row carries the same background instead of alternating: with two
+   columns and dense auto-placement, :nth-child() striping runs diagonally
+   across the grid rather than down each column. */
+.cpu-core-rows .cpu-core-row {
+  grid-template-columns: minmax(3.6rem, 5.5rem) minmax(0, 1fr);
+  align-content: center;
+  gap: 0.4rem;
+  min-height: 19px;
+  background: var(--panel-strong);
+  padding: 0.1rem 0.3rem;
+}
+
+.cpu-core-rows .cpu-core-row-label {
+  font-size: 0.6875rem;
+  gap: 0.25rem;
+}
+
+.cpu-core-rows .cpu-core-row-label strong { font-size: 0.7rem; }
+
+/* The kind and the hyperthread list are the first things to go when the
+   column is narrow: the row is identified by its lowest CPU number, which
+   never wraps. */
+.cpu-core-rows .cpu-core-row-type,
+.cpu-core-rows .cpu-core-row-ht { font-size: 0.6875rem; }
+
+.cpu-core-rows .cpu-core-row-threads { gap: 1px; }
+
+.cpu-core-rows .cpu-thread-row { gap: 0.3rem; }
+.cpu-core-rows .cpu-thread-id { min-width: 1.1rem; font-size: 0.6875rem; }
+.cpu-core-rows .cpu-thread-value { min-width: 2.5rem; font-size: 0.6875rem; }
+.cpu-core-rows .cpu-meter { height: 0.34rem; }
+
+/* --- memory ------------------------------------------------------- */
+
+.memory-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.memory-panel-value {
+  color: var(--text);
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Here the trace does sit behind something, but that something is a bar and
+   not text, so there is nothing for a stroke to cut through. */
+.memory-meter {
+  position: relative;
+  overflow: hidden;
+  border-radius: 99px;
+}
+
+.memory-meter .sparkline { height: 100%; opacity: 0.5; }
+
+.memory-meter .usage-bar { height: 0.7rem; }
+
+.memory-panel-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.memory-panel-context span { color: var(--label); }
+
+.memory-panel-swap {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 0.6rem;
+  color: var(--label);
+  font-size: 0.76rem;
+}
+
+.memory-swap-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.memory-swap-head strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-bar--memory span { background: var(--gold); }
+.usage-bar--swap span { background: var(--red); }
+
+/* --- containers: a grid of cells ---------------------------------- */
+
+.container-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.container-cell {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  padding: 0.4rem 0.5rem;
+}
+
+.container-cell--stopped { background: transparent; }
+
+/* --- pending updates: a row per package --------------------------- */
+
+.package-rows {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.package-row {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+  padding: 0.45rem 0;
+}
+
+.package-row:first-child { border-top: none; padding-top: 0; }
+
+.package-row-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+  min-width: 0;
+}
+
+.package-row-head strong {
+  color: var(--text);
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.package-row-versions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.package-version--installed { color: var(--label); }
+.package-version--candidate { color: var(--cyan); font-weight: 650; }
+
+/* An inline SVG-free arrow: a rotated border, not a unicode glyph. The
+   direction is decorative and the transition is also stated in words for
+   assistive technology. */
+.package-version-arrow {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--dim);
+  border-right: 1px solid var(--dim);
+  transform: rotate(45deg);
+}
+
+.package-row-details { font-size: 0.74rem; }
+
+/* The native marker stays: this is the one disclosure on the page with no
+   chevron of its own, and without it nothing says the row opens. */
+.package-row-details summary {
+  color: var(--cyan);
+  cursor: pointer;
+}
+
+.package-row-details dl {
+  display: grid;
+  gap: 0.15rem 0.6rem;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  margin: 0.35rem 0 0;
+}
+
+.package-row-details dl > div { display: contents; }
+.package-row-details dt { color: var(--label); }
+.package-row-details dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+
+.package-plan-note {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--label);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+/* --- remote access: a dense table --------------------------------- */
+
+.tunnel-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.tunnel-table th,
+.tunnel-table td {
+  padding: 0.4rem 0.5rem 0.4rem 0;
+  text-align: left;
+  vertical-align: top;
+  font-size: 0.76rem;
+}
+
+.tunnel-table thead th {
+  border-bottom: 1px solid var(--line);
+  color: var(--label);
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tunnel-table tbody tr + tr th,
+.tunnel-table tbody tr + tr td { border-top: 1px solid var(--line-soft); }
+
+.tunnel-cell-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.tunnel-cell-name strong { color: var(--text); overflow-wrap: anywhere; }
+
+.tunnel-cell-state,
+.tunnel-cell-peer { min-width: 0; }
+
+.tunnel-cell-state small,
+.tunnel-cell-peer small {
+  display: block;
+  color: var(--label);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.tunnel-peer-id {
+  display: block;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.tunnel-cell-handshake {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tunnel-value-unreported { color: var(--label); }
+
+/* --- events and operations: disclosure rows ----------------------- */
+
+.event-list--rows {
+  display: grid;
+  gap: 0;
+}
+
+.event-row {
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+  padding: 0;
+}
+
+.event-row:first-child { border-top: none; }
+
+.event-row > details > summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+  padding: 0.45rem 0.2rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.event-row > details > summary::-webkit-details-marker { display: none; }
+
+/* The native marker is dropped because it would sit before a flex row of
+   five items and break the column alignment, so the row has to draw its own.
+   Without one, nothing on a touch screen says these rows open at all — there
+   is no hover there — and the log-viewer link behind them is undiscoverable.
+   A chevron from two rotated borders, not a unicode glyph. */
+.event-row > details > summary::after {
+  flex: 0 0 auto;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  margin-left: auto;
+  content: "";
+  rotate: 45deg;
+  translate: 0 -0.12rem;
+  transition: rotate 0.18s ease-out;
+}
+
+.event-row > details[open] > summary::after { rotate: 225deg; translate: 0 0.12rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .event-row > details > summary::after { transition: none; }
+}
+
+/* A whole row is the control, so it needs a visible focus ring of its own
+   and a hit area a thumb can land on. */
+.event-row > details > summary:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: -2px;
+}
+
+.event-row > details > summary:hover { background: var(--panel-strong); }
+
+.event-row-title {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.event-severity {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.event-row-type,
+.event-row-source {
+  color: var(--label);
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
+
+.event-row-body {
+  display: grid;
+  gap: 0.4rem;
+  border-top: 1px solid var(--line-soft);
+  padding: 0.5rem 0.2rem 0.65rem;
+}
+
+.event-row-body p { margin: 0; }
+
+.event-row-body dl {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 0.15rem 0.6rem;
+  margin: 0;
+  font-size: 0.74rem;
+}
+
+.event-row-body dl > div { display: contents; }
+.event-row-body dt { color: var(--label); overflow-wrap: anywhere; }
+.event-row-body dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+
+/* An arrival fades in from a tinted row to the ordinary one. It only runs
+   for rows this list had not drawn before, so it means "this is new", not
+   "the page refreshed". */
+.event-row--new { animation: row-arrival 2.4s var(--meter-ease) 1; }
+
+@keyframes row-arrival {
+  0% { background: color-mix(in srgb, var(--cyan) 22%, transparent); }
+  100% { background: transparent; }
+}
+
+.jobs-list { display: grid; gap: 0.75rem; }
+
+.jobs-running { display: grid; gap: 0.5rem; }
+
+.job-running {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--cyan);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--cyan) 7%, var(--panel-strong));
+  padding: 0.6rem 0.7rem;
+}
+
+.job-running-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+}
+
+.job-running-head strong { color: var(--text); font-size: 0.86rem; overflow-wrap: anywhere; }
+
+.job-running-note,
+.job-running-stats,
+.job-running-trigger,
+.job-row-trigger-detail {
+  margin: 0;
+  color: var(--label);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+/* The running card and the open disclosure keep the job's own context list at
+   the body's measure rather than the wide one the standalone panel uses. */
+.job-running .job-context,
+.event-row-body .job-context { font-size: 0.74rem; }
+
+.job-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.job-progress .usage-bar { flex: 1 1 auto; height: 0.5rem; }
+.job-progress strong { color: var(--text); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+
+.job-status {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.job-status--running { color: var(--cyan); }
+.job-status--success { color: var(--green); }
+.job-status--warning { color: var(--gold); }
+.job-status--failed,
+.job-status--timeout,
+.job-status--killed { color: var(--red); }
+
+.job-row-name {
+  flex: 1 1 8rem;
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.job-row-trigger {
+  color: var(--label);
+  font-size: 0.7rem;
+}
+
+.job-row-duration {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- disks inside a third of the page ----------------------------- */
+
+/* The default column widths are sized for a full-width panel: at a third of
+   that, 8 % for the temperature is about thirty pixels and "40 °C" spilled
+   straight over the SMART verdict beside it. The shares are rebalanced here
+   rather than handing the table to `table-layout: auto`, which sizes from
+   content and pushed the whole table past the column it lives in. */
+.overview-column .disk-col-device { width: 30%; }
+.overview-column .disk-col-state { width: 16%; }
+.overview-column .disk-col-temperature { width: 12%; }
+.overview-column .disk-col-smart { width: 18%; }
+.overview-column .disk-col-usage { width: 24%; }
+
+.overview-column .disk-table th,
+.overview-column .disk-table td {
+  padding-right: 0.4rem;
+  font-size: 0.74rem;
+}
+
+/* A temperature is short and must never be split across two lines; the
+   verdict is two words and is allowed to wrap inside its own cell. */
+.overview-column .disk-cell-numeric { white-space: nowrap; }
+
+/* --- public surface, compact -------------------------------------- */
+
+.public-surface-rate {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem 1.75rem;
+}
+
+.public-surface-rate .band-cell-body { gap: 0.2rem; }
+
+.public-surface-panel--compact .public-surface-details > div {
+  padding: 0.35rem 0;
+}
+
+.public-surface-panel--compact .band-cell-value { font-size: 1.25rem; line-height: 1.25; }
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-bar span,
+  .container-meter > span,
+  .cpu-meter-fill { transition: none; }
+
+  .host-bar-pulse { animation: none; }
+  .event-row--new { animation: none; }
+}
+
+/* ===================================================================
+   Responsive
+   =================================================================== */
+
 @media (width >= 1920px) {
   .dashboard-shell {
-    grid-template-columns: minmax(0, 1fr);
     gap: 1.25rem;
     padding-right: 2rem;
     padding-left: 2rem;
   }
 
-  .metrics-grid {
-    grid-template-columns: repeat(2, minmax(44rem, 1fr));
-  }
+  /* More room widens the plots and the data grids; it does not stretch the
+     prose blocks, which keep their own measure. */
+  .overview-column .chart-canvas { height: 190px; }
+  .band-cell-value { font-size: 1.95rem; }
+  .container-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 
-  .processor-layout,
-  .public-surface-grid {
-    grid-template-columns: minmax(0, 1.65fr) minmax(24rem, 0.75fr);
-  }
+/* Two columns: the third wraps to the full width under the other two rather
+   than being squeezed into a third of a narrower page. Storage and
+   operations is the column that moves, because disks and job rows are the
+   widest content on the page and the one that benefits most from the room. */
+@media (width <= 1180px) {
+  .overview-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .overview-column:last-child { grid-column: 1 / -1; }
+  .overview-column .chart-canvas { height: 180px; }
 
-  .lower-grid {
-    grid-template-columns: minmax(56rem, 1.25fr) minmax(30rem, 0.75fr);
-  }
-
-  .inventory-grid {
-    grid-template-columns: minmax(56rem, 1.25fr) minmax(30rem, 0.75fr);
-  }
-
-  .chart-value strong {
-    font-size: 1.95rem;
-  }
+  /* Five cells in a narrower band: the number stays the scan target and the
+     context line gives up a little size rather than wrapping to four. */
+  .band-cell { padding: 0.6rem 0.7rem 1.9rem; }
+  .band-cell-value { font-size: 1.35rem; }
+  .band-cell-context { font-size: 0.6875rem; }
 }
 
 @media (width < 980px) {
-  .dashboard-header,
-  .header-actions {
-    align-items: start;
-    flex-direction: column;
+  .window-detail { grid-template-columns: 1fr; }
+  .chart-canvas { height: 220px; }
+  .container-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* One column. The band keeps two columns because five cells side by side at
+   390 px is five unreadable slivers, and every control grows to a 44 px
+   touch target. */
+@media (width <= 760px) {
+  .overview-columns { grid-template-columns: 1fr; }
+  .overview-column:last-child { grid-column: auto; }
+
+  .constants-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .band-cell { border-left: 1px solid var(--line-soft); border-top: 1px solid var(--line-soft); }
+  .band-cell:nth-child(odd) { border-left: none; }
+  .band-cell:first-child,
+  .band-cell:nth-child(2) { border-top: none; }
+  /* The fifth cell has no neighbour, so it takes the full width instead of
+     leaving a hole beside it. */
+  .band-cell:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+  .container-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* One core per row: two columns of thread bars inside a 390 px screen
+     leaves each bar about forty pixels wide, which is a dot. */
+  .cpu-core-rows { grid-template-columns: minmax(0, 1fr); }
+  .cpu-core-rows--hybrid > [data-core-type="e-core"],
+  .cpu-core-rows--hybrid > li:not([data-core-type="e-core"]) { grid-column: 1; }
+  .cpu-core-rows .cpu-core-row { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
+  .cpu-core-rows .cpu-meter { height: 0.45rem; }
+
+  /* Secondary columns go, and nothing they carried is lost. The trigger and
+     the exit status with its duration are repeated inside the job row's own
+     disclosure, one tap away. The SMART verdict keeps its own always-visible
+     state cell, which `diskState` derives from the same attribute: failed
+     reads critical, passed reads ok and an absent verdict reads unknown in
+     words, so hiding the raw column drops the wording, not the fact. */
+  .disk-col-smart,
+  .disk-table th.disk-cell-smart,
+  .disk-table td.disk-cell-smart,
+  .disk-table thead th:nth-child(4),
+  .job-row-trigger,
+  .job-row-duration { display: none; }
+
+  /* Touch targets. ADR-0014 makes the phone the primary client, so nothing
+     interactive is allowed below 44 px here. */
+  .link-button,
+  .host-id-copy-button,
+  .cpu-details-toggle {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
   }
 
-  .header-actions {
-    gap: 0.35rem;
+  /* The close control on the panels the host bar opens. It is 2rem on a
+     desktop pointer, which is fine there and a 32 px target on a thumb;
+     ADR-0014 makes the phone the primary client, so nothing interactive
+     stays under 44 px at this width. The drawn X keeps its size: only the
+     hit area grows. */
+  .icon-button {
+    width: 44px;
+    height: 44px;
   }
 
-  .metrics-grid,
-  .lower-grid,
-  .inventory-grid,
-  .processor-layout,
-  .public-surface-grid,
-  .access-grid {
-    grid-template-columns: 1fr;
+  /* Disclosures keep their own display so the browser keeps drawing the
+     marker; they get the height from padding instead. */
+  .event-row > details > summary,
+  .package-row-details summary,
+  .share-accounts summary,
+  .disk-mounts summary {
+    min-height: 44px;
+    padding-block: 0.7rem;
   }
 
-  .processor-summary {
-    grid-template-rows: none;
+  /* The shells the operator meets before the dashboard count too: the host
+     selector on the no-host screen and the name field behind "add server"
+     are the phone's way in, so they are held to the same floor. There is no
+     exemption. */
+  .primary-button,
+  .secondary-button,
+  .host-bar-select,
+  .cpu-core-controls select,
+  .events-history-filters select,
+  .events-history-filters input,
+  .auth-panel select,
+  .auth-panel input { min-height: 44px; }
+
+  /* Four 44 px links stacked three deep ate a third of a phone screen
+     before the first number. Two by two halves that and keeps every target
+     the full size a thumb needs. */
+  .host-bar-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-left: 0;
+    column-gap: 0.75rem;
   }
 
-  .processor-summary .chart-canvas {
-    height: 220px;
-  }
+  /* The ULID and its copy control share the first row: the id is readable
+     at half the width and the pair belongs together. */
+  .host-bar-id { align-self: center; }
 
-  .dashboard-metadata {
-    justify-content: start;
-  }
+  .host-bar,
+  .host-bar-identity,
+  .host-bar-state,
+  .host-bar-actions { width: 100%; }
 }
 
 @media (width < 560px) {
@@ -2266,28 +2894,14 @@ body {
       max(0.75rem, env(safe-area-inset-bottom)) max(0.75rem, env(safe-area-inset-left));
   }
 
-  .chart-head {
-    display: grid;
-  }
+  .chart-head { display: grid; }
 
-  .auth-panel h1,
-  .dashboard-header h1 {
-    font-size: 1.65rem;
-  }
+  .auth-panel h1 { font-size: 1.65rem; }
 
-  .brand-mark {
-    width: 2.25rem;
-    height: 2.25rem;
-  }
+  .brand-mark { width: 2.25rem; height: 2.25rem; }
+  .auth-panel .brand-mark { width: 2.75rem; height: 2.75rem; }
 
-  .auth-panel .brand-mark {
-    width: 2.75rem;
-    height: 2.75rem;
-  }
-
-  .chart-value strong {
-    font-size: 1.25rem;
-  }
+  .chart-value strong { font-size: 1.25rem; }
 
   .chart-value {
     justify-items: start;
@@ -2301,9 +2915,9 @@ body {
     padding-left: 0.35rem;
   }
 
-  .events-history-filters {
-    grid-template-columns: 1fr;
-  }
+  .band-cell-value { font-size: 1.3rem; }
+
+  .events-history-filters { grid-template-columns: 1fr; }
 
   .disk-table { table-layout: auto; }
   .disk-table colgroup { display: none; }
@@ -2333,16 +2947,46 @@ body {
      as `.disk-table-row td`, which outranks a lone class and would leave
      these cells stacked without their label column. */
   .disk-table-row td.disk-cell-state,
-  .disk-table-row td.disk-cell-smart,
   .disk-table-row td.disk-cell-numeric { display: flex; align-items: baseline; gap: 0.4rem; }
 
+  /* No `.disk-cell-smart::before`: that cell is already `display: none` from
+     760 px down and never comes back, so a label for it could not render. */
   .disk-cell-state::before,
-  .disk-cell-smart::before,
   .disk-cell-numeric::before {
     min-width: 5rem;
-    color: var(--dim);
+    color: var(--label);
     content: attr(data-label);
-    font-size: 0.68rem;
+    font-size: 0.6875rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  /* Same stacking for the tunnels table, same reason. */
+  .tunnel-table { table-layout: auto; }
+  .tunnel-table thead { display: none; }
+
+  .tunnel-table,
+  .tunnel-table tbody,
+  .tunnel-table-row,
+  .tunnel-table-row th,
+  .tunnel-table-row td { display: block; }
+
+  .tunnel-table-row {
+    border-top: 1px solid var(--line-soft);
+    padding-block: 0.5rem;
+  }
+
+  .tunnel-table tbody tr + tr th,
+  .tunnel-table tbody tr + tr td { border-top: 0; }
+
+  .tunnel-table-row td { padding-inline: 0; }
+
+  .tunnel-cell-peer::before,
+  .tunnel-cell-handshake::before {
+    min-width: 5rem;
+    color: var(--label);
+    content: attr(data-label) " ";
+    font-size: 0.6875rem;
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
@@ -2353,35 +2997,23 @@ body {
 
   .power-charge { min-width: 0; }
 
-  .tunnel-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-
   .cpu-core-panel-header,
   .cpu-core-controls {
     align-items: start;
     flex-direction: column;
   }
 
-  .cpu-core-header-meta {
-    justify-content: start;
-  }
-
-  .cpu-core-header-meta div {
-    justify-items: start;
-  }
-
-  .cpu-core-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.2rem;
-  }
+  .cpu-core-header-meta { justify-content: start; }
+  .cpu-core-header-meta div { justify-items: start; }
 }
 
+/* 1080x1920 and friends: tall and narrow enough that the three columns do
+   not fit side by side, but tall enough to read long-form signals. The
+   charts get the extra height rather than the columns getting squeezed. */
 @media (orientation: portrait) and (min-width: 900px) and (min-height: 1500px) {
-  .dashboard-shell--tall-portrait .metrics-grid,
-  .dashboard-shell--tall-portrait .public-surface-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .dashboard-shell--tall-portrait .chart-canvas {
-    height: clamp(16rem, 18vh, 20rem);
-  }
+  .dashboard-shell--tall-portrait .overview-columns { grid-template-columns: 1fr; }
+  .dashboard-shell--tall-portrait .overview-column:last-child { grid-column: auto; }
+  .dashboard-shell--tall-portrait .window-detail { grid-template-columns: 1fr; }
+  .dashboard-shell--tall-portrait .chart-canvas { height: clamp(16rem, 18vh, 20rem); }
+  .dashboard-shell--tall-portrait .constants-band { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }

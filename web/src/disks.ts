@@ -32,7 +32,12 @@ export function diskUsage(attrs: Record<string, string>): DiskUsage | null {
   };
 }
 
-export const NEARLY_FULL_RATIO = 0.9;
+// 85 %, not 90 %. The threshold is a warning, and a warning that fires at
+// 90 % leaves a 2 TB filesystem about one large backup run from full with
+// nothing on screen having changed yet. Both the disk table's gold usage bar
+// and its spelled-out "nearly full" label read this one constant, so the
+// colour and the words can never disagree.
+export const NEARLY_FULL_RATIO = 0.85;
 
 export function isNearlyFull(usage: DiskUsage) {
   return usage.ratio >= NEARLY_FULL_RATIO;

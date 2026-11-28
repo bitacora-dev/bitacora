@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartSizeChanged, Y_AXIS_LABEL_MARGIN_PX, yAxisSize } from "./TimeSeriesChart";
+import { chartSizeChanged, mirroredRange, Y_AXIS_LABEL_MARGIN_PX, yAxisSize } from "./TimeSeriesChart";
 
 describe("chartSizeChanged", () => {
   it("does not resize a chart when its dimensions are unchanged", () => {
@@ -31,5 +31,36 @@ describe("yAxisSize", () => {
 
   it("reserves only the margin when there are no ticks yet", () => {
     expect(yAxisSize([], () => 40)).toBe(Y_AXIS_LABEL_MARGIN_PX);
+  });
+});
+
+describe("mirroredRange", () => {
+  const point = (ts: string, value: number) => ({ ts, value });
+
+  it("gives both halves one shared bound taken from the larger series", () => {
+    expect(mirroredRange([
+      { points: [point("2026-11-27T10:00:00Z", 10)] },
+      { points: [point("2026-11-27T10:00:00Z", 40)] },
+    ])).toEqual([-40, 40]);
+  });
+
+  it("is symmetric, so an equal upload and download draw the same height", () => {
+    const [low, high] = mirroredRange([
+      { points: [point("2026-11-27T10:00:00Z", 7)] },
+      { points: [point("2026-11-27T10:00:00Z", 7)] },
+    ]) ?? [0, 0];
+    expect(-low).toBe(high);
+  });
+
+  it("leaves uPlot its own range when nothing has been sampled", () => {
+    expect(mirroredRange([{ points: [] }, { points: [] }])).toBeNull();
+  });
+
+  it("does not pin the scale to zero on an idle host", () => {
+    expect(mirroredRange([{ points: [point("2026-11-27T10:00:00Z", 0)] }])).toBeNull();
+  });
+
+  it("ignores a non-finite sample instead of producing a NaN bound", () => {
+    expect(mirroredRange([{ points: [point("2026-11-27T10:00:00Z", Number.NaN), point("2026-11-27T10:00:10Z", 3)] }])).toEqual([-3, 3]);
   });
 });

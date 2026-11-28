@@ -130,18 +130,18 @@ describe("summariseContainers", () => {
 });
 
 describe("readContainerPanelPreferences", () => {
-  it("starts collapsed, because dozens of containers must not become a wall", () => {
+  it("starts expanded, because the dense overview must answer before a click", () => {
     const storage = { getItem: () => null } as unknown as Storage;
-    expect(readContainerPanelPreferences(storage)).toEqual({ expanded: false });
-  });
-
-  it("falls back to collapsed when stored preferences are malformed", () => {
-    const storage = { getItem: () => "not-json" } as unknown as Storage;
-    expect(readContainerPanelPreferences(storage)).toEqual({ expanded: false });
-  });
-
-  it("restores an operator's expanded choice", () => {
-    const storage = { getItem: () => JSON.stringify({ expanded: true }) } as unknown as Storage;
     expect(readContainerPanelPreferences(storage)).toEqual({ expanded: true });
+  });
+
+  it("falls back to expanded when stored preferences are malformed", () => {
+    const storage = { getItem: () => "not-json" } as unknown as Storage;
+    expect(readContainerPanelPreferences(storage)).toEqual({ expanded: true });
+  });
+
+  it("restores an operator's collapsed choice", () => {
+    const storage = { getItem: () => JSON.stringify({ expanded: false }) } as unknown as Storage;
+    expect(readContainerPanelPreferences(storage)).toEqual({ expanded: false });
   });
 });

@@ -11,7 +11,11 @@ const CONTAINER_PANEL_PREFERENCES_KEY = "bitacora_container_panel_preferences";
 const CPU_METER_FLOOR_CORES = 1;
 
 export interface ContainerPanelPreferences { expanded: boolean; }
-const defaultPreferences: ContainerPanelPreferences = { expanded: false };
+// Expanded by default in the dense overview: the per-container grid is the
+// answer to "what is eating this machine", and a collapsed panel made the
+// operator click before the page said anything at all. The toggle stays, so
+// a host with forty containers can still be folded back to its totals.
+const defaultPreferences: ContainerPanelPreferences = { expanded: true };
 
 // ContainerSnapshot is one container's current state: the latest point of each
 // of its own series, plus whether it is still reporting.
@@ -161,28 +165,32 @@ export default function ContainerPanel({ containers, formatBytes }: Props) {
       </div>
     </div>
 
-    {overview.rows.length === 0 ? <p className="container-empty">{t.containersPending}</p> : <>
-      {preferences.expanded && <ul className="container-list" id={detailsID} aria-label={t.containersTitle}>
-        {overview.rows.map((row) => <li className={`container-row${row.active ? "" : " container-row--stopped"}`} key={row.container.container_id}>
-          <div className="container-identity">
-            <strong title={row.container.container_name}>{row.container.container_name}</strong>
-            <small>{row.container.container_id}</small>
+    {overview.rows.length === 0 ? <p className="container-empty">{t.containersPending}</p> : (
+      /* A grid of cells rather than one full-width row per container: three
+         columns fit roughly three times as many containers into the same
+         height, which is what lets the services column stay on the first
+         screen beside the other two. The container id moves into the cell's
+         title; it is an identifier, not something the eye scans. */
+      preferences.expanded && <ul className="container-grid" id={detailsID} aria-label={t.containersTitle}>
+        {overview.rows.map((row) => <li className={`container-cell${row.active ? "" : " container-cell--stopped"}`} key={row.container.container_id}>
+          <div className="container-cell-identity">
+            <strong title={`${row.container.container_name} · ${row.container.container_id}`}>{row.container.container_name}</strong>
             {!row.active && <small className="container-stopped-badge">{t.containersStopped}</small>}
           </div>
 
-          <div className="container-reading">
+          <div className="container-cell-reading">
             <span className="container-meter" aria-hidden="true"><span style={{ width: meterWidth(row.active ? row.cpuCoresUsed : null, overview.cpuMeterCeiling) }} /></span>
             <strong>{row.cpuCoresUsed === null ? NO_READING : t.containersCoresUsed(cores.format(row.cpuCoresUsed))}</strong>
             <span className="sr-only">{t.containersCPUReading(row.container.container_name, row.cpuCoresUsed === null ? t.noSamples : cores.format(row.cpuCoresUsed))}</span>
           </div>
 
-          <div className="container-reading">
+          <div className="container-cell-reading">
             <span className="container-meter container-meter--memory" aria-hidden="true"><span style={{ width: meterWidth(row.active ? row.memoryBytes : null, overview.memoryMeterCeiling) }} /></span>
             <strong>{row.memoryBytes === null ? NO_READING : formatBytes(row.memoryBytes)}</strong>
             <span className="sr-only">{t.containersMemoryReading(row.container.container_name, row.memoryBytes === null ? t.noSamples : formatBytes(row.memoryBytes))}</span>
           </div>
         </li>)}
-      </ul>}
-    </>}
+      </ul>
+    )}
   </article>;
 }

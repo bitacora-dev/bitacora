@@ -9,7 +9,10 @@ import AddServerPanel from "./components/AddServerPanel";
 import DiskArrayPanel from "./components/DiskArrayPanel";
 import PackageUpdatePanel from "./components/PackageUpdatePanel";
 import JobsList from "./components/JobsList";
-import CPUCorePanel from "./components/CPUCorePanel";
+import CPUCorePanel, { cpuTemperature, powerWatts } from "./components/CPUCorePanel";
+import ConstantsBand from "./components/ConstantsBand";
+import HostBar from "./components/HostBar";
+import MemoryPanel from "./components/MemoryPanel";
 import MotherboardPanel from "./components/MotherboardPanel";
 import PublicSurfacePanel from "./components/PublicSurfacePanel";
 import PowerPanel from "./components/PowerPanel";
@@ -28,6 +31,12 @@ const POLL_INTERVAL_MS = 10_000;
 // that cannot have changed.
 const SLOW_INVENTORY_POLL_INTERVAL_MS = 5 * 60_000;
 const CPU_Y_RANGE: [number, number] = [0, 1];
+// How many rows the overview's events and operations panels keep. They are
+// the newest N, not a window (web/DESIGN.md), and the cap exists so one noisy
+// hour cannot push the other two columns off a 1440×900 screen. The full
+// history is one click away in its own view.
+const OVERVIEW_EVENT_ROWS = 12;
+const OVERVIEW_JOB_ROWS = 8;
 // The agent reports on its own cadence; a host that has said nothing for
 // several polling rounds is the answer to "is this server still alive?".
 const HOST_STALE_AFTER_MS = 5 * 60_000;
@@ -62,6 +71,25 @@ function latest(points: SeriesPoint[]): SeriesPoint | null {
   return points.length > 0 ? points[points.length - 1] : null;
 }
 
+// generated_at belongs to the hub response, not to an observation from the
+// agent. Liveness must age a real point so a responsive hub cannot make a
+// silent host look fresh.
+function newestSampleAt(summary: Summary | null): string | null {
+  if (!summary) return null;
+  const series = [
+    summary.cpu,
+    summary.memory,
+    summary.memory_used_bytes,
+    summary.network_rx_bytes_per_second,
+    summary.network_tx_bytes_per_second,
+    ...summary.cpu_cores.map((entry) => entry.points),
+    ...summary.temperatures.map((entry) => entry.points),
+    ...summary.containers.flatMap((entry) => [entry.cpu_cores_used, entry.memory_bytes]),
+  ];
+  const timestamps = series.flatMap((points) => points.map((point) => point.ts)).filter((timestamp) => Number.isFinite(new Date(timestamp).getTime()));
+  return timestamps.reduce<string | null>((newest, timestamp) => !newest || timestamp > newest ? timestamp : newest, null);
+}
+
 interface PairPanelData {
   url: string;
   qr: string;
@@ -69,10 +97,11 @@ interface PairPanelData {
 }
 
 function Brand() {
+  const { t } = useTranslation();
   return (
     <div className="brand-lockup">
       <img className="brand-mark" src="/bitacora-logo.png" alt="" aria-hidden="true" />
-      <h1>Bitácora</h1>
+      <h1>{t.brand}</h1>
     </div>
   );
 }
@@ -160,17 +189,16 @@ export default function App() {
   }, [summary?.memory]);
 
   const memoryAvailable = latest(summary?.memory_available_bytes ?? []);
-  const swapFree = latest(summary?.memory_swap_free_bytes ?? []);
-  const swapTotal = latest(summary?.memory_swap_total_bytes ?? []);
-  const generatedAt = summary ? new Date(summary.generated_at).toLocaleTimeString(intlTag) : "";
-  const windowMinutes = summary ? Math.round(summary.window_secs / 60) : 0;
+  // Null, not zero: the averaging window is a fact the hub reports with the
+  // summary, and the host bar is on screen before the first one arrives.
+  const windowMinutes = summary ? Math.round(summary.window_secs / 60) : null;
   const ratio = useCallback((value: number) => formatRatio(value, intlTag), [intlTag]);
   const bytes = useCallback((value: number) => formatBytes(value, intlTag), [intlTag]);
   const bytesPerSecond = useCallback((value: number) => t.bytesPerSecond(formatBytes(value, intlTag)), [intlTag, t]);
   const selectedHost = hosts.find((host) => host.id === hostID);
-  const hostName = selectedHost?.name || selectedHost?.hostname;
   const lastSeenAt = hasInstant(selectedHost?.last_seen_at) ? selectedHost.last_seen_at : null;
   const hostStale = lastSeenAt !== null && Date.now() - new Date(lastSeenAt).getTime() > HOST_STALE_AFTER_MS;
+  const sampleAt = newestSampleAt(summary);
 
   const refreshInventories = useCallback(async () => {
     // The UPS reports every minute and the VPN helper every thirty seconds:
@@ -218,6 +246,16 @@ export default function App() {
     url.searchParams.set("host_id", value);
     window.history.replaceState(null, "", url);
     setHostID(value);
+    setSummary(null);
+    setDisks(null);
+    setUpdates(null);
+    setHardwareIdentity(null);
+    setCPUTopology(null);
+    setUPS(null);
+    setTunnels(null);
+    setShares(null);
+    setShareUsage(null);
+    setShareUsers(null);
     setHostIDCopyStatus("idle");
     setAddServerOpen(false);
   };
@@ -355,8 +393,13 @@ export default function App() {
   }, [hostID, token]);
 
   useEffect(() => {
-    fetchHosts().then(setHosts).catch(() => setHosts([]));
-  }, []);
+    if (!token) return;
+    let cancelled = false;
+    const poll = () => fetchHosts().then((nextHosts) => { if (!cancelled) setHosts(nextHosts); }).catch(() => { if (!cancelled) setHosts([]); });
+    void poll();
+    const id = window.setInterval(poll, POLL_INTERVAL_MS);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [token]);
 
   const bootstrapPairing = async () => {
     setBootstrapping(true);
@@ -451,68 +494,24 @@ export default function App() {
 
   return (
     <main className="dashboard-shell dashboard-shell--tall-portrait">
-      <header className="dashboard-header">
-        <div>
-          <Brand />
-          <p>{t.dashboardSubtitle}</p>
-          <div className="host-identity">
-            {hostName && <strong>{hostName}</strong>}
-            <span className="host-id">{hostID}</span>
-            <button type="button" onClick={copyHostID} className="host-id-copy-button">
-              {hostIDCopyStatus === "copied" ? t.hostIdCopied : hostIDCopyStatus === "failed" ? t.hostIdCopyFailed : t.copyHostId}
-            </button>
-            <span className="sr-only" aria-live="polite">
-              {hostIDCopyStatus === "copied" ? t.hostIdCopied : hostIDCopyStatus === "failed" ? t.hostIdCopyFailed : ""}
-            </span>
-          </div>
-        </div>
-        <div className="header-actions">
-          {hosts.length > 1 ? (
-            <select aria-label={t.hostSelectorLabel} value={hostID} onChange={(event) => goToHost(event.target.value)}>
-              {hosts.map((host) => <option key={host.id} value={host.id}>{host.name || host.hostname || host.id}</option>)}
-            </select>
-          ) : null}
-          {(summary || selectedHost) && (
-            <dl className="dashboard-metadata">
-              {summary && (
-                <div>
-                  <dt>{t.windowMetadataLabel}</dt>
-                  <dd>{t.windowLabel(windowMinutes)}</dd>
-                </div>
-              )}
-              {summary && (
-                <div>
-                  <dt>{t.updatedAtLabel}</dt>
-                  <dd>{generatedAt || t.noSamples}</dd>
-                </div>
-              )}
-              {lastSeenAt && (
-                <div>
-                  <dt>{t.lastSeenLabel}</dt>
-                  <dd className={hostStale ? "host-metadata--stale" : undefined}>
-                    {new Date(lastSeenAt).toLocaleString(intlTag)}
-                    {hostStale && <span className="host-stale-note"> · {t.hostStale}</span>}
-                  </dd>
-                </div>
-              )}
-              {selectedHost?.agent_version && (
-                <div>
-                  <dt>{t.agentVersionLabel}</dt>
-                  <dd>{selectedHost.agent_version}</dd>
-                </div>
-              )}
-            </dl>
-          )}
-          <button type="button" onClick={() => setAddServerOpen((open) => !open)} className="link-button">
-            {t.addServerButton}
-          </button>
-          <button type="button" onClick={openPairPanel} className="link-button">
-            {t.addDeviceButton}
-          </button>
-          <button type="button" onClick={() => goToView("events")} className="link-button">{t.eventsHistoryButton}</button>
-          <button type="button" onClick={() => goToView("logs")} className="link-button">{t.logsHistoryButton}</button>
-        </div>
-      </header>
+      <HostBar
+        hostID={hostID}
+        host={selectedHost}
+        hosts={hosts}
+        sampleAt={sampleAt}
+        windowMinutes={windowMinutes}
+        lastSeenAt={lastSeenAt}
+        hostStale={hostStale}
+        ups={ups}
+        updates={updates}
+        hostIDCopyStatus={hostIDCopyStatus}
+        onCopyHostID={() => { void copyHostID(); }}
+        onAddServer={() => setAddServerOpen((open) => !open)}
+        onAddDevice={() => { void openPairPanel(); }}
+        onShowEvents={() => goToView("events")}
+        onShowLogs={() => goToView("logs")}
+        onSelectHost={goToHost}
+      />
 
       {addServerOpen && <AddServerPanel onClose={() => setAddServerOpen(false)} onViewHost={goToHost} />}
 
@@ -537,9 +536,11 @@ export default function App() {
       {error && <div className="error-panel">{t.hubUnreachable(error)}</div>}
 
       {/* A power cut has a countdown attached, and everything else on this
-          page is moot if the machine is about to go down. So the UPS keeps one
-          fixed slot above the dashboard and follows the operator into the
-          event and log views. It renders nothing on a host without a UPS. */}
+          page is moot if the machine is about to go down, so it keeps a fixed
+          slot above the dashboard and follows the operator into the event and
+          log views. This full strip is the alarm, not the readout: it renders
+          nothing on a host with no UPS AND nothing while that UPS is on
+          mains. The steady-state reading lives in the host bar's PowerChip. */}
       <PowerPanel inventory={ups} />
 
       {view === "events" ? (
@@ -584,94 +585,121 @@ export default function App() {
         </article>
       ) : summary && (
         <>
-          <section className="processor-layout">
-            <div className="processor-identity">
+          {/* The band of constants answers the page's question before any
+              panel does: five host-wide numbers, each with its own window
+              trace, in one container divided by lines. */}
+          <ConstantsBand
+            summary={summary}
+            disks={disks}
+            temperature={cpuTemperature(summary.temperatures)}
+            powerWatts={powerWatts(hardwareIdentity?.items.find((item) => item.id === "system")?.attrs.cpu_power_watts)}
+          />
+
+          {/* Three stacked columns rather than one column of full-width
+              rows. The order inside each is the same answer order
+              web/DESIGN.md records, read top to bottom per column instead of
+              top to bottom per page: the host's own hardware, then what it
+              is running, then what it stores and what has happened. */}
+          <div className="overview-columns">
+            <section className="overview-column" aria-label={t.columnSystemLabel}>
               <CPUCorePanel cores={summary.cpu_cores} topology={cpuTopology} identity={hardwareIdentity} total={summary.cpu} temperatures={summary.temperatures} generatedAt={summary.generated_at} />
+              <MemoryPanel summary={summary} />
+              {/* Receive up, transmit down, one shared scale. The hub only
+                  reports host-wide totals, so there is no per-interface
+                  table: inventing one would need a collector change. */}
+              <TimeSeriesChart
+                title={t.networkTrafficTitle}
+                mirror
+                series={[
+                  { name: t.networkReceiveLabel, points: summary.network_rx_bytes_per_second, color: "#38bdf8", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
+                  { name: t.networkTransmitLabel, points: summary.network_tx_bytes_per_second, color: "#4ade80", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
+                ]}
+                formatAxisValue={bytesPerSecond}
+              />
+              {/* "Can I still get in?" stays with the host's own hardware:
+                  it is how this machine meets the outside world, and it is
+                  asked exactly when the rest of the page is bad news. */}
+              <AccessTunnelsPanel inventory={tunnels} />
               <MotherboardPanel identity={hardwareIdentity} temperatures={summary.temperatures} />
-            </div>
-            <div className="processor-summary">
-              <TimeSeriesChart title={t.cpuUsageTitle} points={summary.cpu} color="#38bdf8" yRange={CPU_Y_RANGE} formatAxisValue={ratio} describePoint={(point) => ({ primary: ratio(point.value) })} />
-              <TimeSeriesChart title={t.memoryUsedTitle} points={summary.memory_used_bytes.length > 0 ? summary.memory_used_bytes : summary.memory} color="#f8d66d" formatAxisValue={(value) => (summary.memory_used_bytes.length > 0 ? bytes(value) : ratio(value))} describePoint={(point) => {
-                if (summary.memory_used_bytes.length === 0) return { primary: ratio(point.value) };
-                const total = memoryTotalByTS.get(point.ts) ?? latest(summary.memory_total_bytes)?.value;
-                const available = memoryAvailableByTS.get(point.ts) ?? memoryAvailable?.value;
-                const used = memoryRatioByTS.get(point.ts) ?? (total ? point.value / total : undefined);
-                const context: string[] = [];
-                if (used !== undefined) context.push(t.memoryUsedRatio(ratio(used)));
-                if (available) context.push(t.memoryAvailable(bytes(available)));
-                return { primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value), secondary: context.length > 0 ? context.join(" · ") : undefined };
-              }} />
-            </div>
-          </section>
-          <section className="metrics-grid">
-            <TimeSeriesChart title={t.networkTrafficTitle} series={[
-              { name: t.networkReceiveLabel, points: summary.network_rx_bytes_per_second, color: "#38bdf8", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
-              { name: t.networkTransmitLabel, points: summary.network_tx_bytes_per_second, color: "#4ade80", describePoint: (point) => ({ primary: bytesPerSecond(point.value) }) },
-            ]} formatAxisValue={bytesPerSecond} />
-          </section>
+            </section>
 
-          {/* The host is reachable from the internet, so "am I being
-              attacked right now" belongs beside the other window signals,
-              not buried under inventory. */}
-          <section className="public-surface-grid" aria-label={t.publicSurfaceSectionLabel}>
-            <PublicSurfacePanel surface={summary.public_surface} windowMinutes={windowMinutes} />
-          </section>
+            <section className="overview-column" aria-label={t.columnServicesLabel}>
+              <ContainerPanel containers={summary.containers ?? []} formatBytes={bytes} />
+              <PackageUpdatePanel key={hostID} hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
+              <SharesPanel shares={shares} usage={shareUsage} users={shareUsers} />
+              <PublicSurfacePanel surface={summary.public_surface} windowMinutes={Math.round(summary.window_secs / 60)} compact />
+            </section>
 
-          {/* "Can I still get in?" is the same family of question as "is
-              anyone attacking me?" — both describe how this host meets the
-              outside world right now, not what it contains. */}
-          <section className="access-grid" aria-label={t.accessSectionLabel}>
-            <AccessTunnelsPanel inventory={tunnels} />
-          </section>
-
-          {/* Containers come after the host-level signals: they explain what is
-              consuming the machine, once the operator has seen what the machine
-              is doing. A host running none simply says so. */}
-          <section className="metrics-grid">
-            <ContainerPanel containers={summary.containers ?? []} formatBytes={bytes} />
-          </section>
-
-          <section className="lower-grid">
-            <article className="control-panel events-panel">
-              <div className="panel-title-row">
-                <h2>{t.eventsHeading}</h2>
-                <span>{summary.events.length}</span>
-              </div>
-              <EventsList events={summary.events} onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
-            </article>
-
-            <article className="control-panel events-panel">
-              <div className="panel-title-row"><h2>{t.jobsHeading}</h2><span>{summary.jobs.length}</span></div>
-              <JobsList jobs={summary.jobs} onShowLogs={(job, target) => showReferencedLogs(job.job_name, target)} />
-            </article>
-
-            <article className="control-panel signal-panel">
-              <h2>{t.collectorStateHeading}</h2>
-              <p>{t.collectorStateIntro}</p>
-              <dl>
-                <div>
-                  <dt>{t.collectorCoreLabel}</dt>
-                  <dd>{t.collectorCoreValue}</dd>
+            <section className="overview-column" aria-label={t.columnOperationsLabel}>
+              <article className="control-panel events-panel">
+                <div className="panel-title-row">
+                  <h2>{t.jobsHeading}</h2>
+                  <span className="inventory-count">{summary.jobs.length}</span>
                 </div>
-                <div>
-                  <dt>{t.collectorOptionalLabel}</dt>
-                  <dd>{t.collectorOptionalValue}</dd>
-                </div>
-                {swapFree && swapTotal && (
-                  <div>
-                    <dt>{t.memoryUsedTitle}</dt>
-                    <dd>{t.swapFree(bytes(swapFree.value), bytes(swapTotal.value))}</dd>
+                <JobsList jobs={summary.jobs} maxRows={OVERVIEW_JOB_ROWS} onShowLogs={(job, target) => showReferencedLogs(job.job_name, target)} />
+              </article>
+
+              <DiskArrayPanel inventory={disks} />
+
+              <article className="control-panel events-panel">
+                <div className="panel-title-row">
+                  <h2>{t.eventsHeading}</h2>
+                  <div className="panel-title-actions">
+                    <span className="inventory-count">{summary.events.length}</span>
+                    <button type="button" className="link-button" onClick={() => goToView("events")}>{t.eventsSeeAll}</button>
                   </div>
-                )}
-              </dl>
-            </article>
+                </div>
+                {/* Keyed by the host the summary itself came from, so the
+                    list remounts exactly when its events change source. The
+                    arrival highlight remembers which ids it has already
+                    drawn; without the key the whole of the new host's list
+                    would be "new", which would mean "you switched host", not
+                    "something happened". The selected `hostID` is the wrong
+                    key: it changes one render before the summary does, so the
+                    list would remount while still holding the previous host's
+                    events and then mark every row of the arriving host. */}
+                <EventsList key={summary.host_id} events={summary.events} maxRows={OVERVIEW_EVENT_ROWS} highlightNew onShowLogs={(event, target) => showReferencedLogs(event.title, target)} />
+              </article>
+            </section>
+          </div>
+
+          {/* The two inspectable window charts stay on the page, below the
+              columns. The band's traces and the processor panel's strip say
+              whether something moved; these still say exactly when, and
+              dropping them would have removed the only cursor on the
+              dashboard. Below the fold is the right place for them, not
+              gone. */}
+          <section className="window-detail" aria-label={t.windowDetailLabel}>
+            <TimeSeriesChart title={t.cpuUsageTitle} points={summary.cpu} color="#38bdf8" yRange={CPU_Y_RANGE} formatAxisValue={ratio} describePoint={(point) => ({ primary: ratio(point.value) })} />
+            <TimeSeriesChart title={t.memoryUsedTitle} points={summary.memory_used_bytes.length > 0 ? summary.memory_used_bytes : summary.memory} color="#f8d66d" formatAxisValue={(value) => (summary.memory_used_bytes.length > 0 ? bytes(value) : ratio(value))} describePoint={(point) => {
+              if (summary.memory_used_bytes.length === 0) return { primary: ratio(point.value) };
+              const total = memoryTotalByTS.get(point.ts) ?? latest(summary.memory_total_bytes)?.value;
+              const available = memoryAvailableByTS.get(point.ts) ?? memoryAvailable?.value;
+              const used = memoryRatioByTS.get(point.ts) ?? (total ? point.value / total : undefined);
+              const context: string[] = [];
+              if (used !== undefined) context.push(t.memoryUsedRatio(ratio(used)));
+              if (available) context.push(t.memoryAvailable(bytes(available)));
+              return { primary: total ? t.memoryOfTotal(bytes(point.value), bytes(total)) : bytes(point.value), secondary: context.length > 0 ? context.join(" · ") : undefined };
+            }} />
           </section>
 
-          <section className="inventory-grid" aria-label={t.inventorySectionLabel}>
-            <DiskArrayPanel inventory={disks} />
-            <PackageUpdatePanel hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
-            <SharesPanel shares={shares} usage={shareUsage} users={shareUsers} />
-          </section>
+          {/* Pending collector coverage is the last thing on the page: it
+              describes what Bitácora will one day show, which is never the
+              answer to "is my server OK right now". */}
+          <article className="control-panel signal-panel overview-coverage">
+            <h2>{t.collectorStateHeading}</h2>
+            <p>{t.collectorStateIntro}</p>
+            <dl>
+              <div>
+                <dt>{t.collectorCoreLabel}</dt>
+                <dd>{t.collectorCoreValue}</dd>
+              </div>
+              <div>
+                <dt>{t.collectorOptionalLabel}</dt>
+                <dd>{t.collectorOptionalValue}</dd>
+              </div>
+            </dl>
+          </article>
         </>
       )}
 

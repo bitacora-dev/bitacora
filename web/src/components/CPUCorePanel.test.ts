@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Inventory } from "../api";
-import { cpuTemperature, groupCPUCores, isolatedCPUCount, offlineCPUCount, powerWatts, readCPUPanelPreferences, severity, totalLoadSeries, windowStats, withTopologyOnlyCPUs } from "./CPUCorePanel";
+import { cpuTemperature, groupCPUCores, isolatedCPUCount, offlineCPUCount, powerWatts, readCPUPanelPreferences, severity, totalLoadSeries, windowStats, withTopologyOnlyCPUs , coreColumnLayout} from "./CPUCorePanel";
 import { sparklineData } from "./CPULoadSparkline";
 
 const topology = (attrs: Record<string, Record<string, string>>) => ({
@@ -334,5 +334,25 @@ describe("sparklineData", () => {
       [seconds("2026-09-20T10:00:00Z"), seconds("2026-09-20T10:00:10Z")],
       [0.2, 0.4],
     ]);
+  });
+});
+
+describe("coreColumnLayout", () => {
+  it("splits the two columns by kind on a hybrid part", () => {
+    expect(coreColumnLayout([{ type: "p-core" }, { type: "e-core" }])).toBe("hybrid");
+  });
+
+  it("flows the rows left to right when every core is the same kind", () => {
+    expect(coreColumnLayout([{ type: "p-core" }, { type: "p-core" }])).toBe("flow");
+  });
+
+  it("flows them when the agent never reported a kind at all", () => {
+    // An unreported kind is not an E-core: guessing would move a core to the
+    // wrong column and imply a topology the kernel never described.
+    expect(coreColumnLayout([{ type: "unknown" }, { type: "unknown" }])).toBe("flow");
+  });
+
+  it("has a layout for an empty topology", () => {
+    expect(coreColumnLayout([])).toBe("flow");
   });
 });

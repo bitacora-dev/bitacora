@@ -14,7 +14,11 @@ export type CPUAveragingWindow = typeof CPU_AVERAGING_WINDOWS[number];
 // a value, and it is the whole reason the bars read as alive instead of
 // snapping. Raising either cadence to animate would spend the agent's
 // ADR-0024 budget on a visual effect.
-export const CPU_METER_TRANSITION_MS = 1200;
+//
+// Kept in step with --meter-duration in index.css, which every other meter on
+// the dashboard uses: two bars side by side settling at different speeds
+// reads as one of them lagging.
+export const CPU_METER_TRANSITION_MS = 900;
 
 // Six collector cycles without a sample. Past this the pulse stops and turns
 // gold, matching the stale treatment the rest of the dashboard already uses:
@@ -112,6 +116,27 @@ export function isolatedCPUCount(groups: { isolated: string[] }[]): number {
 
 export function offlineCPUCount(groups: { offline: string[] }[]): number {
   return groups.reduce((total, group) => total + group.offline.length, 0);
+}
+
+// The core rows are a two-column grid so a sixteen-core host fits a third of
+// the page instead of a full-width panel. How the two columns are filled
+// depends on what the topology reports:
+//
+// - "hybrid": the host reports both performance and efficiency cores, so
+//   P-cores take the left column and E-cores the right one. On an Intel
+//   hybrid part the two kinds have different ceilings, and interleaving them
+//   makes a saturated E-core and an idle P-core sit side by side reading as
+//   one inconsistent pair.
+// - "flow": every core is the same kind (or the kind was never reported), so
+//   the rows simply flow left to right in CPU order. Pinning them all to one
+//   column would leave half the panel empty.
+//
+// A core whose type the agent did not report is not guessed into either
+// side: it stays in the left column, which is also where a non-hybrid host's
+// cores start.
+export function coreColumnLayout(groups: { type: string }[]): "hybrid" | "flow" {
+  const kinds = new Set(groups.map((group) => group.type));
+  return kinds.has("p-core") && kinds.has("e-core") ? "hybrid" : "flow";
 }
 
 // The averaging window is a trailing window over the newest sample, not a
@@ -236,6 +261,7 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
   const { t, intlTag } = useTranslation();
   const [preferences, setPreferences] = useState(readCPUPanelPreferences);
   const groups = groupCPUCores(cores, topology);
+  const layout = coreColumnLayout(groups);
   const isolatedCount = isolatedCPUCount(groups);
   const offlineCount = offlineCPUCount(groups);
   const system = identity?.items.find((item) => item.id === "system");
@@ -305,11 +331,14 @@ export default function CPUCorePanel({ cores, topology, identity, total, tempera
     </p>}
 
     {groups.length === 0 ? <p className="cpu-core-empty">{t.cpuCoresPending}</p> : <>
-      <ul className={`cpu-core-rows${isolatedCount > 0 ? " cpu-core-rows--reserved" : ""}`} aria-label={t.cpuCoreRowsLabel}>
+      <ul className={`cpu-core-rows cpu-core-rows--${layout}${isolatedCount > 0 ? " cpu-core-rows--reserved" : ""}`} aria-label={t.cpuCoreRowsLabel}>
         {groups.map((group) => {
           const siblings = group.cpus.slice(1).map((cpu) => cpu.cpu);
           const allOffline = group.offline.length === group.cpus.length;
-          return <li className={`cpu-core-row${allOffline ? " cpu-core-row--offline" : ""}`} key={group.key}>
+          /* The kind rides on a data attribute, not a class: the grid column
+             is the only thing that reads it, and a second modifier class per
+             row would make every row's class list a parsing exercise. */
+          return <li className={`cpu-core-row${allOffline ? " cpu-core-row--offline" : ""}`} data-core-type={group.type} key={group.key}>
             <div className="cpu-core-row-label">
               <strong>{t.cpuCoreLabel(group.cpus[0].cpu)}</strong>
               {group.type !== "unknown" && <span className="cpu-core-row-type">{t.cpuCoreType(group.type)}</span>}

@@ -381,7 +381,7 @@ export const es: Dictionary = {
   packageVersionTransition: "pasa a",
   packageRowDetails: "Más datos del paquete",
   updatesWholePlanNote:
-    "La orden se aplica al plan completo de actualizaciones pendientes. No hay botón por paquete a propósito: ADR-0022 autoriza dos operaciones con nombre fijo y sin argumentos, así que un nombre de paquete no tiene ningún camino desde esta pantalla hasta el agente. Esta lista informa; no se envía al host.",
+    "Este botón aplica el plan completo de actualizaciones pendientes. La lista informa sobre ese plan; no se envían paquetes individuales al host.",
   eventSource: (source) => `Origen: ${source}`,
   eventsSeeAll: "Ver todos",
   jobsRunningLabel: "Operaciones en curso",

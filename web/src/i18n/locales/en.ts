@@ -381,7 +381,7 @@ export const en: Dictionary = {
   packageVersionTransition: "moves to",
   packageRowDetails: "More package detail",
   updatesWholePlanNote:
-    "The order applies to the whole pending update plan. There is deliberately no per-package button: ADR-0022 authorises two fixed, argument-free operations, so a package name has no path from this screen to the agent. This list informs; it is not sent to the host.",
+    "This button applies the whole pending update plan. The list describes that plan; individual packages are not sent to the host.",
   eventSource: (source) => `Source: ${source}`,
   eventsSeeAll: "See all",
   jobsRunningLabel: "Operations in progress",

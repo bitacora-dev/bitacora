@@ -14,27 +14,25 @@ const job: Job = {
 };
 
 describe("jobStats", () => {
-  it("puts the canonical extractor keys first, in the order ADR-0010 lists them", () => {
+  it("renders only canonical statistics, in ADR-0010 order", () => {
     expect(jobStats({ ...job, stats: { errors: 0, bucket: "offsite", files_transferred: 12, bytes_transferred: 4096 } })).toEqual([
       { key: "files_transferred", value: "12" },
       { key: "bytes_transferred", value: "4096" },
       { key: "errors", value: "0" },
-      { key: "bucket", value: "offsite" },
     ]);
   });
 
-  it("bounds hostile keys and values and collapses line breaks", () => {
+  it("drops unknown extractor keys instead of exposing raw protocol names", () => {
     const stats = jobStats({
       ...job,
       stats: { ["a\n".repeat(100)]: "bounded key", note: "x".repeat(8_000) },
     });
-    expect(stats.every(({ key }) => key.length <= 64 && !/[\r\n]/.test(key))).toBe(true);
-    expect(stats.every(({ value }) => value.length <= 160 && !/[\r\n]/.test(value))).toBe(true);
+    expect(stats).toEqual([]);
   });
 
-  it("limits how many statistics one row can render", () => {
-    const stats = jobStats({ ...job, stats: Object.fromEntries([...Array(20).keys()].map((index) => [`key-${index}`, index])) });
-    expect(stats).toHaveLength(6);
+  it("keeps known keys while dropping an unknown one", () => {
+    const stats = jobStats({ ...job, stats: { files_transferred: 20, bytes_total: 1024 } });
+    expect(stats).toEqual([{ key: "files_transferred", value: "20" }]);
   });
 
   it("drops empty values rather than rendering a blank row", () => {

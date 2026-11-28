@@ -27,7 +27,7 @@ function render(overrides: Partial<Parameters<typeof HostBar>[0]> = {}) {
         hostID={host.id}
         host={host}
         hosts={[host]}
-        generatedAt="2026-11-27T10:00:00Z"
+        sampleAt="2026-11-27T10:00:00Z"
         windowMinutes={15}
         lastSeenAt={host.last_seen_at ?? null}
         hostStale={false}
@@ -56,7 +56,7 @@ describe("HostBar", () => {
   // by stating "Ventana de 0 min" — a window no collector ever reported.
   // Absent is absent, never zero.
   it("omits the window entirely before the first summary instead of saying zero", () => {
-    const markup = render({ windowMinutes: null, generatedAt: null });
+    const markup = render({ windowMinutes: null, sampleAt: null });
     expect(markup).not.toContain("Ventana de 0 min");
     expect(markup).not.toContain("host-bar-window");
   });
@@ -64,17 +64,19 @@ describe("HostBar", () => {
   // The beat asserts "a sample just landed". With no sample there is nothing
   // to assert, so the dot keeps its place without animating.
   it("does not beat when no sample has ever arrived", () => {
-    expect(render({ generatedAt: null })).toContain("host-bar-pulse--idle");
-    expect(render({ generatedAt: "2026-11-27T10:00:00Z" })).not.toContain("host-bar-pulse--idle");
+    expect(render({ sampleAt: null })).toContain("host-bar-pulse--idle");
+    expect(render({ sampleAt: "2026-11-27T10:00:00Z" })).not.toContain("host-bar-pulse--idle");
   });
 
   it("says in words that there are no samples yet", () => {
-    expect(render({ generatedAt: null })).toContain("Sin muestras todavía");
+    expect(render({ sampleAt: null })).toContain("Sin muestras todavía");
   });
 
   // The freshness line names what is being aged: the sample, not the page.
-  it("ages the sample rather than reporting a bare update", () => {
-    expect(render()).toContain("muestra de");
+  it("marks an old real sample stale even if the host bar is freshly rendered", () => {
+    const markup = render({ sampleAt: new Date(Date.now() - 5 * 60_000).toISOString() });
+    expect(markup).toContain("host-bar-freshness--stale");
+    expect(markup).toContain("sin señal reciente");
   });
 
   // An absent inventory is "the collector has not reported", which is not

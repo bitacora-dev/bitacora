@@ -46,7 +46,8 @@ describe("PackageUpdatePanel", () => {
     ]));
     expect(html.match(/class="primary-button package-action-button"/g)).toHaveLength(1);
     expect(html).toContain("Aplicar actualizaciones pendientes");
-    expect(html).toContain("No hay botón por paquete a propósito");
+    expect(html).toContain("Este botón aplica el plan completo de actualizaciones pendientes");
+    expect(html).not.toContain("ADR-0022");
   });
 
   it("keeps a backports candidate out of the pending list and its count", () => {

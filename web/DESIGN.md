@@ -64,7 +64,7 @@ Use these hierarchy rules:
 | Host constants | `.band-cell-value` is the largest type on the dashboard. | The five host-wide numbers are the first scan target, so they outrank every panel heading and chart readout. |
 | Primary operating numbers | `.chart-value strong` uses larger text and tabular numerals. | Latest or inspected chart values are the primary scan targets inside a panel. |
 | Panel titles | `.chart-head h2`, `.panel-title-row h2`, `.signal-panel h2` are compact and bold. | Panel headings label the signal; they should not compete with current values. |
-| Context text | Muted labels, timestamps, availability, and window text use small muted type. | Context explains the value after the user has already seen the state. |
+| Context text | Muted labels, timestamps, availability, and window text use small muted type. | Context explains the value after the user has already seen the state. No rendered dashboard text may be smaller than 11px at any breakpoint; reflow or disclose detail rather than shrinking type. |
 | Prose | Event empty states and signal coverage prose cap line length. | Text blocks must keep readable measures; wide screens are not permission to stretch paragraphs. |
 
 Use `font-variant-numeric: tabular-nums` for changing numeric readouts, as in

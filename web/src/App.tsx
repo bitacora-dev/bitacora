@@ -71,6 +71,25 @@ function latest(points: SeriesPoint[]): SeriesPoint | null {
   return points.length > 0 ? points[points.length - 1] : null;
 }
 
+// generated_at belongs to the hub response, not to an observation from the
+// agent. Liveness must age a real point so a responsive hub cannot make a
+// silent host look fresh.
+function newestSampleAt(summary: Summary | null): string | null {
+  if (!summary) return null;
+  const series = [
+    summary.cpu,
+    summary.memory,
+    summary.memory_used_bytes,
+    summary.network_rx_bytes_per_second,
+    summary.network_tx_bytes_per_second,
+    ...summary.cpu_cores.map((entry) => entry.points),
+    ...summary.temperatures.map((entry) => entry.points),
+    ...summary.containers.flatMap((entry) => [entry.cpu_cores_used, entry.memory_bytes]),
+  ];
+  const timestamps = series.flatMap((points) => points.map((point) => point.ts)).filter((timestamp) => Number.isFinite(new Date(timestamp).getTime()));
+  return timestamps.reduce<string | null>((newest, timestamp) => !newest || timestamp > newest ? timestamp : newest, null);
+}
+
 interface PairPanelData {
   url: string;
   qr: string;
@@ -179,6 +198,7 @@ export default function App() {
   const selectedHost = hosts.find((host) => host.id === hostID);
   const lastSeenAt = hasInstant(selectedHost?.last_seen_at) ? selectedHost.last_seen_at : null;
   const hostStale = lastSeenAt !== null && Date.now() - new Date(lastSeenAt).getTime() > HOST_STALE_AFTER_MS;
+  const sampleAt = newestSampleAt(summary);
 
   const refreshInventories = useCallback(async () => {
     // The UPS reports every minute and the VPN helper every thirty seconds:
@@ -226,6 +246,16 @@ export default function App() {
     url.searchParams.set("host_id", value);
     window.history.replaceState(null, "", url);
     setHostID(value);
+    setSummary(null);
+    setDisks(null);
+    setUpdates(null);
+    setHardwareIdentity(null);
+    setCPUTopology(null);
+    setUPS(null);
+    setTunnels(null);
+    setShares(null);
+    setShareUsage(null);
+    setShareUsers(null);
     setHostIDCopyStatus("idle");
     setAddServerOpen(false);
   };
@@ -363,8 +393,13 @@ export default function App() {
   }, [hostID, token]);
 
   useEffect(() => {
-    fetchHosts().then(setHosts).catch(() => setHosts([]));
-  }, []);
+    if (!token) return;
+    let cancelled = false;
+    const poll = () => fetchHosts().then((nextHosts) => { if (!cancelled) setHosts(nextHosts); }).catch(() => { if (!cancelled) setHosts([]); });
+    void poll();
+    const id = window.setInterval(poll, POLL_INTERVAL_MS);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [token]);
 
   const bootstrapPairing = async () => {
     setBootstrapping(true);
@@ -463,7 +498,7 @@ export default function App() {
         hostID={hostID}
         host={selectedHost}
         hosts={hosts}
-        generatedAt={summary?.generated_at ?? null}
+        sampleAt={sampleAt}
         windowMinutes={windowMinutes}
         lastSeenAt={lastSeenAt}
         hostStale={hostStale}
@@ -590,7 +625,7 @@ export default function App() {
 
             <section className="overview-column" aria-label={t.columnServicesLabel}>
               <ContainerPanel containers={summary.containers ?? []} formatBytes={bytes} />
-              <PackageUpdatePanel hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
+              <PackageUpdatePanel key={hostID} hostID={hostID} inventory={updates} secondFactorAvailable={secondFactorAvailable} onRefreshInventory={refreshInventories} />
               <SharesPanel shares={shares} usage={shareUsage} users={shareUsers} />
               <PublicSurfacePanel surface={summary.public_surface} windowMinutes={Math.round(summary.window_secs / 60)} compact />
             </section>

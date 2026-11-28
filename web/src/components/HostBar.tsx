@@ -22,7 +22,7 @@ export const HOST_BAR_STALE_AFTER_SECONDS = 60;
 interface Props {
   hostID: string;
   host: Host | undefined;
-  generatedAt: string | null;
+  sampleAt: string | null;
   // Null until the first summary lands. The averaging window is the hub's
   // fact, so before it arrives the chip is absent rather than reading
   // "0 min window" — a window nothing reported.
@@ -47,7 +47,7 @@ interface Props {
 export default function HostBar({
   hostID,
   host,
-  generatedAt,
+  sampleAt,
   windowMinutes,
   lastSeenAt,
   hostStale,
@@ -90,7 +90,7 @@ export default function HostBar({
       </div>
 
       <div className="host-bar-state">
-        <HostFreshness generatedAt={generatedAt} />
+        <HostFreshness sampleAt={sampleAt} />
         {windowMinutes !== null && <span className="host-bar-window">{t.windowLabel(windowMinutes)}</span>}
         {/* The agent's own last ingest only earns a chip once it is late.
             While the host is reporting normally the sample age beside it
@@ -134,7 +134,7 @@ export default function HostBar({
 // instant, which remounts it and restarts its one-shot animation: it beats
 // once per arriving sample rather than looping forever, so motion means a
 // sample actually landed instead of only meaning the page is open.
-export function HostFreshness({ generatedAt }: { generatedAt: string | null }) {
+export function HostFreshness({ sampleAt }: { sampleAt: string | null }) {
   const { t, intlTag } = useTranslation();
   const [now, setNow] = useState(() => Date.now());
 
@@ -143,8 +143,8 @@ export function HostFreshness({ generatedAt }: { generatedAt: string | null }) {
     return () => window.clearInterval(tick);
   }, []);
 
-  const age = formatAge(generatedAt, intlTag, now);
-  const seconds = ageSeconds(generatedAt, now);
+  const age = formatAge(sampleAt, intlTag, now);
+  const seconds = ageSeconds(sampleAt, now);
   const stale = seconds !== null && seconds > HOST_BAR_STALE_AFTER_SECONDS;
 
   return (
@@ -153,8 +153,8 @@ export function HostFreshness({ generatedAt }: { generatedAt: string | null }) {
           beat: an idle dot keeps the line's shape without asserting liveness
           the page has never observed. */}
       <span
-        key={generatedAt ?? "none"}
-        className={generatedAt === null ? "host-bar-pulse host-bar-pulse--idle" : "host-bar-pulse"}
+        key={sampleAt ?? "none"}
+        className={sampleAt === null ? "host-bar-pulse host-bar-pulse--idle" : "host-bar-pulse"}
         aria-hidden="true"
       />
       <span>{age === null ? t.noSamples : t.hostBarSampleAge(age)}</span>

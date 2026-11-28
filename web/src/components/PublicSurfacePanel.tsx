@@ -172,6 +172,20 @@ export default function PublicSurfacePanel({ surface, windowMinutes, compact = f
             <dd>{trafficRatio === null ? unreported : <strong>{percentFormat.format(trafficRatio)}</strong>}</dd>
           </div>
         </dl>
+        {compact && (
+          <details className="public-surface-details">
+            <summary>{t.inspectedValueLabel}</summary>
+            <p className="public-surface-note">{t.publicSurfaceIntro}</p>
+            <TimeSeriesChart
+              title={t.sshFailedLoginsTitle}
+              points={surface.ssh_failed_logins_per_minute}
+              color="#f8d66d"
+              formatAxisValue={formatRate}
+              describePoint={describeRate}
+            />
+            <p className="public-surface-note">{t.publicSurfaceTotalsNote}</p>
+          </details>
+        )}
         {!compact && <p className="public-surface-note">{t.publicSurfaceTotalsNote}</p>}
       </article>
     </>

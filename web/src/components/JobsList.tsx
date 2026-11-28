@@ -3,6 +3,7 @@ import { groupByDay } from "../dayGroups";
 import { jobLogTarget, type LogRefTarget } from "../logrefs";
 import { useTranslation } from "../i18n";
 import { jobProgressRatio, splitJobs } from "../overview";
+import { formatBytes } from "../bytes";
 import RowInstant, { DayHeading } from "./RowInstant";
 
 // The same bounds the event detail view uses: a job's stats map has canonical
@@ -22,10 +23,12 @@ function bounded(value: string, max: number): string {
   return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized;
 }
 
-// Canonical keys first, in the order ADR-0010 lists them, then anything the
-// extractor invented, alphabetically.
+// The overview is a status surface, not a raw protocol dump. Unknown extractor
+// keys remain reachable in the linked log block, where their provenance is
+// visible, instead of being rendered as untranslated implementation details.
 export function jobStats(job: Job): JobStat[] {
   return Object.entries(job.stats ?? {})
+    .filter(([key]) => SUMMARY_STATS.includes(key))
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
     .sort(([left], [right]) => {
       const leftPriority = SUMMARY_STATS.indexOf(left);
@@ -37,6 +40,12 @@ export function jobStats(job: Job): JobStat[] {
     })
     .slice(0, MAX_JOB_STATS)
     .map(([key, value]) => ({ key: bounded(key, MAX_JOB_STAT_KEY_LENGTH), value: bounded(String(value), MAX_JOB_STAT_VALUE_LENGTH) }));
+}
+
+function formatJobStat(key: string, value: string, locale: string): string {
+  if (key !== "bytes_transferred") return value;
+  const bytes = Number(value);
+  return Number.isFinite(bytes) && bytes >= 0 ? formatBytes(bytes, locale) : value;
 }
 
 interface Props {
@@ -137,7 +146,7 @@ function RunningJob({ job, onShowLogs }: { job: Job; onShowLogs?: (job: Job, tar
         </div>
       )}
       {stats.length > 0 && (
-        <p className="job-running-stats">{stats.map(({ key, value }) => `${t.jobStat(key)}: ${value}`).join(" · ")}</p>
+        <p className="job-running-stats">{stats.map(({ key, value }) => `${t.jobStat(key)}: ${formatJobStat(key, value, intlTag)}`).join(" · ")}</p>
       )}
       {logTarget && onShowLogs && (
         <div className="event-actions">
@@ -184,7 +193,7 @@ function JobRow({ job, onShowLogs }: { job: Job; onShowLogs?: (job: Job, target:
               {stats.map(({ key, value }) => (
                 <div key={key}>
                   <dt>{t.jobStat(key)}</dt>
-                  <dd>{value}</dd>
+                  <dd>{formatJobStat(key, value, intlTag)}</dd>
                 </div>
               ))}
             </dl>

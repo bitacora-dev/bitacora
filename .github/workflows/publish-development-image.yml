@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-and-deploy:
+  publish:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -72,30 +72,3 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-
-      - name: Pin Dokploy to this commit and deploy it
-        env:
-          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_APPLICATION_ID }}
-          DOKPLOY_REGISTRY_PASSWORD: ${{ secrets.DOKPLOY_REGISTRY_PASSWORD }}
-          DOKPLOY_REGISTRY_USERNAME: ${{ secrets.DOKPLOY_REGISTRY_USERNAME }}
-          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
-          IMAGE: ghcr.io/bitacora-dev/bitacora-hub:${{ github.sha }}
-        run: |
-          set -euo pipefail
-          curl --fail-with-body --silent --show-error \
-            --request POST "$DOKPLOY_URL/api/application.saveDockerProvider" \
-            --header "Content-Type: application/json" \
-            --header "x-api-key: $DOKPLOY_API_KEY" \
-            --data "$(jq -n \
-              --arg applicationId "$DOKPLOY_APPLICATION_ID" \
-              --arg dockerImage "$IMAGE" \
-              --arg password "$DOKPLOY_REGISTRY_PASSWORD" \
-              --arg username "$DOKPLOY_REGISTRY_USERNAME" \
-              --arg registryUrl "ghcr.io" \
-              '{applicationId: $applicationId, dockerImage: $dockerImage, password: $password, registryUrl: $registryUrl, username: $username}')"
-          curl --fail-with-body --silent --show-error \
-            --request POST "$DOKPLOY_URL/api/application.deploy" \
-            --header "Content-Type: application/json" \
-            --header "x-api-key: $DOKPLOY_API_KEY" \
-            --data "$(jq -n --arg applicationId "$DOKPLOY_APPLICATION_ID" '{applicationId: $applicationId}')"
